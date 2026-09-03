@@ -1,0 +1,7 @@
+# Git hooks for this repository (install: lefthook install). Private history is scratch;
+# the only gate on a commit here is that it carries no secret.
+pre-commit:
+  commands:
+    gitleaks:
+      run: gitleaks protect --staged --redact
+      fail_text: Secrets detected in the staged changes; remove them before committing.
