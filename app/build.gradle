@@ -217,8 +217,8 @@ android {
         applicationId "com.bcm.chronicle"
         minSdk = 23
         targetSdk = 36
-        versionCode 56
-        versionName "2026.09.01-internal.open.1"
+        versionCode 58
+        versionName "2026.09.03-internal.open.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
