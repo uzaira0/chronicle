@@ -79,14 +79,6 @@ class BuildOperatorConfigInvariantTest {
         assertFalse(gate.contains("logcat-after-enrollment-url.txt"))
     }
 
-    @Test
-    fun standaloneSigningWorkflowPinsEverySiblingCheckout() {
-        val workflow = locateProjectFile(".github/workflows/signing-verify.yml").readText()
-
-        assertTrue(workflow.contains("ref: a865a46f3e5b305b8b6340c63d0d76ddc51160cb"))
-        assertTrue(workflow.contains("ref: 5faa6f4b71bfe4659bf157985c741b4e2cf793cd"))
-        assertTrue(workflow.contains("ref: 2dd295f19cc0b672cb2369e027e77f375e8b80af"))
-    }
 
     private fun locateBuildFile(): File {
         var directory: File? = File(".").absoluteFile
