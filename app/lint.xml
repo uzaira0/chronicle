@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Layout/menu XML must not carry literal English: every android:text / hint /
+     contentDescription goes through @string so a translation can override it. -->
+<lint>
+    <issue id="HardcodedText" severity="error" />
+    <!-- Kotlin/Java side of the same rule: no literal or concatenated text into TextView.setText. -->
+    <issue id="SetTextI18n" severity="error" />
+</lint>

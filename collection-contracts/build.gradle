@@ -1,0 +1,51 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+// Pure collection-contract consumption layer (tranche 7 storage/contract split).
+// This module owns the chronicle-models contract surface consumed by the collection
+// libraries: shared constants, contract-facing sensor types/mappings, settings/policy
+// persistence keyed off chronicle-models types, and upload payload DTO assembly.
+//
+// HARD BOUNDARY: no Room, no SQLCipher, no WorkManager, no androidx.sqlite. The
+// Android storage layer (Room DAOs/entities/ChronicleDb, SQLCipher key management,
+// queued-upload persistence) stays in :collection-base, which depends on this module.
+// ContractBoundaryTest (src/test) enforces the boundary.
+
+plugins {
+    id 'com.android.library'
+}
+
+apply from: rootProject.file('gradle/collection-library.gradle')
+
+android {
+    namespace 'com.openlattice.chronicle.collection.contracts'
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+            allWarningsAsErrors = true
+        }
+    }
+}
+
+dependencies {
+    // Same exclusion set as :collection-base / :app — Jackson annotations stay
+    // source-level metadata; no Jackson runtime ships on Android.
+    api('com.openlattice:chronicle-models:0.1.0-SNAPSHOT') {
+        exclude module: 'guava'
+        exclude group: 'org.apache.olingo'
+        exclude module: 'slf4j-api'
+        exclude group: 'com.fasterxml.jackson.core', module: 'jackson-core'
+        exclude group: 'com.fasterxml.jackson.core', module: 'jackson-databind'
+        exclude group: 'com.fasterxml.jackson.datatype'
+        exclude group: 'com.fasterxml.jackson.module'
+        exclude group: 'com.fasterxml.jackson.dataformat'
+        exclude group: 'jakarta.validation'
+    }
+
+    // EncryptedSharedPreferences for SensorSettings/EncryptedPrefsHelper. This is
+    // Android keystore-backed preference encryption, NOT the SQLCipher database layer.
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.13.5'
+
+}

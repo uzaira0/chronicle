@@ -1,0 +1,158 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "manual_v3_schema_for_auto_migration",
+    "entities": [
+      {
+        "tableName": "dataQueue",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `id` INTEGER NOT NULL, `data` BLOB NOT NULL, PRIMARY KEY(`writeTimestamp`, `id`))",
+        "fields": [
+          {
+            "fieldPath": "writeTimestamp",
+            "columnName": "writeTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "data",
+            "columnName": "data",
+            "affinity": "BLOB",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "writeTimestamp",
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_dataQueue_writeTimestamp",
+            "unique": false,
+            "columnNames": [
+              "writeTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_dataQueue_writeTimestamp` ON `${TABLE_NAME}` (`writeTimestamp`)"
+          },
+          {
+            "name": "index_dataQueue_writeTimestamp_id",
+            "unique": true,
+            "columnNames": [
+              "writeTimestamp",
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_dataQueue_writeTimestamp_id` ON `${TABLE_NAME}` (`writeTimestamp`, `id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "userQueue",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `user` TEXT NOT NULL, PRIMARY KEY(`writeTimestamp`))",
+        "fields": [
+          {
+            "fieldPath": "writeTimestamp",
+            "columnName": "writeTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "user",
+            "columnName": "user",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "writeTimestamp"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_userQueue_writeTimestamp",
+            "unique": true,
+            "columnNames": [
+              "writeTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_userQueue_writeTimestamp` ON `${TABLE_NAME}` (`writeTimestamp`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sensor_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sensorType` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `x` REAL, `y` REAL, `z` REAL, `w` REAL, `accuracy` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorType",
+            "columnName": "sensorType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "x",
+            "columnName": "x",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "y",
+            "columnName": "y",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "z",
+            "columnName": "z",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "w",
+            "columnName": "w",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "accuracy",
+            "columnName": "accuracy",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      }
+    ],
+    "setupQueries": []
+  }
+}

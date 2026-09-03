@@ -1,0 +1,27 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'com.android.library'
+}
+
+apply from: rootProject.file('gradle/collection-library.gradle')
+
+android {
+    namespace 'com.openlattice.chronicle.collection.activity'
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+            allWarningsAsErrors = true
+        }
+    }
+}
+
+dependencies {
+    api project(':collection-core')
+
+    // Google Play Services: the on-device Activity Recognition / Activity Transition
+    // and Sleep APIs (sleep + activity_recognition modules). No-ops on devices without
+    // Play Services (e.g. Fire OS) — capture simply never registers there.
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+}

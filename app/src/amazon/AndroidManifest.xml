@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Public Amazon builds use the same minimal collector boundary as Play. -->
+    <uses-permission
+        android:name="android.permission.ACTIVITY_RECOGNITION"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"
+        tools:node="remove" />
+
+    <application>
+        <activity
+            android:name="com.openlattice.chronicle.services.notifications.NotificationPermissionActivity"
+            tools:node="remove" />
+        <receiver
+            android:name="com.openlattice.chronicle.services.notifications.NotificationPermissionListener"
+            tools:node="remove" />
+        <receiver
+            android:name=".receivers.lifecycle.LockedBootReceiver"
+            tools:node="remove"
+            tools:ignore="MissingClass" />
+        <service
+            android:name=".services.sensors.HardwareSensorService"
+            tools:node="remove"
+            tools:ignore="MissingClass" />
+        <service
+            android:name=".services.notifications.NotificationListener"
+            tools:node="remove"
+            tools:ignore="MissingClass" />
+        <service
+            android:name=".collection.interaction.InteractionCollectionService"
+            tools:node="remove"
+            tools:ignore="MissingClass" />
+    </application>
+</manifest>

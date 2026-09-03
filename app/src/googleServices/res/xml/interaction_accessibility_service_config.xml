@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AccessibilityService config backing the interaction_events collection module
+  (taps/long-presses/scrolls + input/accessibility focus + item selection).
+  canRetrieveWindowContent is required to read the interacted node's raw on-screen bounds.
+  Legacy center/grid values are derived from those bounds. Element text/contentDescription are
+  never read, and this configuration does not request any input/motion-event source.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewClicked|typeViewLongClicked|typeViewScrolled|typeViewFocused|typeViewAccessibilityFocused|typeViewSelected"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/interaction_accessibility_service_description"
+    android:notificationTimeout="100" />

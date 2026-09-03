@@ -1,0 +1,7 @@
+# ast-grep project config for the hardcoded-English guard on Android UI code.
+#   ./scripts/i18n-lint.sh            (from the monorepo root) or
+#   ast-grep scan app/src/main collection-*/src/main
+# Rules are documented in app/src/main/res/I18N.md. Layout XML is covered by Android lint's
+# HardcodedText check, promoted to an error in lint.xml.
+ruleDirs:
+  - lint/i18n

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Chronicle light tokens, matched to the iOS app palette (PrimaryAppColor
+         #6D49FE on white system surfaces). Token NAMES keep the original vendored
+         eq_* scheme so every layout/drawable/style reference stays valid; only the
+         VALUES changed when the app moved from the dark teal/yellow palette to
+         iOS-parity purple/white. -->
+    <color name="eq_bg">#F4F3FA</color>
+    <color name="eq_surface">#FFFFFF</color>
+    <color name="eq_surface_muted">#EFECF8</color>
+    <color name="eq_ink">#1C1B22</color>
+    <color name="eq_muted">#66626F</color>
+    <color name="eq_border">#E3E0EE</color>
+    <color name="eq_primary">#6D49FE</color>
+    <color name="eq_primary_ink">#FFFFFF</color>
+    <color name="eq_secondary">#5433D6</color>
+    <color name="eq_focus">#5433D6</color>
+    <color name="eq_success">#1E7A4C</color>
+    <color name="eq_success_bg">#E2F4E9</color>
+    <color name="eq_warning">#9A6200</color>
+    <color name="eq_warning_bg">#FFF1DA</color>
+    <color name="eq_danger">#C0243C</color>
+    <color name="eq_danger_bg">#FBE3E7</color>
+    <color name="eq_info">#1F63C4</color>
+    <color name="eq_info_bg">#E4EEFB</color>
+
+    <!-- Ripples: Material buttons/nav use these as-is, so they carry their own alpha
+         (white over the purple fill, purple over light surfaces). -->
+    <color name="eq_ripple_on_primary">#33FFFFFF</color>
+    <color name="eq_ripple">#266D49FE</color>
+
+    <color name="colorPrimary">@color/eq_primary</color>
+    <color name="colorPrimaryDark">@color/eq_focus</color>
+    <color name="colorAccent">@color/eq_focus</color>
+    <color name="neutral">#56565A</color>
+    <color name="chronicle_bg">@color/eq_bg</color>
+    <color name="chronicle_surface">@color/eq_surface</color>
+    <color name="chronicle_surface_high">@color/eq_surface_muted</color>
+    <color name="chronicle_outline">@color/eq_border</color>
+    <color name="chronicle_text_primary">@color/eq_ink</color>
+    <color name="chronicle_text_secondary">@color/eq_muted</color>
+    <color name="chronicle_success">@color/eq_success</color>
+    <color name="chronicle_warning">@color/eq_warning</color>
+    <color name="chronicle_danger">@color/eq_danger</color>
+</resources>

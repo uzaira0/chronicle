@@ -1,0 +1,47 @@
+include ':app'
+include ':collection-contracts'
+include ':collection-base'
+include ':collection-core'
+include ':collection-upload'
+include ':collection-sensors'
+include ':collection-usage'
+include ':collection-lifecycle'
+include ':collection-notifications'
+include ':collection-battery'
+include ':collection-interaction'
+include ':collection-audio'
+include ':collection-activity'
+include ':collection-device'
+include ':collection-health'
+
+// Use local chronicle-api source so new types (AndroidSensorType, AndroidSensorSample,
+// AndroidSensorSetting) are available before the SNAPSHOT is published to Maven.
+includeBuild('../chronicle-api') {
+    dependencySubstitution {
+        substitute module('com.openlattice:chronicle-api') using project(':')
+    }
+}
+
+// Use local chronicle-models source for BCM mobile builds instead of requiring
+// private GitHub Packages credentials for the SNAPSHOT artifact. Release
+// validation can point at the registered canonical checkout with either
+// -PchronicleModelsDir=/path/to/chronicle-models or
+// CHRONICLE_MODELS_DIR=/path/to/chronicle-models.
+def requestedChronicleModelsDir = gradle.startParameter.projectProperties['chronicleModelsDir'] ?: System.getenv('CHRONICLE_MODELS_DIR')
+def chronicleModelsDir = requestedChronicleModelsDir ? file(requestedChronicleModelsDir) : file('../chronicle-models')
+if (chronicleModelsDir.exists()) {
+    if (!file("${chronicleModelsDir}/settings.gradle").exists() && !file("${chronicleModelsDir}/settings.gradle.kts").exists()) {
+        throw new GradleException("chronicleModelsDir does not contain a Gradle settings file: ${chronicleModelsDir}")
+    }
+    includeBuild(chronicleModelsDir) {
+        dependencySubstitution {
+            substitute module('com.openlattice:chronicle-models') using project(':')
+        }
+    }
+} else {
+    includeBuild('..') {
+        dependencySubstitution {
+            substitute module('com.openlattice:chronicle-models') using project(':chronicle-models')
+        }
+    }
+}

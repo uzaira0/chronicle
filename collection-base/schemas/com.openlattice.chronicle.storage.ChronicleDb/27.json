@@ -1,0 +1,1723 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 27,
+    "identityHash": "17ac7a5af18ad6358501b088a4d54234",
+    "entities": [
+      {
+        "tableName": "dataQueue",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `id` INTEGER NOT NULL, `data` BLOB NOT NULL, PRIMARY KEY(`writeTimestamp`, `id`))",
+        "fields": [
+          {
+            "fieldPath": "writeTimestamp",
+            "columnName": "writeTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "data",
+            "columnName": "data",
+            "affinity": "BLOB",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "writeTimestamp",
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_dataQueue_writeTimestamp",
+            "unique": false,
+            "columnNames": [
+              "writeTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_dataQueue_writeTimestamp` ON `${TABLE_NAME}` (`writeTimestamp`)"
+          },
+          {
+            "name": "index_dataQueue_writeTimestamp_id",
+            "unique": true,
+            "columnNames": [
+              "writeTimestamp",
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_dataQueue_writeTimestamp_id` ON `${TABLE_NAME}` (`writeTimestamp`, `id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "userQueue",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `user` TEXT NOT NULL, PRIMARY KEY(`writeTimestamp`))",
+        "fields": [
+          {
+            "fieldPath": "writeTimestamp",
+            "columnName": "writeTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "user",
+            "columnName": "user",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "writeTimestamp"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_userQueue_writeTimestamp",
+            "unique": true,
+            "columnNames": [
+              "writeTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_userQueue_writeTimestamp` ON `${TABLE_NAME}` (`writeTimestamp`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sensor_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sensorType` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `x` REAL, `y` REAL, `z` REAL, `w` REAL, `accuracy` INTEGER, `valuesJson` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorType",
+            "columnName": "sensorType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "x",
+            "columnName": "x",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "y",
+            "columnName": "y",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "z",
+            "columnName": "z",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "w",
+            "columnName": "w",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "accuracy",
+            "columnName": "accuracy",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "valuesJson",
+            "columnName": "valuesJson",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sensor_samples_timestamp_id",
+            "unique": false,
+            "columnNames": [
+              "timestamp",
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sensor_samples_timestamp_id` ON `${TABLE_NAME}` (`timestamp`, `id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "battery_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `levelPercent` INTEGER NOT NULL, `chargingState` TEXT NOT NULL, `plugType` TEXT NOT NULL, `temperatureDeciC` INTEGER NOT NULL, `voltageMillivolts` INTEGER NOT NULL, `health` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "levelPercent",
+            "columnName": "levelPercent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chargingState",
+            "columnName": "chargingState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plugType",
+            "columnName": "plugType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "temperatureDeciC",
+            "columnName": "temperatureDeciC",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "voltageMillivolts",
+            "columnName": "voltageMillivolts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "health",
+            "columnName": "health",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "interaction_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `eventType` TEXT NOT NULL, `gridRows` INTEGER NOT NULL, `gridCols` INTEGER NOT NULL, `gridRow` INTEGER NOT NULL, `gridCol` INTEGER NOT NULL, `elementRole` TEXT NOT NULL, `foregroundPackage` TEXT NOT NULL, `positionSource` TEXT, `nodeBoundsLeft` INTEGER, `nodeBoundsTop` INTEGER, `nodeBoundsRight` INTEGER, `nodeBoundsBottom` INTEGER, `displayId` INTEGER, `rawX` INTEGER, `rawY` INTEGER, `screenWidth` INTEGER, `screenHeight` INTEGER, `normalizedX` REAL, `normalizedY` REAL, `scrollDeltaX` INTEGER, `scrollDeltaY` INTEGER, `eventTimeMillis` INTEGER, `episodeId` TEXT, `dwellMillisSincePrev` INTEGER, `orientation` INTEGER, `screenDensityDpi` INTEGER, `scrollVelocityX` REAL, `scrollVelocityY` REAL, `scrollReversed` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gridRows",
+            "columnName": "gridRows",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gridCols",
+            "columnName": "gridCols",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gridRow",
+            "columnName": "gridRow",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gridCol",
+            "columnName": "gridCol",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elementRole",
+            "columnName": "elementRole",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "foregroundPackage",
+            "columnName": "foregroundPackage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionSource",
+            "columnName": "positionSource",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nodeBoundsLeft",
+            "columnName": "nodeBoundsLeft",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nodeBoundsTop",
+            "columnName": "nodeBoundsTop",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nodeBoundsRight",
+            "columnName": "nodeBoundsRight",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nodeBoundsBottom",
+            "columnName": "nodeBoundsBottom",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "displayId",
+            "columnName": "displayId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "rawX",
+            "columnName": "rawX",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "rawY",
+            "columnName": "rawY",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "screenWidth",
+            "columnName": "screenWidth",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "screenHeight",
+            "columnName": "screenHeight",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "normalizedX",
+            "columnName": "normalizedX",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "normalizedY",
+            "columnName": "normalizedY",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "scrollDeltaX",
+            "columnName": "scrollDeltaX",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "scrollDeltaY",
+            "columnName": "scrollDeltaY",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "eventTimeMillis",
+            "columnName": "eventTimeMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "episodeId",
+            "columnName": "episodeId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dwellMillisSincePrev",
+            "columnName": "dwellMillisSincePrev",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "orientation",
+            "columnName": "orientation",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "screenDensityDpi",
+            "columnName": "screenDensityDpi",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "scrollVelocityX",
+            "columnName": "scrollVelocityX",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "scrollVelocityY",
+            "columnName": "scrollVelocityY",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "scrollReversed",
+            "columnName": "scrollReversed",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "audio_activity_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `eventType` TEXT NOT NULL, `audioActive` INTEGER NOT NULL, `audioPackage` TEXT, `contentType` TEXT, `playbackState` TEXT, `outputRoute` TEXT, `routeConnected` INTEGER, `mediaVolume` INTEGER, `maxMediaVolume` INTEGER, `ringerMode` TEXT, `dndActive` INTEGER, `callActive` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audioActive",
+            "columnName": "audioActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audioPackage",
+            "columnName": "audioPackage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "contentType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "playbackState",
+            "columnName": "playbackState",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "outputRoute",
+            "columnName": "outputRoute",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "routeConnected",
+            "columnName": "routeConnected",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "mediaVolume",
+            "columnName": "mediaVolume",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "maxMediaVolume",
+            "columnName": "maxMediaVolume",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "ringerMode",
+            "columnName": "ringerMode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dndActive",
+            "columnName": "dndActive",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "callActive",
+            "columnName": "callActive",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "audio_content_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `audioPackage` TEXT NOT NULL, `title` TEXT, `artist` TEXT, `album` TEXT, `durationMillis` INTEGER, `positionMillis` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audioPackage",
+            "columnName": "audioPackage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "artist",
+            "columnName": "artist",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "album",
+            "columnName": "album",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "durationMillis",
+            "columnName": "durationMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "positionMillis",
+            "columnName": "positionMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "notification_activity_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `eventType` TEXT NOT NULL, `packageName` TEXT NOT NULL, `category` TEXT, `ongoing` INTEGER, `importance` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "packageName",
+            "columnName": "packageName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ongoing",
+            "columnName": "ongoing",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "importance",
+            "columnName": "importance",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "sleep_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `eventType` TEXT NOT NULL, `segmentStartMillis` INTEGER, `segmentEndMillis` INTEGER, `segmentStatus` TEXT, `confidence` INTEGER, `light` INTEGER, `motion` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "segmentStartMillis",
+            "columnName": "segmentStartMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "segmentEndMillis",
+            "columnName": "segmentEndMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "segmentStatus",
+            "columnName": "segmentStatus",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "light",
+            "columnName": "light",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "motion",
+            "columnName": "motion",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "activity_recognition_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `activityType` TEXT NOT NULL, `confidence` INTEGER NOT NULL, `transitionType` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activityType",
+            "columnName": "activityType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transitionType",
+            "columnName": "transitionType",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "health_metric_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `metricType` TEXT NOT NULL, `value` REAL NOT NULL, `unit` TEXT NOT NULL, `startMillis` INTEGER NOT NULL, `endMillis` INTEGER NOT NULL, `sourcePackage` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metricType",
+            "columnName": "metricType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unit",
+            "columnName": "unit",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startMillis",
+            "columnName": "startMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endMillis",
+            "columnName": "endMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourcePackage",
+            "columnName": "sourcePackage",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "connectivity_state_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `eventType` TEXT NOT NULL, `transport` TEXT NOT NULL, `connected` INTEGER NOT NULL, `metered` INTEGER, `validated` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transport",
+            "columnName": "transport",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "connected",
+            "columnName": "connected",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metered",
+            "columnName": "metered",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "validated",
+            "columnName": "validated",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "app_network_usage_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `packageName` TEXT NOT NULL, `networkType` TEXT NOT NULL, `rxBytes` INTEGER NOT NULL, `txBytes` INTEGER NOT NULL, `bucketStartMillis` INTEGER NOT NULL, `bucketEndMillis` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "packageName",
+            "columnName": "packageName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "networkType",
+            "columnName": "networkType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rxBytes",
+            "columnName": "rxBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "txBytes",
+            "columnName": "txBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bucketStartMillis",
+            "columnName": "bucketStartMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bucketEndMillis",
+            "columnName": "bucketEndMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "device_settings_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `darkMode` INTEGER, `fontScale` REAL, `accessibilityEnabled` INTEGER, `dndActive` INTEGER, `batterySaver` INTEGER, `thermalStatus` TEXT, `autoRotate` INTEGER, `locationServicesEnabled` INTEGER, `storageFreeBytes` INTEGER, `storageTotalBytes` INTEGER, `screenBrightness` INTEGER, `screenBrightnessAuto` INTEGER, `mediaVolume` INTEGER, `mediaVolumeMax` INTEGER, `ringVolume` INTEGER, `ringVolumeMax` INTEGER, `notificationVolume` INTEGER, `notificationVolumeMax` INTEGER, `alarmVolume` INTEGER, `alarmVolumeMax` INTEGER, `ringerMode` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "darkMode",
+            "columnName": "darkMode",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "fontScale",
+            "columnName": "fontScale",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "accessibilityEnabled",
+            "columnName": "accessibilityEnabled",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "dndActive",
+            "columnName": "dndActive",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "batterySaver",
+            "columnName": "batterySaver",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "thermalStatus",
+            "columnName": "thermalStatus",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "autoRotate",
+            "columnName": "autoRotate",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "locationServicesEnabled",
+            "columnName": "locationServicesEnabled",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "storageFreeBytes",
+            "columnName": "storageFreeBytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "storageTotalBytes",
+            "columnName": "storageTotalBytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "screenBrightness",
+            "columnName": "screenBrightness",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "screenBrightnessAuto",
+            "columnName": "screenBrightnessAuto",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "mediaVolume",
+            "columnName": "mediaVolume",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "mediaVolumeMax",
+            "columnName": "mediaVolumeMax",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "ringVolume",
+            "columnName": "ringVolume",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "ringVolumeMax",
+            "columnName": "ringVolumeMax",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notificationVolume",
+            "columnName": "notificationVolume",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notificationVolumeMax",
+            "columnName": "notificationVolumeMax",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "alarmVolume",
+            "columnName": "alarmVolume",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "alarmVolumeMax",
+            "columnName": "alarmVolumeMax",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "ringerMode",
+            "columnName": "ringerMode",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "upload_servers",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `singletonKey` INTEGER NOT NULL DEFAULT 1, `name` TEXT NOT NULL, `url` TEXT NOT NULL, `studyId` TEXT NOT NULL, `participantId` TEXT NOT NULL, `sourceDeviceId` TEXT NOT NULL, `authMode` TEXT NOT NULL, `apiKey` TEXT, `mobileSigningSecretOverride` TEXT, `studyDisclosureJson` TEXT, `disclosureVersion` TEXT, `manifestDigest` TEXT, `reservationNonce` TEXT, `reservationExpiresAtEpochMillis` INTEGER, `enrollmentIssuedAtEpochMillis` INTEGER, `enrollmentSetupComplete` INTEGER NOT NULL DEFAULT 1, `pendingAcceptedModuleIds` TEXT, `pendingDeclinedModuleIds` TEXT, `pendingUnavailableModuleIds` TEXT, `pendingEnrollmentAttemptId` TEXT, `pendingEnrollmentAccessCode` TEXT, `pendingEnrollmentInviteExpiresAtEpochMillis` INTEGER, `pendingProposedApiKey` TEXT, `pendingEnrollmentSourceDeviceJson` TEXT, `pendingEnrollmentFirstRequestAtEpochMillis` INTEGER, `pendingEnrollmentReplayDeadlineEpochMillis` INTEGER, `enabled` INTEGER NOT NULL, `lastUploadTime` TEXT, `lastUploadError` TEXT, `consecutiveFailures` INTEGER NOT NULL, `lastSensorUploadTime` TEXT, `lastSensorUploadError` TEXT, `sensorConsecutiveFailures` INTEGER NOT NULL, `lastBatteryUploadTime` TEXT, `lastBatteryUploadError` TEXT, `batteryConsecutiveFailures` INTEGER NOT NULL, `lastUsageUploadAttemptTime` TEXT, `lastUsageUploadSuccessTime` TEXT, `usageUploadSuccessCount` INTEGER NOT NULL, `usageUploadFailureCount` INTEGER NOT NULL, `lastSensorUploadAttemptTime` TEXT, `lastSensorUploadSuccessTime` TEXT, `sensorUploadSuccessCount` INTEGER NOT NULL, `sensorUploadFailureCount` INTEGER NOT NULL, `lastBatteryUploadAttemptTime` TEXT, `lastBatteryUploadSuccessTime` TEXT, `batteryUploadSuccessCount` INTEGER NOT NULL, `batteryUploadFailureCount` INTEGER NOT NULL, `lastUploadedTimestamp` INTEGER NOT NULL, `lastUploadedQueueId` INTEGER NOT NULL, `lastUploadedSensorId` TEXT, `sensorDeliveryGeneration` INTEGER NOT NULL DEFAULT 0, `createdAt` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "singletonKey",
+            "columnName": "singletonKey",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "studyId",
+            "columnName": "studyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "participantId",
+            "columnName": "participantId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceDeviceId",
+            "columnName": "sourceDeviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authMode",
+            "columnName": "authMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "apiKey",
+            "columnName": "apiKey",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mobileSigningSecretOverride",
+            "columnName": "mobileSigningSecretOverride",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "studyDisclosureJson",
+            "columnName": "studyDisclosureJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "disclosureVersion",
+            "columnName": "disclosureVersion",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "manifestDigest",
+            "columnName": "manifestDigest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reservationNonce",
+            "columnName": "reservationNonce",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reservationExpiresAtEpochMillis",
+            "columnName": "reservationExpiresAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "enrollmentIssuedAtEpochMillis",
+            "columnName": "enrollmentIssuedAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "enrollmentSetupComplete",
+            "columnName": "enrollmentSetupComplete",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "pendingAcceptedModuleIds",
+            "columnName": "pendingAcceptedModuleIds",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingDeclinedModuleIds",
+            "columnName": "pendingDeclinedModuleIds",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingUnavailableModuleIds",
+            "columnName": "pendingUnavailableModuleIds",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentAttemptId",
+            "columnName": "pendingEnrollmentAttemptId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentAccessCode",
+            "columnName": "pendingEnrollmentAccessCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentInviteExpiresAtEpochMillis",
+            "columnName": "pendingEnrollmentInviteExpiresAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pendingProposedApiKey",
+            "columnName": "pendingProposedApiKey",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentSourceDeviceJson",
+            "columnName": "pendingEnrollmentSourceDeviceJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentFirstRequestAtEpochMillis",
+            "columnName": "pendingEnrollmentFirstRequestAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pendingEnrollmentReplayDeadlineEpochMillis",
+            "columnName": "pendingEnrollmentReplayDeadlineEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadTime",
+            "columnName": "lastUploadTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUploadError",
+            "columnName": "lastUploadError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "consecutiveFailures",
+            "columnName": "consecutiveFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSensorUploadTime",
+            "columnName": "lastSensorUploadTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSensorUploadError",
+            "columnName": "lastSensorUploadError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sensorConsecutiveFailures",
+            "columnName": "sensorConsecutiveFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastBatteryUploadTime",
+            "columnName": "lastBatteryUploadTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastBatteryUploadError",
+            "columnName": "lastBatteryUploadError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "batteryConsecutiveFailures",
+            "columnName": "batteryConsecutiveFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUsageUploadAttemptTime",
+            "columnName": "lastUsageUploadAttemptTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUsageUploadSuccessTime",
+            "columnName": "lastUsageUploadSuccessTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "usageUploadSuccessCount",
+            "columnName": "usageUploadSuccessCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usageUploadFailureCount",
+            "columnName": "usageUploadFailureCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSensorUploadAttemptTime",
+            "columnName": "lastSensorUploadAttemptTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSensorUploadSuccessTime",
+            "columnName": "lastSensorUploadSuccessTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sensorUploadSuccessCount",
+            "columnName": "sensorUploadSuccessCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorUploadFailureCount",
+            "columnName": "sensorUploadFailureCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastBatteryUploadAttemptTime",
+            "columnName": "lastBatteryUploadAttemptTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastBatteryUploadSuccessTime",
+            "columnName": "lastBatteryUploadSuccessTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "batteryUploadSuccessCount",
+            "columnName": "batteryUploadSuccessCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "batteryUploadFailureCount",
+            "columnName": "batteryUploadFailureCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadedTimestamp",
+            "columnName": "lastUploadedTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadedQueueId",
+            "columnName": "lastUploadedQueueId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadedSensorId",
+            "columnName": "lastUploadedSensorId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sensorDeliveryGeneration",
+            "columnName": "sensorDeliveryGeneration",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_upload_servers_singletonKey",
+            "unique": true,
+            "columnNames": [
+              "singletonKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_upload_servers_singletonKey` ON `${TABLE_NAME}` (`singletonKey`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sensor_sample_deliveries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sampleId` TEXT NOT NULL, `serverId` INTEGER NOT NULL, `serverGeneration` INTEGER NOT NULL, `deliveredAt` TEXT NOT NULL, PRIMARY KEY(`sampleId`, `serverId`), FOREIGN KEY(`sampleId`) REFERENCES `sensor_samples`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`serverId`) REFERENCES `upload_servers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "sampleId",
+            "columnName": "sampleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "serverId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverGeneration",
+            "columnName": "serverGeneration",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deliveredAt",
+            "columnName": "deliveredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sampleId",
+            "serverId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sensor_sample_deliveries_serverId",
+            "unique": false,
+            "columnNames": [
+              "serverId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sensor_sample_deliveries_serverId` ON `${TABLE_NAME}` (`serverId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "sensor_samples",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "sampleId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "upload_servers",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "serverId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sensor_sample_dead_letters",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sampleId` TEXT NOT NULL, `sensorType` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `x` REAL, `y` REAL, `z` REAL, `w` REAL, `accuracy` INTEGER, `valuesJson` TEXT, `quarantinedAt` TEXT NOT NULL, `reason` TEXT NOT NULL, PRIMARY KEY(`sampleId`))",
+        "fields": [
+          {
+            "fieldPath": "sampleId",
+            "columnName": "sampleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorType",
+            "columnName": "sensorType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "x",
+            "columnName": "x",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "y",
+            "columnName": "y",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "z",
+            "columnName": "z",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "w",
+            "columnName": "w",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "accuracy",
+            "columnName": "accuracy",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "valuesJson",
+            "columnName": "valuesJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "quarantinedAt",
+            "columnName": "quarantinedAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sampleId"
+          ]
+        }
+      },
+      {
+        "tableName": "upload_stats",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `serverId` INTEGER NOT NULL, `date` TEXT NOT NULL, `usageEventsUploaded` INTEGER NOT NULL, `sensorSamplesUploaded` INTEGER NOT NULL, `batterySamplesUploaded` INTEGER NOT NULL, `usageUploadFailures` INTEGER NOT NULL, `sensorUploadFailures` INTEGER NOT NULL, `batteryUploadFailures` INTEGER NOT NULL, FOREIGN KEY(`serverId`) REFERENCES `upload_servers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "serverId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "date",
+            "columnName": "date",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usageEventsUploaded",
+            "columnName": "usageEventsUploaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorSamplesUploaded",
+            "columnName": "sensorSamplesUploaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "batterySamplesUploaded",
+            "columnName": "batterySamplesUploaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usageUploadFailures",
+            "columnName": "usageUploadFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorUploadFailures",
+            "columnName": "sensorUploadFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "batteryUploadFailures",
+            "columnName": "batteryUploadFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_upload_stats_serverId_date",
+            "unique": true,
+            "columnNames": [
+              "serverId",
+              "date"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_upload_stats_serverId_date` ON `${TABLE_NAME}` (`serverId`, `date`)"
+          },
+          {
+            "name": "index_upload_stats_serverId",
+            "unique": false,
+            "columnNames": [
+              "serverId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_upload_stats_serverId` ON `${TABLE_NAME}` (`serverId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "upload_servers",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "serverId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "usage_poll_checkpoints",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sensorName` TEXT NOT NULL, `lastPollTimestamp` INTEGER NOT NULL, PRIMARY KEY(`sensorName`))",
+        "fields": [
+          {
+            "fieldPath": "sensorName",
+            "columnName": "sensorName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPollTimestamp",
+            "columnName": "lastPollTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sensorName"
+          ]
+        }
+      },
+      {
+        "tableName": "collection_module_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`moduleId` TEXT NOT NULL, `serverEnabled` INTEGER NOT NULL, `decision` TEXT NOT NULL, `decidedAtEpochMillis` INTEGER, `requiredApplied` INTEGER NOT NULL, `appliedVersion` INTEGER NOT NULL, `appliedPolicySnapshot` TEXT, `lastDisposition` TEXT, PRIMARY KEY(`moduleId`))",
+        "fields": [
+          {
+            "fieldPath": "moduleId",
+            "columnName": "moduleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverEnabled",
+            "columnName": "serverEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "decision",
+            "columnName": "decision",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "decidedAtEpochMillis",
+            "columnName": "decidedAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "requiredApplied",
+            "columnName": "requiredApplied",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "appliedVersion",
+            "columnName": "appliedVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "appliedPolicySnapshot",
+            "columnName": "appliedPolicySnapshot",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastDisposition",
+            "columnName": "lastDisposition",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "moduleId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '17ac7a5af18ad6358501b088a4d54234')"
+    ]
+  }
+}

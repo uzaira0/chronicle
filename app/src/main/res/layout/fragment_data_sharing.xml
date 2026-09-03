@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  "Data Sharing" tab (per-module consent design §7): the persistent management surface for
+  consent-gated collection. A container with two sections — "App & Device Usage" (usage,
+  device lifecycle, battery, user identification) and "Sensors". Optional modules toggle
+  freely; required modules remain visible and withdrawal stops all collection. The Sensors section folds in the
+  former Sensors tab. Rows are bound programmatically by DataSharingFragment.
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/dataSharingScroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/chronicle_bg"
+    android:clipToPadding="false"
+    android:fillViewport="true"
+    android:paddingTop="0dp">
+
+    <LinearLayout
+        android:id="@+id/dataSharingContent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/page_horizontal_padding"
+        android:paddingTop="32dp"
+        android:paddingEnd="@dimen/page_horizontal_padding"
+        android:paddingBottom="96dp">
+
+        <TextView
+            android:id="@+id/dataSharingPageTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/data_sharing_title"
+            android:textAppearance="@style/Chronicle.MetricValue" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/data_sharing_intro"
+            android:textAppearance="@style/Chronicle.Body"
+            android:alpha="0.8" />
+
+        <!--
+          Shown by DataSharingFragment only when collection is globally paused because the
+          study now requires a module the participant has not yet accepted (per-module
+          consent design §5). Accepting the required item below resumes all collection.
+        -->
+        <TextView
+            android:id="@+id/dataSharingPausedBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_panel"
+            android:padding="16dp"
+            android:textColor="@color/eq_focus"
+            android:textStyle="bold"
+            android:textAppearance="@style/Chronicle.Body"
+            android:visibility="gone" />
+
+        <!-- One Accept row per study-required module the participant has not yet accepted.
+             Accepting resumes ALL collection (the global halt lifts). Bound by the fragment. -->
+        <LinearLayout
+            android:id="@+id/pendingRequiredList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical"
+            android:visibility="gone" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/data_sharing_usage_section"
+            android:textAppearance="@style/Chronicle.Body"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/appUsageModuleList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical" />
+
+        <TextView
+            android:id="@+id/sensorsSectionTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="@string/data_sharing_sensors_section"
+            android:textAppearance="@style/Chronicle.Body"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/sensorsSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_panel"
+            android:padding="16dp"
+            android:textAppearance="@style/Chronicle.Body" />
+
+        <LinearLayout
+            android:id="@+id/sensorToggleList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="vertical" />
+    </LinearLayout>
+</ScrollView>

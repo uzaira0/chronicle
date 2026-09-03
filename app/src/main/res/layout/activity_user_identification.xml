@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  This activity is opened from a notification and must remain usable on compact phones,
+  tablets, landscape windows, and with enlarged text. Keep the decisions in a vertical,
+  content-sized flow and retain the scrolling fallback rather than returning to a fixed row.
+-->
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/user_identification_scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipToPadding="false"
+    android:fillViewport="true"
+    android:paddingTop="?attr/actionBarSize"
+    tools:context=".UserIdentificationActivity">
+
+    <LinearLayout
+        android:id="@+id/user_identification_content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/page_horizontal_padding"
+        android:paddingTop="@dimen/eq_space_5"
+        android:paddingEnd="@dimen/page_horizontal_padding"
+        android:paddingBottom="@dimen/eq_space_5">
+
+        <TextView
+            android:id="@+id/select_user_prompt"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:accessibilityHeading="true"
+            android:gravity="center"
+            android:maxWidth="560dp"
+            android:text="@string/select_current_user_prompt"
+            android:textAppearance="@style/TextAppearance.MaterialComponents.Headline6" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/child_user_btn"
+            style="@style/Chronicle.Button.Secondary"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/eq_space_6"
+            android:gravity="center"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:maxWidth="480dp"
+            android:maxLines="2"
+            android:minHeight="56dp"
+            android:text="@string/user_target_child"
+            app:icon="@drawable/star"
+            app:iconSize="28dp"
+            app:iconTint="@null" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/other_user_btn"
+            style="@style/Chronicle.Button.Secondary"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/eq_space_3"
+            android:gravity="center"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:maxWidth="480dp"
+            android:maxLines="2"
+            android:minHeight="56dp"
+            android:text="@string/user_other" />
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Debug-only emulator tests install a one-run CA in Android's user trust
+         store. Release variants do not reference this resource or trust user
+         certificates. -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+    <!--
+      Cleartext is permitted only for the loopback addresses an emulator or a
+      locally forwarded port uses. To debug against a server on your network,
+      add its address here in your own working copy; deployment addresses are
+      deliberately not committed.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

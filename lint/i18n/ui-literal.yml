@@ -1,0 +1,60 @@
+id: android-i18n-ui-literal
+language: kotlin
+severity: error
+message: >-
+  Hardcoded English passed to a user-visible Android API. Use a string resource
+  (getString(R.string.x) / context.copyResolver()) and add the English entry to
+  app/src/main/res/values/strings.xml. A deliberate wire value or developer diagnostic may be
+  marked with "// ast-grep-ignore: android-i18n-ui-literal" on its own line above.
+note: |
+  Matched by node shape rather than by text pattern, so comments and line breaks inside a call
+  chain do not hide a setter. Only a direct string literal (or "literal" + expr) counts; a
+  template such as "$label: 42" has no English of its own, and a literal chosen by an if/else
+  expression is not inspected.
+ignores:
+  - '**/src/test/**'
+  - '**/src/androidTest/**'
+utils:
+  literal:
+    kind: string_literal
+    has: { kind: string_content, regex: '[A-Za-z]{2,}' }
+  literal-or-concat:
+    any:
+      - matches: literal
+      - { kind: additive_expression, has: { matches: literal } }
+  literal-argument:
+    kind: call_suffix
+    has:
+      kind: value_arguments
+      has:
+        kind: value_argument
+        has: { matches: literal-or-concat }
+rule:
+  any:
+    # view.setText("..."), Toast.makeText(ctx, "...", d), builder.setTitle("...").setMessage("...")
+    - kind: call_expression
+      all:
+        - has:
+            kind: navigation_expression
+            has:
+              kind: navigation_suffix
+              has:
+                kind: simple_identifier
+                regex: '^(makeText|make|setTitle|setMessage|setPositiveButton|setNegativeButton|setNeutralButton|setContentTitle|setContentText|setSubText|setTicker|setText|setHint|setContentDescription|setSummary|bigText|setBigContentTitle|setSummaryText)$'
+        - has: { matches: literal-argument }
+    # NotificationChannel(id, "Display name", importance)
+    - kind: call_expression
+      all:
+        - has: { kind: simple_identifier, regex: '^NotificationChannel$' }
+        - has: { matches: literal-argument }
+    # view.text = "...", binding.title.hint = "...", this.title = "...", title = "..."
+    - kind: assignment
+      all:
+        - has:
+            kind: directly_assignable_expression
+            any:
+              - has:
+                  kind: navigation_suffix
+                  has: { kind: simple_identifier, regex: '^(text|hint|title|subtitle|contentDescription|summary|error)$' }
+              - has: { kind: simple_identifier, regex: '^(title|subtitle)$' }
+        - has: { matches: literal-or-concat }

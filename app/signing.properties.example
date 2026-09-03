@@ -1,0 +1,11 @@
+# Copy this file to app/signing.properties and replace every placeholder locally.
+# Do not commit app/signing.properties or the keystore file.
+#
+# The keystore must be the intended Chronicle beta/release signing material.
+# Android debug signing material is rejected by app/build.gradle and
+# scripts/android-release-candidate-gate.sh.
+
+storeFile=/absolute/path/to/chronicle-release-or-beta.jks
+storePassword=<local secret>
+keyAlias=<release key alias>
+keyPassword=<local secret>

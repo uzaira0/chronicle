@@ -1,0 +1,508 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 12,
+    "identityHash": "a07b768964c49d1822784c2dac7fcd21",
+    "entities": [
+      {
+        "tableName": "dataQueue",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `id` INTEGER NOT NULL, `data` BLOB NOT NULL, PRIMARY KEY(`writeTimestamp`, `id`))",
+        "fields": [
+          {
+            "fieldPath": "writeTimestamp",
+            "columnName": "writeTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "data",
+            "columnName": "data",
+            "affinity": "BLOB",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "writeTimestamp",
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_dataQueue_writeTimestamp",
+            "unique": false,
+            "columnNames": [
+              "writeTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_dataQueue_writeTimestamp` ON `${TABLE_NAME}` (`writeTimestamp`)"
+          },
+          {
+            "name": "index_dataQueue_writeTimestamp_id",
+            "unique": true,
+            "columnNames": [
+              "writeTimestamp",
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_dataQueue_writeTimestamp_id` ON `${TABLE_NAME}` (`writeTimestamp`, `id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "userQueue",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `user` TEXT NOT NULL, PRIMARY KEY(`writeTimestamp`))",
+        "fields": [
+          {
+            "fieldPath": "writeTimestamp",
+            "columnName": "writeTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "user",
+            "columnName": "user",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "writeTimestamp"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_userQueue_writeTimestamp",
+            "unique": true,
+            "columnNames": [
+              "writeTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_userQueue_writeTimestamp` ON `${TABLE_NAME}` (`writeTimestamp`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sensor_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sensorType` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `x` REAL, `y` REAL, `z` REAL, `w` REAL, `accuracy` INTEGER, `valuesJson` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorType",
+            "columnName": "sensorType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "x",
+            "columnName": "x",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "y",
+            "columnName": "y",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "z",
+            "columnName": "z",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "w",
+            "columnName": "w",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "accuracy",
+            "columnName": "accuracy",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "valuesJson",
+            "columnName": "valuesJson",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "battery_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `levelPercent` INTEGER NOT NULL, `chargingState` TEXT NOT NULL, `plugType` TEXT NOT NULL, `temperatureDeciC` INTEGER NOT NULL, `voltageMillivolts` INTEGER NOT NULL, `health` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "levelPercent",
+            "columnName": "levelPercent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chargingState",
+            "columnName": "chargingState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plugType",
+            "columnName": "plugType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "temperatureDeciC",
+            "columnName": "temperatureDeciC",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "voltageMillivolts",
+            "columnName": "voltageMillivolts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "health",
+            "columnName": "health",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "upload_servers",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `url` TEXT NOT NULL, `studyId` TEXT NOT NULL, `participantId` TEXT NOT NULL, `sourceDeviceId` TEXT NOT NULL, `authMode` TEXT NOT NULL, `apiKey` TEXT, `enabled` INTEGER NOT NULL, `lastUploadTime` TEXT, `lastUploadError` TEXT, `consecutiveFailures` INTEGER NOT NULL, `lastSensorUploadTime` TEXT, `lastSensorUploadError` TEXT, `sensorConsecutiveFailures` INTEGER NOT NULL, `lastBatteryUploadTime` TEXT, `lastBatteryUploadError` TEXT, `batteryConsecutiveFailures` INTEGER NOT NULL, `lastUploadedTimestamp` INTEGER NOT NULL, `lastUploadedQueueId` INTEGER NOT NULL, `lastUploadedSensorId` TEXT, `createdAt` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "studyId",
+            "columnName": "studyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "participantId",
+            "columnName": "participantId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceDeviceId",
+            "columnName": "sourceDeviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authMode",
+            "columnName": "authMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "apiKey",
+            "columnName": "apiKey",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadTime",
+            "columnName": "lastUploadTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUploadError",
+            "columnName": "lastUploadError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "consecutiveFailures",
+            "columnName": "consecutiveFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSensorUploadTime",
+            "columnName": "lastSensorUploadTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSensorUploadError",
+            "columnName": "lastSensorUploadError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sensorConsecutiveFailures",
+            "columnName": "sensorConsecutiveFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastBatteryUploadTime",
+            "columnName": "lastBatteryUploadTime",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastBatteryUploadError",
+            "columnName": "lastBatteryUploadError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "batteryConsecutiveFailures",
+            "columnName": "batteryConsecutiveFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadedTimestamp",
+            "columnName": "lastUploadedTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadedQueueId",
+            "columnName": "lastUploadedQueueId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUploadedSensorId",
+            "columnName": "lastUploadedSensorId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "upload_stats",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `serverId` INTEGER NOT NULL, `date` TEXT NOT NULL, `usageEventsUploaded` INTEGER NOT NULL, `sensorSamplesUploaded` INTEGER NOT NULL, FOREIGN KEY(`serverId`) REFERENCES `upload_servers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "serverId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "date",
+            "columnName": "date",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usageEventsUploaded",
+            "columnName": "usageEventsUploaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorSamplesUploaded",
+            "columnName": "sensorSamplesUploaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_upload_stats_serverId_date",
+            "unique": true,
+            "columnNames": [
+              "serverId",
+              "date"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_upload_stats_serverId_date` ON `${TABLE_NAME}` (`serverId`, `date`)"
+          },
+          {
+            "name": "index_upload_stats_serverId",
+            "unique": false,
+            "columnNames": [
+              "serverId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_upload_stats_serverId` ON `${TABLE_NAME}` (`serverId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "upload_servers",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "serverId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "usage_poll_checkpoints",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sensorName` TEXT NOT NULL, `lastPollTimestamp` INTEGER NOT NULL, PRIMARY KEY(`sensorName`))",
+        "fields": [
+          {
+            "fieldPath": "sensorName",
+            "columnName": "sensorName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPollTimestamp",
+            "columnName": "lastPollTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sensorName"
+          ]
+        }
+      },
+      {
+        "tableName": "collection_module_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`moduleId` TEXT NOT NULL, `serverEnabled` INTEGER NOT NULL, `acknowledgedAtEpochMillis` INTEGER, `appliedVersion` INTEGER NOT NULL, `lastDisposition` TEXT, PRIMARY KEY(`moduleId`))",
+        "fields": [
+          {
+            "fieldPath": "moduleId",
+            "columnName": "moduleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverEnabled",
+            "columnName": "serverEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "acknowledgedAtEpochMillis",
+            "columnName": "acknowledgedAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "appliedVersion",
+            "columnName": "appliedVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastDisposition",
+            "columnName": "lastDisposition",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "moduleId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a07b768964c49d1822784c2dac7fcd21')"
+    ]
+  }
+}

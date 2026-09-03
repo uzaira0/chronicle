@@ -1,0 +1,709 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.3.21'
+    id 'com.google.devtools.ksp' version '2.3.7' apply true
+    id 'com.android.application'
+}
+
+apply plugin: 'kotlin-parcelize'
+//apply plugin: 'kotlin-kapt'
+
+// Use repos defined inline below; the remote main-branch fetch was 404ing when develop
+// had repo changes not yet promoted to main.
+repositories {
+    mavenLocal()
+    google()
+    mavenCentral()
+    maven {
+        url 'https://maven.pkg.github.com/uzaira0/chronicle'
+        credentials {
+            username = System.getenv('GITHUB_ACTOR') ?: project.findProperty('gpr.user') ?: 'curator-bot'
+            password = System.getenv('GITHUB_TOKEN') ?: project.findProperty('gpr.key') ?: ''
+        }
+    }
+}
+
+def signingProperties = new Properties()
+def signingPropertiesFile = file('signing.properties')
+def hasChronicleSigning = signingPropertiesFile.exists()
+if (hasChronicleSigning) {
+    signingProperties.load(new FileInputStream(signingPropertiesFile))
+}
+
+def readEnvFileValue = { File envFile, String key ->
+    if (!envFile.exists()) return null
+    def prefix = "${key}="
+    def line = envFile.readLines().find { raw ->
+        def trimmed = raw.trim()
+        trimmed.startsWith(prefix) && !trimmed.startsWith('#')
+    }
+    if (line == null) {
+        return null
+    }
+    def value = line.substring(prefix.length()).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.substring(1, value.length() - 1)
+    }
+    return value
+}
+
+def readDockerEnvValue = { String key ->
+    def candidates = [
+        rootProject.file('../docker/.env'),
+        rootProject.file('../methodic/docker/.env'),
+        rootProject.file('../methodic/docker/.env.production'),
+        rootProject.file('../methodic/docker/.env.staging'),
+    ]
+    for (def envFile : candidates) {
+        def value = readEnvFileValue(envFile, key)
+        if (value != null && !value.toString().isBlank()) return value
+    }
+    return null
+}
+
+def readGeneratedIosConfigValue = { String key ->
+    def candidates = [
+        rootProject.file('../chronicle-ios/chronicle/Config/Chronicle.local.xcconfig'),
+        rootProject.file('../methodic/chronicle-ios/chronicle/Config/Chronicle.local.xcconfig'),
+    ]
+    def pattern = ~/^\s*${java.util.regex.Pattern.quote(key)}\s*=\s*(.*?)\s*$/
+    for (def configFile : candidates) {
+        if (!configFile.exists()) continue
+        for (def rawLine : configFile.readLines()) {
+            def matcher = rawLine =~ pattern
+            if (matcher.matches() && !matcher.group(1).isBlank()) {
+                return matcher.group(1).trim()
+            }
+        }
+    }
+    return null
+}
+
+def readOperatorConfigValue = { String envKey, String gradleProperty, String defaultValue ->
+    def envValue = providers.environmentVariable(envKey).getOrNull()
+    if (envValue != null && !envValue.isBlank()) return envValue.trim()
+    def propValue = project.findProperty(gradleProperty)?.toString()
+    if (propValue != null && !propValue.isBlank()) return propValue.trim()
+    return defaultValue
+}
+
+def quoteBuildConfigString = { String value ->
+    "\"${value.replace('\\', '\\\\').replace('"', '\\"')}\""
+}
+
+def approvedModuleRegistry = file('src/play/assets/approved-module-registry.json')
+if (!approvedModuleRegistry.isFile()) {
+    throw new GradleException("Play approved-module registry is missing: ${approvedModuleRegistry}")
+}
+def approvedModuleRegistryDocument
+try {
+    approvedModuleRegistryDocument = new groovy.json.JsonSlurper().parse(approvedModuleRegistry)
+} catch (Exception error) {
+    throw new GradleException("Play approved-module registry is invalid JSON", error)
+}
+if (approvedModuleRegistryDocument.schemaVersion != 1 ||
+    approvedModuleRegistryDocument.distribution != 'PLAY' ||
+    !(approvedModuleRegistryDocument.modules instanceof List) ||
+    approvedModuleRegistryDocument.modules.isEmpty()) {
+    throw new GradleException('Play approved-module registry has an invalid schema or distribution')
+}
+def approvedPlayModuleIds = approvedModuleRegistryDocument.modules.collect { module ->
+    module.id?.toString()?.trim()
+}
+if (approvedPlayModuleIds.any { !(it ==~ /[a-z][a-z0-9_]*/) } ||
+    approvedPlayModuleIds.toSet().size() != approvedPlayModuleIds.size()) {
+    throw new GradleException('Play approved-module registry contains an invalid or duplicate module id')
+}
+def requiredRegistryKeys = ['fields', 'permissions', 'retention', 'destinations', 'upload', 'deletion']
+if (approvedModuleRegistryDocument.modules.any { module ->
+    requiredRegistryKeys.any { key -> !module.containsKey(key) }
+}) {
+    throw new GradleException('Play approved-module registry omits a required module contract field')
+}
+def approvedPlayModuleIdsCsv = approvedPlayModuleIds.join(',')
+def approvedModuleRegistrySha256 = java.security.MessageDigest
+    .getInstance('SHA-256')
+    .digest(approvedModuleRegistry.bytes)
+    .collect { String.format('%02x', it) }
+    .join('')
+def releaseCandidateId = providers.gradleProperty('chronicleRcId')
+    .orElse(providers.environmentVariable('CHRONICLE_RC_ID'))
+    .getOrElse('UNSEALED')
+    .trim()
+if (!(releaseCandidateId ==~ /[A-Za-z0-9][A-Za-z0-9._-]{0,127}/)) {
+    throw new GradleException('CHRONICLE_RC_ID/chronicleRcId must be 1-128 safe identifier characters')
+}
+
+// Resolve the legacy research-only mobile signing secret from a daemon-safe source.
+//
+// Use providers.environmentVariable(...) — NOT System.getenv(...). A reused Gradle daemon
+// freezes System.getenv() at daemon-start. The provider reads the value from this invocation.
+// Public flavors never receive this value and the build never logs it, its source, length,
+// or a fingerprint.
+def mobileSigningSecret = ''
+def envMobileSigningSecret = providers.environmentVariable('MOBILE_SIGNING_SECRET').getOrNull()
+def propMobileSigningSecret = project.findProperty('mobileSigningSecret')?.toString()
+def dockerMobileSigningSecret = readDockerEnvValue('MOBILE_SIGNING_SECRET')?.toString()
+def iosConfigMobileSigningSecret = readGeneratedIosConfigValue('MOBILE_SIGNING_SECRET')?.toString()
+if (envMobileSigningSecret != null && !envMobileSigningSecret.isBlank()) {
+    mobileSigningSecret = envMobileSigningSecret
+} else if (propMobileSigningSecret != null && !propMobileSigningSecret.isBlank()) {
+    mobileSigningSecret = propMobileSigningSecret
+} else if (dockerMobileSigningSecret != null && !dockerMobileSigningSecret.isBlank()) {
+    mobileSigningSecret = dockerMobileSigningSecret
+} else if (iosConfigMobileSigningSecret != null && !iosConfigMobileSigningSecret.isBlank()) {
+    mobileSigningSecret = iosConfigMobileSigningSecret
+}
+
+def isPlaceholderMobileSigningSecret = { String value ->
+    def normalized = value.toLowerCase(Locale.ROOT)
+    normalized.contains('change_me') ||
+        normalized.contains('changeme') ||
+        normalized.contains('placeholder') ||
+        normalized.contains('replace_me') ||
+        normalized.contains('example')
+}
+
+def requiresMobileSigningSecret = gradle.startParameter.taskNames.any { taskName ->
+    def normalized = taskName.toLowerCase(Locale.ROOT)
+    normalized.contains('research') || normalized.contains('verifymobilesigningsecret')
+}
+
+def requiresReleaseSigning = gradle.startParameter.taskNames.any { taskName ->
+    def normalized = taskName.toLowerCase(Locale.ROOT)
+    (normalized.contains('release') || normalized.contains('dogfood')) && (
+        normalized.contains('assemble') ||
+        normalized.contains('bundle') ||
+        normalized.contains('package') ||
+        normalized.contains('install')
+    )
+}
+
+def normalizedSigningPath = { Object value ->
+    value == null ? '' : value.toString().trim().replace('\\', '/').toLowerCase(Locale.ROOT)
+}
+
+def isDebugSigningMaterial = { Properties properties ->
+    def storePath = normalizedSigningPath(properties['storeFile'])
+    def keyAlias = properties['keyAlias']?.toString()?.trim()?.toLowerCase(Locale.ROOT) ?: ''
+    def storePassword = properties['storePassword']?.toString()
+    def keyPassword = properties['keyPassword']?.toString()
+
+    keyAlias == 'androiddebugkey' ||
+        storePath == 'debug.keystore' ||
+        storePath.endsWith('/debug.keystore') ||
+        storePassword == 'android' ||
+        keyPassword == 'android'
+}
+
+def chronicleProductionHost = readOperatorConfigValue(
+    'CHRONICLE_PRODUCTION_HOST',
+    'chronicleProductionHost',
+    ''
+)
+
+android {
+
+    compileSdk = 36
+    configurations.all {
+        resolutionStrategy.force 'com.google.code.findbugs:jsr305:1.3.9'
+    }
+    buildFeatures {
+        viewBinding true
+        buildConfig true
+    }
+    defaultConfig {
+        applicationId "com.bcm.chronicle"
+        minSdk = 23
+        targetSdk = 36
+        versionCode 56
+        versionName "2026.09.01-internal.open.1"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables.useSupportLibrary = true
+
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += ["room.schemaLocation": "$projectDir/schemas".toString()]
+            }
+        }
+        // Distributed apps are public clients and must not embed a global server secret.
+        buildConfigField "String", "MOBILE_SIGNING_SECRET", '""'
+        buildConfigField "String", "CHRONICLE_PRODUCTION_HOST", quoteBuildConfigString(chronicleProductionHost)
+        // Public distribution flavors opt in when participants may enroll against any public
+        // HTTPS Chronicle server. The controlled research flavor remains allowlist-pinned.
+        buildConfigField "boolean", "ALLOW_ANY_SERVER", "false"
+        buildConfigField "boolean", "HAS_APP_NETWORK_USAGE", "false"
+        buildConfigField "boolean", "ALLOW_PARTICIPANT_FORM_REMINDERS", "true"
+        buildConfigField "String", "RELEASE_CANDIDATE_ID", quoteBuildConfigString(releaseCandidateId)
+        buildConfigField "String", "APPROVED_MODULE_REGISTRY_SHA256", quoteBuildConfigString(approvedModuleRegistrySha256)
+        buildConfigField "String", "PLAY_APPROVED_MODULE_IDS", quoteBuildConfigString(approvedPlayModuleIdsCsv)
+        manifestPlaceholders += [
+            releaseCandidateId: releaseCandidateId,
+            approvedModuleRegistrySha256: approvedModuleRegistrySha256,
+        ]
+    }
+    flavorDimensions += "distribution"
+    productFlavors {
+        play {
+            dimension "distribution"
+            // Only the locales Chronicle itself ships. Without this filter, translated
+            // resources bundled by AndroidX and other dependencies are emitted as dozens of
+            // language splits and Play incorrectly presents them as supported localizations.
+            // Add a locale here when its values-<lang>/strings.xml lands.
+            resourceConfigurations += ['en', 'es']
+            buildConfigField "String", "DISTRIBUTION_CHANNEL", '"PLAY"'
+            buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "false"
+            buildConfigField "boolean", "HAS_HEALTH_CONNECT", "false"
+            buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "false"
+            buildConfigField "boolean", "ALLOW_PARTICIPANT_FORM_REMINDERS", "false"
+            buildConfigField "boolean", "ALLOW_ANY_SERVER", "true"
+            buildConfigField "String", "CHRONICLE_PRODUCTION_HOST", '""'
+        }
+        amazon {
+            dimension "distribution"
+            buildConfigField "String", "DISTRIBUTION_CHANNEL", '"AMAZON"'
+            buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "false"
+            buildConfigField "boolean", "HAS_HEALTH_CONNECT", "false"
+            buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "false"
+            buildConfigField "boolean", "ALLOW_PARTICIPANT_FORM_REMINDERS", "false"
+            buildConfigField "boolean", "ALLOW_ANY_SERVER", "true"
+            buildConfigField "String", "CHRONICLE_PRODUCTION_HOST", '""'
+        }
+        research {
+            dimension "distribution"
+            buildConfigField "String", "DISTRIBUTION_CHANNEL", '"RESEARCH"'
+            buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "true"
+            buildConfigField "boolean", "HAS_HEALTH_CONNECT", "true"
+            buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "true"
+            buildConfigField "boolean", "HAS_APP_NETWORK_USAGE", "true"
+            // Transitional compatibility for controlled research deployments only.
+            buildConfigField "String", "MOBILE_SIGNING_SECRET", quoteBuildConfigString(mobileSigningSecret)
+        }
+        // Public / self-host sideload distribution. Mirrors `research` (Play Services on,
+        // Health Connect on) and, like the Play build, points at NO fixed server:
+        // ALLOW_ANY_SERVER lets a participant
+        // enroll against any public HTTPS Chronicle backend and disables operator-specific
+        // certificate pinning. Build with `:app:assembleOpenRelease`.
+        // NOTE: to publish this as a distinct app, give it its own applicationId here
+        // (e.g. `applicationId "cl.iie.chronicle"`) and matching store listing/signing.
+        open {
+            dimension "distribution"
+            buildConfigField "String", "DISTRIBUTION_CHANNEL", '"OPEN"'
+            buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "true"
+            buildConfigField "boolean", "HAS_HEALTH_CONNECT", "true"
+            buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "false"
+            buildConfigField "boolean", "HAS_APP_NETWORK_USAGE", "true"
+            buildConfigField "boolean", "ALLOW_ANY_SERVER", "true"
+            buildConfigField "String", "CHRONICLE_PRODUCTION_HOST", '""'
+        }
+    }
+    sourceSets {
+        play.java.srcDir 'src/minimal/java'
+        play.kotlin.srcDir 'src/minimal/java'
+        amazon.java.srcDir 'src/minimal/java'
+        amazon.kotlin.srcDir 'src/minimal/java'
+        research.java.srcDir 'src/googleServices/java'
+        research.kotlin.srcDir 'src/googleServices/java'
+        research.res.srcDir 'src/googleServices/res'
+        open.java.srcDir 'src/googleServices/java'
+        open.kotlin.srcDir 'src/googleServices/java'
+        open.res.srcDir 'src/googleServices/res'
+    }
+    signingConfigs {
+        chronicle {
+            if (hasChronicleSigning) {
+                keyAlias signingProperties['keyAlias']
+                keyPassword signingProperties['keyPassword']
+                storeFile file(signingProperties['storeFile'])
+                storePassword signingProperties['storePassword']
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            debuggable true
+            // Android's built-in pseudolocales (Settings > Developer options > Languages, or
+            // `adb shell settings put system system_locales en-XA`): every resource string is
+            // accented (en-XA) or mirrored (ar-XB), so text that stays plain English on screen
+            // is hardcoded. The play flavor's resourceConfigurations filter drops them; use an
+            // open/amazon debug build for this QA pass.
+            pseudoLocalesEnabled true
+            if (hasChronicleSigning) {
+                signingConfig signingConfigs.chronicle
+            }
+        }
+        release {
+            // The Play artifact is minimized so research collectors are absent from its source
+            // and dependency graphs. The release verifier
+            // proves the reflective/wire/JNI keep rules and rejects excluded descriptors.
+            minifyEnabled true
+            shrinkResources true
+            ndk {
+                abiFilters 'armeabi-v7a', 'arm64-v8a'
+            }
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasChronicleSigning) {
+                signingConfig signingConfigs.chronicle
+            }
+        }
+        dogfood {
+            initWith release
+            matchingFallbacks = ['release']
+            debuggable false
+            if (hasChronicleSigning) {
+                signingConfig signingConfigs.chronicle
+            }
+        }
+        debugMinified {
+            initWith debug
+            applicationIdSuffix ".debug"
+            matchingFallbacks = ['debug']
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            debuggable true
+            if (hasChronicleSigning) {
+                signingConfig signingConfigs.chronicle
+            }
+        }
+        releaseMinified {
+            initWith release
+            matchingFallbacks = ['release']
+            // Genuinely-minified variant: use this to validate the R8 keep rules are
+            // complete before ever re-enabling minification on `release`.
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasChronicleSigning) {
+                signingConfig signingConfigs.chronicle
+            }
+        }
+    }
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        targetCompatibility 17
+        sourceCompatibility 17
+    }
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/DEPENDENCIES']
+        }
+    }
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+            allWarningsAsErrors = true
+        }
+    }
+
+    lint {
+        abortOnError true
+        // HardcodedText is promoted to an error in lint.xml (see app/src/main/res/I18N.md).
+        lintConfig file('lint.xml')
+    }
+    namespace 'com.openlattice.chronicle'
+}
+
+if (requiresMobileSigningSecret && mobileSigningSecret.isBlank()) {
+    throw new GradleException(
+        "MOBILE_SIGNING_SECRET is required to build/install Chronicle Android APKs. " +
+            "Set env MOBILE_SIGNING_SECRET, Gradle property mobileSigningSecret, " +
+            "or docker/.env MOBILE_SIGNING_SECRET."
+    )
+}
+
+if (requiresMobileSigningSecret && (
+    mobileSigningSecret.length() < 32 || isPlaceholderMobileSigningSecret(mobileSigningSecret)
+)) {
+    throw new GradleException(
+        "MOBILE_SIGNING_SECRET must be a real non-placeholder secret of at least 32 characters. " +
+            "Refusing to build a Chronicle Android APK with a missing, template, or weak mobile signing secret."
+    )
+}
+
+tasks.register('verifyMobileSigningSecret') {
+    group = 'verification'
+    description = 'Verifies that the resolved mobile signing value is non-placeholder and at least 32 characters.'
+    doLast {
+        logger.lifecycle('MOBILE_SIGNING_SECRET passed the production-strength validation policy.')
+    }
+}
+
+if (requiresReleaseSigning && !hasChronicleSigning) {
+    throw new GradleException(
+        "Chronicle release builds require app/signing.properties and its configured keystore."
+    )
+}
+
+if (requiresReleaseSigning && hasChronicleSigning) {
+    def configuredStore = file(signingProperties['storeFile'] ?: '')
+    if (!configuredStore.exists()) {
+        throw new GradleException(
+            "Chronicle release signing keystore does not exist: ${configuredStore}"
+        )
+    }
+    if (isDebugSigningMaterial(signingProperties)) {
+        throw new GradleException(
+            "Chronicle release builds must not use Android debug signing material. " +
+                "Configure app/signing.properties with the intended non-debug Chronicle release/beta keystore."
+        )
+    }
+}
+
+def verifyAndroid16kbScript = rootProject.file('scripts/verify-android-16kb-native-libs.sh')
+def distributionFlavors = ['play', 'amazon', 'research', 'open']
+def verifiableBuildTypes = ['debug', 'release', 'dogfood', 'debugMinified', 'releaseMinified']
+distributionFlavors.each { flavorName ->
+    verifiableBuildTypes.each { buildTypeName ->
+        def variantName = "${flavorName}${buildTypeName.capitalize()}"
+        def variantTaskSuffix = variantName.capitalize()
+        def apkFile = file(
+            "${buildDir}/outputs/apk/${flavorName}/${buildTypeName}/" +
+                "app-${flavorName}-${buildTypeName}.apk"
+        )
+        def verifyTask = tasks.register("verify${variantTaskSuffix}16kbNativeLibs", Exec) {
+            group = 'verification'
+            description = "Verifies ${apkFile.name} is 16 KB native-library compatible."
+            inputs.file(apkFile)
+            def verifierArgs = [verifyAndroid16kbScript.absolutePath]
+            if (buildTypeName in ['release', 'dogfood', 'releaseMinified']) {
+                verifierArgs.add('--release-abis-only')
+            }
+            verifierArgs.add(apkFile.absolutePath)
+            commandLine verifierArgs
+        }
+        afterEvaluate {
+            tasks.named("assemble${variantTaskSuffix}").configure {
+                finalizedBy verifyTask
+            }
+        }
+    }
+}
+
+ksp {
+    arg('room.schemaLocation', "$projectDir/schemas")
+}
+
+ext.activity_version = '1.6.0'
+
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+
+    implementation project(':collection-base')
+    implementation project(':collection-core')
+    implementation project(':collection-upload')
+    implementation project(':collection-usage')
+    implementation project(':collection-lifecycle')
+    implementation project(':collection-notifications')
+    implementation project(':collection-battery')
+    implementation project(':collection-device')
+
+    // Restricted collectors remain source-correctness dependencies for local debug tests and
+    // controlled research/open distributions, but are absent from the Play release runtime.
+    researchImplementation project(':collection-sensors')
+    researchImplementation project(':collection-interaction')
+    researchImplementation project(':collection-audio')
+    researchImplementation project(':collection-activity')
+    researchImplementation project(':collection-health')
+    openImplementation project(':collection-sensors')
+    openImplementation project(':collection-interaction')
+    openImplementation project(':collection-audio')
+    openImplementation project(':collection-activity')
+    openImplementation project(':collection-health')
+
+    researchImplementation 'com.google.android.gms:play-services-location:21.3.0'
+    openImplementation 'com.google.android.gms:play-services-location:21.3.0'
+    researchImplementation 'androidx.health.connect:connect-client:1.1.0-rc03'
+    openImplementation 'androidx.health.connect:connect-client:1.1.0-rc03'
+
+    implementation("org.apache.olingo:odata-commons-api:5.0.0")
+
+    implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
+
+    implementation "androidx.activity:activity-ktx:1.9.3"
+
+    // WorkManager
+    implementation "androidx.work:work-runtime-ktx:2.10.0"
+    // Direct-boot process re-initialization (DirectBootProcessInit): these are already on
+    // the runtime classpath transitively; declared so their initializers are compile-visible.
+    implementation "androidx.startup:startup-runtime:1.1.1"
+    implementation "androidx.emoji2:emoji2:1.3.0"
+    implementation "androidx.lifecycle:lifecycle-process:2.8.7"
+    implementation "org.apache.commons:commons-lang3:3.20.0"
+    // Retained only for the legacy in-process notification Intent payload.
+    implementation 'com.google.code.gson:gson:2.13.2'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'com.squareup.retrofit2:retrofit:3.0.0'
+    implementation 'com.squareup.retrofit2:converter-moshi:3.0.0'
+    implementation 'com.squareup.moshi:moshi-kotlin:1.15.2'
+    implementation 'com.squareup.moshi:moshi-adapters:1.15.2'
+    implementation('com.openlattice:chronicle-models:0.1.0-SNAPSHOT') {
+        exclude module: 'guava'
+        exclude group: 'org.apache.olingo'
+        exclude module: 'slf4j-api'
+        exclude group: 'com.fasterxml.jackson.core', module: 'jackson-core'
+        exclude group: 'com.fasterxml.jackson.core', module: 'jackson-databind'
+        exclude group: 'com.fasterxml.jackson.datatype'
+        exclude group: 'com.fasterxml.jackson.module'
+        exclude group: 'com.fasterxml.jackson.dataformat'
+        // Server-side Bean Validation annotations are not evaluated on-device. Their Java 8
+        // TYPE_USE metadata crashes Android 6's reflection implementation before Moshi can bind.
+        exclude group: 'jakarta.validation'
+    }
+    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
+    // chronicle-models retains Jackson annotations as source-level wire-contract metadata,
+    // but Android does not ship Jackson's vulnerable parser/databind runtime.
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.13.5'
+
+    implementation 'org.slf4j:slf4j-android:1.7.36'
+    implementation 'org.slf4j:slf4j-android:1.7.36'
+    implementation 'com.google.guava:guava:33.5.0-android'
+    implementation 'org.dmfs:lib-recur:0.17.1'
+
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+    implementation 'net.zetetic:sqlcipher-android:4.13.0'
+    implementation 'androidx.sqlite:sqlite-ktx:2.6.2'
+    implementation 'androidx.room:room-runtime:2.8.4'
+    implementation 'androidx.room:room-ktx:2.8.4'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.0'
+    implementation 'androidx.preference:preference-ktx:1.2.1'
+    ksp 'androidx.room:room-compiler:2.8.4'
+    annotationProcessor 'androidx.room:room-compiler:2.8.4'
+    implementation 'androidx.room:room-runtime:2.8.4'
+
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:core:1.7.0'
+    androidTestImplementation 'androidx.test:rules:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0'
+    androidTestImplementation 'androidx.test.espresso:espresso-accessibility:3.7.0'
+    // WorkManager test harness — used by the Phase 8 upload-telemetry instrumented test
+    // to schedule and read back combined_upload work without a real WorkManager runtime.
+    androidTestImplementation 'androidx.work:work-testing:2.10.0'
+}
+
+tasks.register('verifyPublicRestrictedDependencyBoundary') {
+    group = 'verification'
+    description = 'Fails if a public Play/Amazon graph resolves an excluded collector project.'
+    doLast {
+        def excludedProjects = [
+            ':collection-sensors',
+            ':collection-interaction',
+            ':collection-audio',
+            ':collection-activity',
+            ':collection-health',
+        ] as Set
+        def publicConfigurations = [
+            'playReleaseCompileClasspath',
+            'playReleaseRuntimeClasspath',
+            'amazonReleaseCompileClasspath',
+            'amazonReleaseRuntimeClasspath',
+        ]
+        def violations = publicConfigurations.collectMany { configurationName ->
+            configurations.getByName(configurationName).incoming.resolutionResult.allComponents
+                .findAll { component ->
+                    component.id instanceof org.gradle.api.artifacts.component.ProjectComponentIdentifier &&
+                        excludedProjects.contains(component.id.projectPath)
+                }
+                .collect { "${configurationName}:${it.id.projectPath}" }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException("Public distribution resolved excluded collector code: ${violations}")
+        }
+    }
+}
+
+tasks.register('verifyAmazonRuntimeClasspath') {
+    group = 'verification'
+    description = 'Fails if the Amazon runtime classpath links Google Play Services or Health Connect.'
+    doLast {
+        def forbidden = configurations.amazonReleaseRuntimeClasspath.incoming.resolutionResult.allComponents
+            .collect { it.moduleVersion }
+            .findAll { version ->
+                version != null && (
+                    version.group == 'com.google.android.gms' ||
+                    (version.group == 'androidx.health.connect' && version.name == 'connect-client')
+                )
+            }
+        if (!forbidden.isEmpty()) {
+            throw new GradleException("Amazon runtime contains forbidden Google dependencies: ${forbidden}")
+        }
+    }
+}
+
+tasks.register('verifyNoJacksonRuntime') {
+    group = 'verification'
+    description = 'Fails if a release flavor ships Jackson parser, databind, or datatype code.'
+    doLast {
+        def allowed = [
+            'com.fasterxml.jackson.core:jackson-annotations',
+            'com.fasterxml.jackson:jackson-bom',
+        ] as Set
+        def forbidden = ['playReleaseRuntimeClasspath', 'amazonReleaseRuntimeClasspath', 'researchReleaseRuntimeClasspath']
+            .collectMany { configurationName ->
+                configurations.getByName(configurationName).incoming.resolutionResult.allComponents
+                    .collect { it.moduleVersion }
+            }
+            .findAll { version ->
+                version != null &&
+                    version.group.startsWith('com.fasterxml.jackson') &&
+                    !allowed.contains("${version.group}:${version.name}".toString())
+            }
+            .collect { "${it.group}:${it.name}:${it.version}" }
+            .toSet()
+            .sort()
+        if (!forbidden.isEmpty()) {
+            throw new GradleException("Android runtime contains forbidden Jackson code: ${forbidden}")
+        }
+    }
+}
+
+tasks.register('generateRuntimeSbom') {
+    group = 'verification'
+    description = 'Writes a CycloneDX inventory for all release distribution runtime classpaths.'
+    dependsOn tasks.named('verifyNoJacksonRuntime')
+    def outputFile = layout.buildDirectory.file('reports/security/chronicle-android-runtime.cdx.json')
+    outputs.file(outputFile)
+    doLast {
+        def coordinates = ['playReleaseRuntimeClasspath', 'amazonReleaseRuntimeClasspath', 'researchReleaseRuntimeClasspath']
+            .collectMany { configurationName ->
+                configurations.getByName(configurationName).incoming.resolutionResult.allComponents
+                    .collect { it.moduleVersion }
+            }
+            .findAll { it != null }
+            .collect { "${it.group}:${it.name}:${it.version}" }
+            .toSet()
+            .sort()
+        def components = coordinates.collect { coordinate ->
+            def parts = coordinate.split(':', 3)
+            [
+                type: 'library',
+                group: parts[0],
+                name: parts[1],
+                version: parts[2],
+                purl: "pkg:maven/${parts[0]}/${parts[1]}@${parts[2]}",
+            ]
+        }
+        def sbom = [
+            bomFormat: 'CycloneDX',
+            specVersion: '1.5',
+            serialNumber: "urn:uuid:${UUID.nameUUIDFromBytes(coordinates.join('\n').getBytes('UTF-8'))}",
+            version: 1,
+            metadata: [component: [type: 'application', name: 'chronicle-android', version: android.defaultConfig.versionName]],
+            components: components,
+        ]
+        def destination = outputFile.get().asFile
+        destination.parentFile.mkdirs()
+        destination.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(sbom))
+        logger.lifecycle("Wrote ${components.size()} components to ${destination}")
+    }
+}
+
+tasks.named('check').configure {
+    dependsOn tasks.named('verifyAmazonRuntimeClasspath')
+    dependsOn tasks.named('verifyNoJacksonRuntime')
+    dependsOn tasks.named('verifyPublicRestrictedDependencyBoundary')
+}

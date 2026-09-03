@@ -1,0 +1,71 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'com.android.library'
+    id 'com.google.devtools.ksp' version '2.3.7'
+}
+
+apply from: rootProject.file('gradle/collection-library.gradle')
+
+android {
+    namespace 'com.openlattice.chronicle.collection.base'
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+            allWarningsAsErrors = true
+        }
+    }
+    defaultConfig {
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += ["room.schemaLocation": "$projectDir/schemas".toString()]
+            }
+        }
+    }
+
+    // Expose the exported Room schema JSONs to androidTest assets so MigrationTestHelper
+    // can load them and validate migrations (ChronicleDbMigrationTest).
+    sourceSets {
+        androidTest.assets.srcDirs += files("$projectDir/schemas")
+    }
+}
+
+ksp {
+    arg('room.schemaLocation', "$projectDir/schemas")
+}
+
+dependencies {
+    // Pure contract layer (tranche 7 split): shared constants, contract-facing sensor
+    // types/mappings, settings/policy prefs, and upload payload DTOs. Exposed via `api`
+    // so downstream modules keep resolving those packages transitively through
+    // :collection-base exactly as before the split.
+    api project(':collection-contracts')
+
+    api('com.openlattice:chronicle-models:0.1.0-SNAPSHOT') {
+        exclude module: 'guava'
+        exclude group: 'org.apache.olingo'
+        exclude module: 'slf4j-api'
+        exclude group: 'com.fasterxml.jackson.core', module: 'jackson-core'
+        exclude group: 'com.fasterxml.jackson.core', module: 'jackson-databind'
+        exclude group: 'com.fasterxml.jackson.datatype'
+        exclude group: 'com.fasterxml.jackson.module'
+        exclude group: 'com.fasterxml.jackson.dataformat'
+        exclude group: 'jakarta.validation'
+    }
+
+    // androidx.security (EncryptedPrefsHelper) moved to :collection-contracts with the
+    // preferences layer; :collection-base keeps only the Room/SQLCipher storage stack.
+    api 'androidx.lifecycle:lifecycle-livedata-ktx:2.8.7'
+    api 'net.zetetic:sqlcipher-android:4.13.0'
+    api 'androidx.sqlite:sqlite-ktx:2.6.2'
+    api 'androidx.room:room-runtime:2.8.4'
+    api 'androidx.room:room-ktx:2.8.4'
+    ksp 'androidx.room:room-compiler:2.8.4'
+
+    // AndroidJUnitRunner (testInstrumentationRunner) lives in androidx.test:runner;
+    // neither ext:junit nor room-testing brings it transitively (room-testing only
+    // pulls androidx.test:monitor), so the test APK can't start without it.
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.room:room-testing:2.8.4'
+}

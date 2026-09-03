@@ -1,0 +1,22 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'com.android.library'
+}
+
+apply from: rootProject.file('gradle/collection-library.gradle')
+
+android {
+    namespace 'com.openlattice.chronicle.collection.notifications'
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+            allWarningsAsErrors = true
+        }
+    }
+}
+
+dependencies {
+    api project(':collection-core')
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The open (self-host sideload) build trusts user-installed CAs so the selfhost
+         local-https trial works: operator-owned test phones install the stack's Caddy CA
+         once and the app then trusts https://<lan-ip>. Installing a user CA is a
+         deliberate, OS-confirmed action by the device owner; Play/research builds do not
+         reference this file and stay system-CA-only. HTTPS is still required — cleartext
+         remains blocked everywhere. -->
+    <base-config>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

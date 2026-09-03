@@ -1,0 +1,36 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "serverOrigin": "https://research.example.org",
+    "studyId": "00000000-0000-0000-0000-000000000001",
+    "participantId": "participant-001",
+    "studyTitle": "Example Study",
+    "studyDescription": "A study of daily routines.",
+    "participantPolicy": {
+      "responsibleInstitution": "Example Research Institute",
+      "serverOperator": "Example Research Institute",
+      "researchContact": "study-team@example.org",
+      "purpose": "Study daily routines.",
+      "expectedDuration": "Twelve weeks",
+      "procedures": "Chronicle collects approved modules.",
+      "foreseeableRisks": "Daily patterns may be sensitive.",
+      "expectedBenefits": "No direct benefit is promised.",
+      "dataUseAndSharing": "Coded data is available to the approved study team.",
+      "retentionAndDeletion": "Data is retained for seven years.",
+      "privacyPolicyUrl": "https://research.example.org/privacy",
+      "withdrawalUrl": "https://research.example.org/withdraw",
+      "consentDocumentUrl": null,
+      "version": "consent-1",
+      "effectiveAt": "2026-08-17T00:00:00Z"
+    },
+    "collectionSettings": {
+      "modules": {},
+      "version": 2,
+      "settingsVersion": 7
+    },
+    "settingsVersion": 7,
+    "issuedAt": "2026-08-17T12:00:00Z",
+    "expiresAt": "2026-08-17T12:10:00Z"
+  },
+  "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

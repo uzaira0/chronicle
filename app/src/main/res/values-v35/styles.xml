@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 35 enforces edge-to-edge: statusBarColor/navigationBarColor are ignored and
+         the light window background shows behind the system bars, so both bars need
+         DARK icons here (below 35 the status bar is purple and keeps white icons). -->
+    <style name="AppTheme" parent="Base.AppTheme">
+        <item name="android:navigationBarColor">@color/chronicle_bg</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

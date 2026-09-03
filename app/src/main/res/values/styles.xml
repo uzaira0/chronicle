@@ -1,0 +1,117 @@
+<resources>
+
+    <!-- Base application theme: iOS-parity light look — purple (#6D49FE) top bar with
+         white title/icons, white/near-white surfaces, dark text (see colors.xml).
+         Pinned to the always-LIGHT MaterialComponents theme for the same reason the old
+         palette pinned always-dark: a single palette with no values-night overrides means
+         a DayNight parent would let theme-default screens follow the SYSTEM setting and
+         diverge from the custom-coloured ones. DarkActionBar variant so the ActionBar
+         (Settings/ServerEnrollment) renders white text on the purple colorPrimary.
+
+         Base./AppTheme split: values-v27 and values-v35 override AppTheme only for
+         system-bar behaviour (light nav bar icons on 27+; edge-to-edge light status
+         icons on 35+ where statusBarColor is ignored and the light window background
+         shows behind the bar). -->
+    <style name="Base.AppTheme" parent="Theme.MaterialComponents.Light.DarkActionBar">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <item name="colorOnPrimary">@color/eq_primary_ink</item>
+        <!-- Switches/checkboxes (Data Sharing toggles) activate with colorSecondary;
+             without this they fall back to the Material default teal. -->
+        <item name="colorSecondary">@color/eq_primary</item>
+        <item name="colorSecondaryVariant">@color/eq_focus</item>
+        <item name="colorSurface">@color/eq_surface</item>
+        <item name="colorOnSurface">@color/eq_ink</item>
+        <item name="android:colorBackground">@color/chronicle_bg</item>
+        <item name="colorError">@color/eq_danger</item>
+        <!-- Status bar is purple (colorPrimaryDark) below API 35, so icons stay white. -->
+        <item name="android:windowLightStatusBar">false</item>
+        <!-- Pre-27 can't request dark nav-bar icons, so a light nav bar would leave the
+             white system buttons invisible; keep it black there. values-v27 lightens it. -->
+        <item name="android:navigationBarColor">@android:color/black</item>
+        <item name="android:fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="materialButtonStyle">@style/Chronicle.Button</item>
+        <item name="bottomNavigationStyle">@style/Chronicle.BottomNavigation</item>
+    </style>
+
+    <style name="AppTheme" parent="Base.AppTheme" />
+
+    <!-- MainActivity only: the tabbed home navigates via the bottom nav and each tab
+         renders its own large title, so the top ActionBar (app name + overflow) is pure
+         redundancy and, under edge-to-edge, was overlapping the tab titles. Drop it here.
+         The standalone Settings/ServerEnrollment activities keep AppTheme's ActionBar for
+         their up-navigation. -->
+    <style name="AppTheme.NoActionBar" parent="AppTheme">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
+    <style name="Chronicle.Button" parent="Widget.MaterialComponents.Button">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="cornerRadius">@dimen/eq_radius_md</item>
+        <item name="android:minHeight">@dimen/chronicle_touch_target</item>
+        <item name="backgroundTint">@color/eq_primary</item>
+        <item name="android:textColor">@color/eq_primary_ink</item>
+        <item name="iconTint">@color/eq_primary_ink</item>
+        <item name="rippleColor">@color/eq_ripple_on_primary</item>
+    </style>
+
+    <!-- Secondary / "Not now" action. Outlined Material button with EXPLICIT colours (not theme
+         attrs) so it reads as a tappable button and stays visible in any theme — the old
+         "?android:attr/borderlessButtonStyle" had no fill/outline and inherited a text colour with
+         no contrast, making it invisible on the dark background (and bare text on light). -->
+    <style name="Chronicle.Button.Secondary" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="cornerRadius">@dimen/eq_radius_md</item>
+        <item name="android:minHeight">@dimen/chronicle_touch_target</item>
+        <item name="android:textColor">@color/eq_ink</item>
+        <item name="strokeColor">@color/eq_primary</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="rippleColor">@color/eq_ripple</item>
+    </style>
+
+    <style name="Chronicle.BottomNavigation" parent="Widget.MaterialComponents.BottomNavigationView.Colored">
+        <item name="android:background">@color/eq_surface</item>
+        <item name="itemIconTint">@color/bottom_nav_item_tint</item>
+        <item name="itemTextColor">@color/bottom_nav_item_tint</item>
+        <item name="itemRippleColor">@color/eq_ripple</item>
+        <item name="elevation">0dp</item>
+    </style>
+
+    <style name="Chronicle.SectionTitle" parent="TextAppearance.MaterialComponents.Subtitle1">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="android:textColor">@color/chronicle_text_primary</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="Chronicle.MetricValue" parent="TextAppearance.MaterialComponents.Headline4">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="android:textColor">@color/chronicle_text_primary</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="Chronicle.Body" parent="TextAppearance.MaterialComponents.Body1">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="android:textColor">@color/chronicle_text_secondary</item>
+    </style>
+
+    <style name="Chronicle.Mono" parent="TextAppearance.MaterialComponents.Body1">
+        <item name="fontFamily">@font/ibm_plex_mono</item>
+        <item name="android:textColor">@color/chronicle_text_secondary</item>
+    </style>
+
+    <style name="Enrollment.InputText" parent="TextAppearance.MaterialComponents.Subtitle1">
+        <item name="android:ems">10</item>
+        <item name="android:inputType">textPersonName</item>
+        <item name="android:selectAllOnFocus">true</item>
+        <item name="singleLine">true</item>
+    </style>
+
+    <style name="ProgressBar" parent="Widget.AppCompat.ProgressBar">
+        <item name="android:indeterminateTint">@color/colorPrimary</item>
+    </style>
+
+</resources>

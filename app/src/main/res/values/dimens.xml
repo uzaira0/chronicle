@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="page_horizontal_padding">16dp</dimen>
+    <dimen name="permission_action_bar_clearance">0dp</dimen>
+    <!-- Equal Research UI density, radius, and spacing tokens. -->
+    <dimen name="eq_space_1">4dp</dimen>
+    <dimen name="eq_space_2">8dp</dimen>
+    <dimen name="eq_space_3">12dp</dimen>
+    <dimen name="eq_space_4">16dp</dimen>
+    <dimen name="eq_space_5">24dp</dimen>
+    <dimen name="eq_space_6">32dp</dimen>
+    <dimen name="eq_radius_sm">4dp</dimen>
+    <dimen name="eq_radius_md">8dp</dimen>
+    <dimen name="eq_radius_lg">12dp</dimen>
+    <dimen name="eq_control_h">44dp</dimen>
+    <dimen name="chronicle_touch_target">48dp</dimen>
+    <dimen name="chronicle_sensor_row_min_height">88dp</dimen>
+    <dimen name="activity_horizontal_margin">@dimen/eq_space_4</dimen>
+    <dimen name="activity_vertical_margin">@dimen/eq_space_4</dimen>
+</resources>

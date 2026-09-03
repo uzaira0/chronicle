@@ -1,0 +1,45 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:9.0.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.21"
+        // NOTE: Do not place your application dependencies here; they belong
+        // in the individual module build.gradle files
+
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url 'https://maven.pkg.github.com/uzaira0/chronicle'
+            credentials {
+                username = project.findProperty("gpr.user") ?: System.getenv("GITHUB_ACTOR") ?: ""
+                password = project.findProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
+    }
+
+    // Jackson annotations remain source-level metadata in chronicle-models. The Android app
+    // excludes Jackson's parser/databind runtime and uses a Kotlin-aware Moshi boundary.
+    configurations.configureEach {
+        resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == 'com.fasterxml.jackson.core' &&
+                details.requested.name == 'jackson-annotations') {
+                details.useVersion('2.13.5')
+                details.because('Keep annotation ABI aligned with chronicle-models without shipping Jackson runtime')
+            }
+        }
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

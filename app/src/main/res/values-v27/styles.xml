@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 27+ can request dark nav-bar icons, so the nav bar can match the light
+         window background (iOS-style white tab bar area). -->
+    <style name="AppTheme" parent="Base.AppTheme">
+        <item name="android:navigationBarColor">@color/chronicle_bg</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

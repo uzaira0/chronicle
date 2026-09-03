@@ -1,0 +1,22 @@
+package com.openlattice.chronicle.constants
+
+object TelemetryEvents {
+    const val ENROLLMENT_SUCCESS = "enrollment_success"
+    const val ENROLLMENT_FAILURE = "enrollment_fail"
+    const val ENROLLMENT_MONITOR_SUCCESS = "enrollment_monitor_success"
+    const val ENROLLMENT_MONITOR_FAILURE = "enrollment_monitor_failure"
+    const val UPLOAD_START = "upload_start"
+    const val UPLOAD_SUCCESS = "upload_success"
+    const val UPLOAD_FAILURE = "upload_failure"
+    const val SUBMIT_FAILURE = "submit_failure"
+    const val USAGE_START = "usage_sensor_start"
+    const val USAGE_SUCCESS = "usage_sensor_success"
+    const val USAGE_FAILURE = "usage_sensor_failure"
+    const val NOTIFICATIONS_START = "notifications_start"
+    const val NOTIFICATIONS_FAILURE = "notification_failure"
+    const val SENSOR_UPLOAD_START = "sensor_upload_start"
+    const val SENSOR_UPLOAD_SUCCESS = "sensor_upload_success"
+    const val SENSOR_UPLOAD_FAILURE = "sensor_upload_failure"
+    const val SENSOR_UPLOAD_RETRY = "sensor_upload_retry"
+    const val EXACT_ALARM_PERMISSION_DENIED = "exact_alarm_permission_denied"
+}

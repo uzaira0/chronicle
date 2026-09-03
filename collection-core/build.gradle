@@ -1,0 +1,25 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'com.android.library'
+}
+
+apply from: rootProject.file('gradle/collection-library.gradle')
+
+android {
+    namespace 'com.openlattice.chronicle.collection.core'
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+            allWarningsAsErrors = true
+        }
+    }
+}
+
+dependencies {
+    // :collection-base re-exports chronicle-models, SQLCipher/Room, the storage layer,
+    // and the pure contract layer (:collection-contracts) through `api`, so this module
+    // reaches them all transitively.
+    api project(':collection-base')
+}

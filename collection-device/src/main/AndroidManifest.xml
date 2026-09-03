@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- connectivity_state: read the active transport + metered/validated flags. Normal
+         permission (no runtime prompt); never reads SSID/BSSID/IP/cell identifiers. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- app_network_usage: NetworkStatsManager per-app byte counts. Reuses the Usage Access
+         (PACKAGE_USAGE_STATS) grant the app already holds for usage_events; declared here for
+         clarity. Special access, granted in Settings, not a runtime prompt. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+</manifest>

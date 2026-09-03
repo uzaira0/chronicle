@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <integer name="dismiss_target_user_notification_id">11</integer>
+    <integer name="unlock_phone_monitoring_notification_id">12</integer>
+    <integer name="identify_user_notification_id">13</integer>
+    <integer name="sensor_service_notification_id">14</integer>
+</resources>

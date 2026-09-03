@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- To auto-complete the email text field in the login form with the user's emails -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".ChronicleApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/chronicle_logo"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/chronicle_logo_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+        <meta-data
+            android:name="com.bcm.chronicle.RELEASE_CANDIDATE_ID"
+            android:value="${releaseCandidateId}" />
+        <meta-data
+            android:name="com.bcm.chronicle.APPROVED_MODULE_REGISTRY_SHA256"
+            android:value="${approvedModuleRegistrySha256}" />
+        <activity
+            android:name=".UserIdentificationActivity"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/AppTheme.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".LocalStoreRecoveryActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".Enrollment"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:parentActivityName=".MainActivity">
+            <!-- Researcher HTTPS invitations land on that server's /chronicle/enroll page,
+                 which performs an explicit package-targeted handoff. Android cannot verify an
+                 arbitrary operator domain declared after publication, so the app itself owns
+                 only the credential-fragment custom scheme. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="chronicle" android:host="enroll" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ServerEnrollmentActivity"
+            android:label="@string/title_server_settings"
+            android:parentActivityName=".MainActivity" />
+        <activity
+            android:name=".PermissionActivity"
+            android:parentActivityName=".MainActivity" />
+        <activity
+            android:name="com.openlattice.chronicle.services.notifications.NotificationPermissionActivity"
+            android:parentActivityName=".MainActivity" />
+        <activity
+            android:name="com.openlattice.chronicle.collection.state.CollectionOrientationActivity"
+            android:exported="false"
+            android:label="@string/orientation_action_title" />
+        <activity
+            android:name=".StudyDisclosureActivity"
+            android:exported="false"
+            android:label="@string/title_study_information" />
+        <receiver android:name="com.openlattice.chronicle.services.notifications.NotificationPermissionListener"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.app.action.APP_BLOCK_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".receivers.lifecycle.StartOnBoot"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <!-- Direct-boot bridge: starts sensor collection between reboot and first unlock,
+             when BOOT_COMPLETED (and credential-encrypted storage) is still held back.
+             Decision state lives in the device-protected DirectBootSensorSnapshot. -->
+        <receiver
+            android:name=".receivers.lifecycle.LockedBootReceiver"
+            android:directBootAware="true"
+            android:exported="true"
+            android:enabled="true"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".receivers.lifecycle.DeviceLifecycleReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+                <action android:name="android.intent.action.BATTERY_LOW" />
+                <action android:name="android.intent.action.BATTERY_OKAY" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".receivers.lifecycle.UsageCollectionAlarmReceiver"
+            android:process=":remote" />
+        <receiver
+            android:name=".receivers.lifecycle.SurveyNotificationsReceiver"
+            android:exported="false" />
+        <receiver android:name=".receivers.lifecycle.PowerSaveModeReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.os.action.POWER_SAVE_MODE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".receivers.lifecycle.UnlockDeviceReceiver"
+            android:exported="false"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.USER_PRESENT" />
+            </intent-filter>
+        </receiver>
+        <service android:name=".services.notifications.DeviceUnlockMonitoringService"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Researchers need to prompt at every unlock to determine whether
+target user or other is using the device."/>
+        </service>
+        <service
+            android:name=".services.sensors.HardwareSensorService"
+            android:directBootAware="true"
+            android:foregroundServiceType="specialUse"
+            tools:ignore="MissingClass">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Researchers collect onboard hardware sensor samples during an enrolled study."/>
+        </service>
+        <service
+            android:name=".services.notifications.NotificationListener"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <!-- WorkManager uses on-demand initialization (ChronicleApplication implements
+             Configuration.Provider) so it works in direct-boot-started processes, where
+             this provider is skipped and never instantiated later. Only the WorkManager
+             entry is removed; the other androidx.startup initializers keep auto-running
+             in normal processes and are re-initialized manually after a locked boot
+             (DirectBootProcessInit). -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
+        <service
+            android:name=".collection.interaction.InteractionCollectionService"
+            android:label="@string/interaction_accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/interaction_accessibility_service_config" />
+        </service>
+    </application>
+
+</manifest>

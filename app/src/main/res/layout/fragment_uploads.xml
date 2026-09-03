@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/uploadsScroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/chronicle_bg"
+    android:clipToPadding="false"
+    android:fillViewport="true"
+    android:paddingTop="0dp">
+
+    <LinearLayout
+        android:id="@+id/uploadsContent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingTop="32dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="96dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/page_uploads_title"
+            android:textAppearance="@style/Chronicle.MetricValue" />
+
+        <TextView
+            android:id="@+id/uploadsRemaining"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_metric_panel"
+            android:padding="16dp"
+            android:textAppearance="@style/Chronicle.Mono" />
+
+        <TextView
+            android:id="@+id/uploadsBreakdown"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_panel"
+            android:padding="16dp"
+            android:textAppearance="@style/Chronicle.Body" />
+
+        <TextView
+            android:id="@+id/uploadsToday"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_panel"
+            android:padding="16dp"
+            android:textAppearance="@style/Chronicle.Body" />
+
+        <TextView
+            android:id="@+id/uploadsHistory"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_panel"
+            android:padding="16dp"
+            android:textAppearance="@style/Chronicle.Body" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/uploadNowButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/upload_now" />
+    </LinearLayout>
+</ScrollView>
