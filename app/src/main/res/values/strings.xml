@@ -78,6 +78,15 @@
     <string name="hibernation_exemption_header">Keep Chronicle Active</string>
     <string name="hibernation_exemption">If this device goes unused for a few months, Android pauses Chronicle and removes its permissions, which permanently stops study data collection. Please open the app settings and turn OFF \"Pause app activity if unused\" (on some devices: \"Remove permissions if app is unused\").</string>
     <string name="disable_hibernation_exemption_dialog">disable_hibernation_exemption_dialog</string>
+    <string name="disable_oem_guidance_dialog" translatable="false">disable_oem_guidance_dialog</string>
+    <string name="oem_background_guidance_title">Allow Chronicle to run in the background</string>
+    <string name="oem_background_guidance_body">On %1$s phones, additional settings can stop study data collection. Allow autostart for Chronicle, then set its battery use to No restrictions. Open settings to find these options; names may vary on your phone.</string>
+    <string name="oem_background_guidance_open_settings">Open settings</string>
+    <string name="oem_background_vendor_xiaomi">Xiaomi / Redmi / POCO</string>
+    <string name="oem_background_vendor_huawei">Huawei / Honor</string>
+    <string name="oem_background_vendor_oppo">Oppo / Realme / OnePlus</string>
+    <string name="oem_background_vendor_vivo">Vivo</string>
+    <string name="oem_background_vendor_samsung">Samsung</string>
     <string name="settings">Settings</string>
     <string name="uploading_data">Uploading data</string>
     <string name="upload_now">Upload Now</string>

@@ -2,6 +2,7 @@ package com.openlattice.chronicle
 
 import android.app.Dialog
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -23,7 +24,12 @@ class BatteryOptimizationExemptionDialog : DialogFragment() {
                     ) { dialog, _ ->
                         dialog.cancel()
                         val intent = Intent().apply {
-                            action = Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                            if (BuildConfig.DIRECT_BATTERY_EXEMPTION_REQUEST) {
+                                action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                                data = Uri.parse("package:" + requireContext().packageName)
+                            } else {
+                                action = Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                            }
                         }
                         DeviceSettingsNavigator.open(requireContext(), intent)
                     }

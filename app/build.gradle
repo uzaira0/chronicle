@@ -389,6 +389,14 @@ android {
             }
         }
     }
+    // Merge the shared permission above each existing flavor manifest, never into stores.
+    buildTypes.all { buildType ->
+        ['research', 'open'].each { flavor ->
+            sourceSets.maybeCreate("${flavor}${buildType.name.capitalize()}").manifest.srcFile(
+                'src/googleServices/AndroidManifest.xml'
+            )
+        }
+    }
     compileOptions {
         coreLibraryDesugaringEnabled true
         targetCompatibility 17

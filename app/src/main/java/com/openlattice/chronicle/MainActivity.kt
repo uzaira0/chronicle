@@ -226,6 +226,12 @@ class MainActivity : AppCompatActivity() {
             // months without UI opens — the normal state for a passive collection device.
             // One dialog at a time: this chains behind the battery prompt.
             AppHibernationExemptionDialog().show(supportFragmentManager, "hibernationExemption")
+        } else if (::enrollmentSettings.isInitialized &&
+            enrollmentSettings.isEnrolled() &&
+            OemBackgroundGuidance.matches(Build.MANUFACTURER) &&
+            enrollmentSettings.isOemGuidanceDialogEnabled()
+        ) {
+            OemBackgroundGuidanceDialog().show(supportFragmentManager, "oemBackgroundGuidance")
         }
         if (::enrollmentSettings.isInitialized && enrollmentSettings.isEnrolled()) {
             maybeTriggerForegroundSync()

@@ -290,6 +290,20 @@ class EnrollmentSettings(private val context: Context) {
         )
     }
 
+    fun toggleOemGuidanceDialog(enable: Boolean) {
+        settings
+            .edit()
+            .putBoolean(context.getString(R.string.disable_oem_guidance_dialog), enable)
+            .apply()
+    }
+
+    fun isOemGuidanceDialogEnabled(): Boolean {
+        return settings.getBoolean(
+            context.getString(R.string.disable_oem_guidance_dialog),
+            true
+        )
+    }
+
     fun closeDb() {
         // Singleton DB — no close needed
     }
