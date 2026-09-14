@@ -35,8 +35,18 @@ internal fun usageInteractionType(eventType: Int): String = when (eventType) {
     UsageEvents.Event.DEVICE_SHUTDOWN -> "Device Shutdown"
     UsageEvents.Event.DEVICE_STARTUP -> "Device Startup"
     UsageEvents.Event.NONE -> "None"
+    // Hidden platform event types (no public SDK constant) that OEM builds such as MIUI still
+    // surface through queryEvents; keep them named rather than leaking the raw code.
+    USAGE_EVENT_NOTIFICATION_SEEN -> "Notification Seen"
+    USAGE_EVENT_NOTIFICATION_INTERRUPTION -> "Notification Interruption"
     else -> "Unknown importance: $eventType"
 }
+
+/** `UsageEvents.Event.NOTIFICATION_SEEN`, hidden in the SDK. */
+internal const val USAGE_EVENT_NOTIFICATION_SEEN = 10
+
+/** `UsageEvents.Event.NOTIFICATION_INTERRUPTION`, hidden in the SDK. */
+internal const val USAGE_EVENT_NOTIFICATION_INTERRUPTION = 12
 
 /**
  * A sensor that collect information about UsageEvents for uploading to Chronicle.

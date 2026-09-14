@@ -15,4 +15,11 @@ class UsageEventsChronicleSensorTest {
         assertEquals("Device Startup", usageInteractionType(UsageEvents.Event.DEVICE_STARTUP))
         assertEquals("Device Shutdown", usageInteractionType(UsageEvents.Event.DEVICE_SHUTDOWN))
     }
+
+    @Test
+    fun hiddenNotificationEventTypesAreNamedInsteadOfLeakingTheRawCode() {
+        assertEquals("Notification Seen", usageInteractionType(USAGE_EVENT_NOTIFICATION_SEEN))
+        assertEquals("Notification Interruption", usageInteractionType(USAGE_EVENT_NOTIFICATION_INTERRUPTION))
+        assertEquals("Unknown importance: 99", usageInteractionType(99))
+    }
 }
