@@ -98,9 +98,17 @@ class CollectionOrientationActivity : AppCompatActivity() {
             getString(R.string.orientation_step, current + 1, steps.size, requirement.displayLabel, template.label)
         findViewById<TextView>(R.id.orientationBadge).text = requirement.badge
         findViewById<TextView>(R.id.orientationRequirementDetail).text = requirement.detail
-        findViewById<TextView>(R.id.orientationRequirementSummaryHeader).text = plan.requirementPlanHeader(planCopy)
-        findViewById<TextView>(R.id.orientationRequirementSummary).text =
-            plan.requirementSummaryLines(currentModule = step.moduleId, copy = planCopy).joinToString("\n")
+        // The whole-plan summary is orientation, not consent: show it once, on the first step,
+        // instead of repeating it above every module (participants read it as the same screen).
+        val planVisibility = if (current == 0) View.VISIBLE else View.GONE
+        findViewById<TextView>(R.id.orientationRequirementSummaryHeader).apply {
+            visibility = planVisibility
+            text = plan.requirementPlanHeader(planCopy)
+        }
+        findViewById<TextView>(R.id.orientationRequirementSummary).apply {
+            visibility = planVisibility
+            text = plan.requirementSummaryLines(currentModule = step.moduleId, copy = planCopy).joinToString("\n")
+        }
         findViewById<TextView>(R.id.orientationTitle).text = getString(R.string.orientation_title_format, template.label, requirement.displayLabel)
         findViewById<TextView>(R.id.orientationCollects).text = bullets(template.whatItCollects)
         findViewById<TextView>(R.id.orientationNotCollect).text = bullets(template.whatItDoesNotCollect)
