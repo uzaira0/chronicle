@@ -509,10 +509,10 @@ class CollectionLoopCoordinator(context: Context) {
         }
         updateUserIdentificationService()
         // Fetch + cache the study's payload-encryption setting (HIPAA-2028 W2) alongside the
-        // data-collection settings. A study without e2ee has no Encryption setting (the endpoint
-        // 404s/403s or returns absent), so this is best-effort: any failure leaves the upload
-        // delegates on the plaintext path. It must NOT fail the sync (the data-collection
-        // reconcile above already succeeded).
+        // data-collection settings. The server answers this read for every study (an
+        // un-provisioned one returns a disabled default), so a failure leaves the policy UNKNOWN
+        // and the upload delegates fail closed until the next sync — never plaintext. It must NOT
+        // fail the sync (the data-collection reconcile above already succeeded).
         syncEncryptionSetting(studyId, server.url, server.mobileSigningSecretOverride)
         return pendingAcksReported
     }
@@ -1034,9 +1034,9 @@ class CollectionLoopCoordinator(context: Context) {
     /**
      * Best-effort fetch of the study's [com.openlattice.chronicle.study.StudyEncryptionSetting]
      * (public key only) over the public settings endpoint, caching it in
-     * [EncryptionSettingStore] for the upload delegates. Tolerates 404/403/absent (a study
-     * without e2ee) by leaving the cache untouched — the delegates fall back to plaintext. Never
-     * throws into the sync.
+     * [EncryptionSettingStore] for the upload delegates. A failed fetch leaves the study's policy
+     * UNKNOWN, which the store reports as encryption-required, so the delegates retain their
+     * batches instead of falling back to plaintext. Never throws into the sync.
      */
     private fun syncEncryptionSetting(
         studyId: UUID,
@@ -1049,8 +1049,11 @@ class CollectionLoopCoordinator(context: Context) {
             EncryptionSettingStore.of(appContext).put(studyId, setting)
             Log.i(TAG, "Cached encryption setting (enabled=${setting.enabled})")
         } catch (e: Exception) {
-            // No Encryption setting / no access ⇒ this study does not use e2ee; stay on plaintext.
-            Log.i(TAG, "No encryption setting available; staying on plaintext upload", e)
+            // The server answers this read for every study (an un-provisioned one returns a
+            // disabled default), so a throw is a transport/auth/parse failure, NOT evidence that
+            // the study is plaintext. The policy stays unknown and the upload paths fail closed
+            // (batches retained + retried) until a fetch succeeds.
+            Log.w(TAG, "Encryption policy unknown; uploads stay fail-closed until it is fetched", e)
         }
     }
 
