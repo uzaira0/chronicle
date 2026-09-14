@@ -79,6 +79,8 @@ class CollectionCapabilityResolverTest {
         grantedRuntimePermissions = setOf(ModulePermissions.ACTIVITY_RECOGNITION),
         notificationListenerEnabled = true,
         accessibilityEnabled = true,
+        // A full-channel device: the fixture must not depend on which flavor runs the test.
+        restrictedCollectorsCompiledIn = true,
     )
     private val playReady = ready.copy(distribution = DistributionChannel.PLAY)
 

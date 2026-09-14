@@ -256,6 +256,7 @@ android {
             buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "false"
             buildConfigField "boolean", "HAS_HEALTH_CONNECT", "false"
             buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "false"
+            buildConfigField "boolean", "DIRECT_BATTERY_EXEMPTION_REQUEST", "false"
             buildConfigField "boolean", "ALLOW_PARTICIPANT_FORM_REMINDERS", "false"
             buildConfigField "boolean", "ALLOW_ANY_SERVER", "true"
             buildConfigField "String", "CHRONICLE_PRODUCTION_HOST", '""'
@@ -266,6 +267,7 @@ android {
             buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "false"
             buildConfigField "boolean", "HAS_HEALTH_CONNECT", "false"
             buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "false"
+            buildConfigField "boolean", "DIRECT_BATTERY_EXEMPTION_REQUEST", "false"
             buildConfigField "boolean", "ALLOW_PARTICIPANT_FORM_REMINDERS", "false"
             buildConfigField "boolean", "ALLOW_ANY_SERVER", "true"
             buildConfigField "String", "CHRONICLE_PRODUCTION_HOST", '""'
@@ -276,15 +278,21 @@ android {
             buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "true"
             buildConfigField "boolean", "HAS_HEALTH_CONNECT", "true"
             buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "true"
+            buildConfigField "boolean", "DIRECT_BATTERY_EXEMPTION_REQUEST", "true"
             buildConfigField "boolean", "HAS_APP_NETWORK_USAGE", "true"
             // Transitional compatibility for controlled research deployments only.
             buildConfigField "String", "MOBILE_SIGNING_SECRET", quoteBuildConfigString(mobileSigningSecret)
         }
         // Public / self-host sideload distribution. Mirrors `research` (Play Services on,
-        // Health Connect on) and, like the Play build, points at NO fixed server:
-        // ALLOW_ANY_SERVER lets a participant
-        // enroll against any public HTTPS Chronicle backend and disables operator-specific
-        // certificate pinning. Build with `:app:assembleOpenRelease`.
+        // Health Connect on, every collector module) and, like the Play build, points at NO
+        // fixed server: ALLOW_ANY_SERVER lets a participant enroll against any public HTTPS
+        // Chronicle backend and disables operator-specific certificate pinning. Build with
+        // `:app:assembleOpenRelease`.
+        // ALLOW_RESTRICTED_RESEARCH_PERMISSIONS must stay true here: with it off (v58 and
+        // earlier) the sensor service, accessibility collector, notification listener, GMS
+        // sleep/activity registration and the sensor-availability report never start, so a
+        // study that enables those modules collects nothing for them while the dashboard
+        // shows them enabled. DistributionModulePolicyContractTest pins the invariant.
         // NOTE: to publish this as a distinct app, give it its own applicationId here
         // (e.g. `applicationId "cl.iie.chronicle"`) and matching store listing/signing.
         open {
@@ -292,7 +300,8 @@ android {
             buildConfigField "String", "DISTRIBUTION_CHANNEL", '"OPEN"'
             buildConfigField "boolean", "HAS_GOOGLE_SERVICES", "true"
             buildConfigField "boolean", "HAS_HEALTH_CONNECT", "true"
-            buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "false"
+            buildConfigField "boolean", "ALLOW_RESTRICTED_RESEARCH_PERMISSIONS", "true"
+            buildConfigField "boolean", "DIRECT_BATTERY_EXEMPTION_REQUEST", "true"
             buildConfigField "boolean", "HAS_APP_NETWORK_USAGE", "true"
             buildConfigField "boolean", "ALLOW_ANY_SERVER", "true"
             buildConfigField "String", "CHRONICLE_PRODUCTION_HOST", '""'

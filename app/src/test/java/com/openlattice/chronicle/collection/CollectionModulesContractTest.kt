@@ -83,6 +83,10 @@ class CollectionModulesContractTest {
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
             add(CollectionModuleId.SLEEP)
             add(CollectionModuleId.ACTIVITY_RECOGNITION)
+        }
+        // App-network usage rides its own flag: the open sideload artifact ships it with the
+        // restricted research permissions off, so it must not be excluded with sleep/activity.
+        if (!BuildConfig.HAS_APP_NETWORK_USAGE) {
             add(CollectionModuleId.APP_NETWORK_USAGE)
         }
         if (!BuildConfig.ALLOW_PARTICIPANT_FORM_REMINDERS) {

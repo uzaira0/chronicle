@@ -48,9 +48,41 @@ internal object DistributionModulePolicy {
                 }
             }
 
+    /**
+     * Modules whose collectors, services and OS special accesses ship only behind
+     * `ALLOW_RESTRICTED_RESEARCH_PERMISSIONS`: the sensor service, the accessibility collector,
+     * the notification listener and the GMS activity/sleep registration. A build with that flag
+     * off never starts them, so a study enabling one of these must be rejected before consent
+     * instead of collecting a promise the artifact cannot keep.
+     */
+    internal val restrictedResearchModules: Set<CollectionModuleId> = setOf(
+        CollectionModuleId.INTERACTION_EVENTS,
+        CollectionModuleId.AUDIO_ACTIVITY,
+        CollectionModuleId.AUDIO_CONTENT,
+        CollectionModuleId.NOTIFICATION_ACTIVITY,
+        CollectionModuleId.SLEEP,
+        CollectionModuleId.ACTIVITY_RECOGNITION,
+    ) + SensorCollectionModules.sensorModuleIds
+
+    /**
+     * Per-distribution module allowlist. Play and Amazon carry the approved registry only. The
+     * full distributions (OPEN, RESEARCH) support every module exactly when the artifact was
+     * built with the restricted collectors compiled in; the policy reads the same build flag
+     * the runtime gates read, so it can never promise a module the runtime will not start.
+     */
     internal fun supports(distribution: DistributionChannel, moduleId: CollectionModuleId): Boolean =
-        distribution !in setOf(DistributionChannel.PLAY, DistributionChannel.AMAZON) ||
-            moduleId in playSupportedModules
+        supports(distribution, moduleId, BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)
+
+    internal fun supports(
+        distribution: DistributionChannel,
+        moduleId: CollectionModuleId,
+        restrictedCollectorsCompiledIn: Boolean,
+    ): Boolean =
+        when (distribution) {
+            DistributionChannel.PLAY, DistributionChannel.AMAZON -> moduleId in playSupportedModules
+            DistributionChannel.OPEN, DistributionChannel.RESEARCH ->
+                restrictedCollectorsCompiledIn || moduleId !in restrictedResearchModules
+        }
 }
 
 public sealed interface CollectionCapability {
@@ -86,6 +118,10 @@ public data class CapabilityEnvironment(
     val notificationListenerEnabled: Boolean,
     val accessibilityEnabled: Boolean,
     val availableSensors: Set<AndroidSensorType> = AndroidSensorType.entries.toSet(),
+    // Whether this artifact compiled the restricted collectors in (see DistributionModulePolicy).
+    // Carried on the environment so a unit test can describe a full-channel device on any
+    // flavor; production always reads the build flag.
+    val restrictedCollectorsCompiledIn: Boolean = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS,
 )
 
 private val ENGLISH_CAPABILITY: CopyResolver = englishCopy(
@@ -153,9 +189,19 @@ public object CollectionCapabilityResolver {
         copy: CopyResolver = ENGLISH_CAPABILITY,
     ): CollectionCapability {
         fun s(id: Int, vararg args: Any) = copy(id, args)
-        if (!DistributionModulePolicy.supports(environment.distribution, moduleId)) {
+        if (
+            !DistributionModulePolicy.supports(
+                environment.distribution,
+                moduleId,
+                environment.restrictedCollectorsCompiledIn,
+            )
+        ) {
             return CollectionCapability.PolicyDisabled(
-                s(R.string.cap_not_in_play, moduleId.id),
+                if (environment.distribution in setOf(DistributionChannel.PLAY, DistributionChannel.AMAZON)) {
+                    s(R.string.cap_not_in_play, moduleId.id)
+                } else {
+                    s(R.string.cap_optional_not_included)
+                },
             )
         }
 
