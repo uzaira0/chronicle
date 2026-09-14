@@ -31,6 +31,7 @@ import com.openlattice.chronicle.collection.device.ExpansionPullSchedule
 import com.openlattice.chronicle.collection.settings.CollectionSettingsResolver
 import com.openlattice.chronicle.collection.settings.EncryptedPrefsSensorSettingSource
 import com.openlattice.chronicle.collection.settings.ResolvedModuleSetting
+import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
 import com.openlattice.chronicle.preferences.SensorSettings
 import com.openlattice.chronicle.sensors.SensorTypeMapping
 import com.openlattice.chronicle.data.ParticipationStatus
@@ -64,6 +65,17 @@ internal data class EnrollmentModulePartition(
  * from obtaining consent for a policy the device would silently ignore. Removed legacy fields are
  * ignored by the shared wire model and are never interpreted by the mobile runtime.
  */
+/**
+ * Retires the locked-boot collection permission by writing an EMPTY snapshot, so
+ * `LockedBootReceiver` starts nothing before first unlock. Writing empty (rather than clearing the
+ * file) keeps a fresh `writtenAt` stamp, so the result is an explicit "nothing may collect" rather
+ * than a never-written state.
+ *
+ * @return true when the snapshot was durably retired.
+ */
+internal fun clearDirectBootCollection(snapshot: DirectBootSensorSnapshot): Boolean =
+    snapshot.write(emptyMap())
+
 internal fun requireSupportedCollectionPolicies(fetched: AndroidDataCollectionSetting) {
     val distribution = DistributionChannel.current()
     val requestedEnabledModules = fetched.effectiveEnabledModuleIds() +
@@ -1060,6 +1072,13 @@ class CollectionLoopCoordinator(context: Context) {
                 Log.i(TAG, "Sensor foreground service start deferred; collection settings sync remains applied")
             }
         } else {
+            // The direct-boot snapshot is the ONLY collection state LockedBootReceiver can read
+            // before first unlock, and it is refreshed from HardwareSensorService — which is about
+            // to stop. Retire it here or a reboot-while-locked resumes exactly the sensors whose
+            // gate just closed.
+            if (!clearDirectBootCollection(DirectBootSensorSnapshot(appContext))) {
+                Log.e(TAG, "Failed to retire the direct-boot snapshot before stopping sensor collection")
+            }
             DistributionRestrictedRuntime.stopHardwareSensors(appContext)
         }
     }

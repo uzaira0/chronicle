@@ -29,18 +29,31 @@ class CollectionGateCallSiteInvariantTest {
         /** Modules scanned for and excluded because they gate on their own preference, not consent. */
         // (none today — user_identification's holder does NOT call CollectionGate.collects)
 
+        /**
+         * Every compiled source root that can hold a gate call site. `app/src/googleServices` is
+         * the restricted-collector tree the research and open flavors compile (see the
+         * `sourceSets` block in `app/build.gradle`); it holds the sleep/activity, health, audio,
+         * interaction and sensor collectors, so omitting it let a gated collector be added there
+         * without an ACK_GATED_MODULES entry while this invariant still passed.
+         */
+        private val SOURCE_ROOTS = listOf(
+            "app/src/main",
+            "app/src/googleServices",
+            "app/src/minimal",
+            "collection-core/src/main",
+            "collection-device/src/main",
+        )
+
         fun sourceRoots(): List<File> {
             var dir: File? = File(".").absoluteFile
             repeat(6) {
                 val base = dir
                 if (base != null && File(base, "app/src/main").isDirectory) {
-                    return listOf("app/src/main", "collection-core/src/main", "collection-device/src/main")
-                        .map { File(base, it) }
-                        .filter { it.isDirectory }
+                    return SOURCE_ROOTS.map { File(base, it) }.filter { it.isDirectory }
                 }
                 dir = base?.parentFile
             }
-            return listOf(File("src/main")).filter { it.isDirectory }
+            return listOf(File("src/main"), File("src/googleServices")).filter { it.isDirectory }
         }
     }
 
@@ -56,6 +69,11 @@ class CollectionGateCallSiteInvariantTest {
             "Found no CollectionGate.collects / enrolledAndConsented call sites — the scan root is " +
                 "wrong (cwd=${File(".").absolutePath}); the invariant would pass vacuously.",
             callSiteModules.isNotEmpty(),
+        )
+        assertTrue(
+            "The restricted-collector source set was not scanned (roots=${sourceRoots()}); every " +
+                "gate call site under app/src/googleServices would be invisible to this invariant.",
+            sourceRoots().any { it.path.endsWith("googleServices") },
         )
 
         val acked = CollectionStateMachine.ACK_GATED_MODULES.map { it.name }.toSet()
