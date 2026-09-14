@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from CollectionConsentCopy.kt by CollectionConsentResourceParityTest. Do not edit: change the Kotlin copy and regenerate. Translations override these keys per locale. -->
+<resources>
+    <string name="consent_battery_telemetry_label">Battery Telemetry</string>
+    <string name="consent_battery_telemetry_privacy_class">Device-state metadata</string>
+    <string-array name="consent_battery_telemetry_collects">
+        <item>Battery level, charging state, and power events</item>
+    </string-array>
+    <string-array name="consent_battery_telemetry_not_collects">
+        <item>Anything you do on the device</item>
+        <item>App contents or personal data</item>
+    </string-array>
+    <string name="consent_connectivity_state_label">Connectivity State</string>
+    <string name="consent_connectivity_state_privacy_class">Device-state metadata</string>
+    <string-array name="consent_connectivity_state_collects">
+        <item>Your connection type (Wi-Fi, cellular, or none) and when it changes</item>
+        <item>Whether the connection is metered or validated</item>
+    </string-array>
+    <string-array name="consent_connectivity_state_not_collects">
+        <item>Wi-Fi network names, or the sites and apps you connect to</item>
+        <item>Your location</item>
+        <item>Anything you type, read, or message</item>
+    </string-array>
+    <string name="consent_device_lifecycle_label">Device Lifecycle</string>
+    <string name="consent_device_lifecycle_privacy_class">Device-state metadata</string>
+    <string-array name="consent_device_lifecycle_collects">
+        <item>Supplemental battery, charging, power-saving, network, and low-memory state changes</item>
+    </string-array>
+    <string-array name="consent_device_lifecycle_not_collects">
+        <item>Anything you do on the screen</item>
+        <item>App contents or personal data</item>
+    </string-array>
+    <string name="consent_device_settings_label">Device Settings</string>
+    <string name="consent_device_settings_privacy_class">Device-state metadata</string>
+    <string-array name="consent_device_settings_collects">
+        <item>A snapshot of device settings — dark mode, font size, Do Not Disturb, battery saver, auto-rotate, and similar</item>
+        <item>Free storage and whether location services are turned on</item>
+    </string-array>
+    <string-array name="consent_device_settings_not_collects">
+        <item>Anything you do on the device or any app contents</item>
+        <item>Your location coordinates</item>
+        <item>Anything you type, read, or message</item>
+    </string-array>
+    <string name="consent_in_app_activity_class_label">In-App Activity</string>
+    <string name="consent_in_app_activity_class_privacy_class">Behavioral metadata</string>
+    <string-array name="consent_in_app_activity_class_collects">
+        <item>Which screen within an app is open (the app\'s screen/activity name), alongside app usage</item>
+        <item>The same timing and detail as the app-usage log this adds to</item>
+    </string-array>
+    <string-array name="consent_in_app_activity_class_not_collects">
+        <item>The text or content shown on the screen</item>
+        <item>What you type, search, or message</item>
+        <item>Screenshots or screen contents</item>
+    </string-array>
+    <string name="consent_usage_events_label">App Usage Events</string>
+    <string name="consent_usage_events_privacy_class">Behavioral metadata</string>
+    <string-array name="consent_usage_events_collects">
+        <item>Which apps you open and close, and when</item>
+        <item>How long apps stay in the foreground</item>
+        <item>Screen, keyguard, and Android runtime startup/shutdown events in the same usage timeline</item>
+    </string-array>
+    <string-array name="consent_usage_events_not_collects">
+        <item>The content inside apps — messages, photos, or videos</item>
+        <item>What you type</item>
+        <item>Web pages or search terms</item>
+    </string-array>
+    <string name="consent_user_identification_label">Unlock User Identification</string>
+    <string name="consent_user_identification_privacy_class">Participant-provided behavioral label</string>
+    <string-array name="consent_user_identification_collects">
+        <item>After device unlock, whether the person using the device is the study participant or someone else</item>
+        <item>When that selection was made, so later app-usage events can carry the same selection</item>
+    </string-array>
+    <string-array name="consent_user_identification_not_collects">
+        <item>A person\'s name, face, fingerprint, voice, or other biometric identifier</item>
+        <item>The device PIN, password, or unlock method</item>
+        <item>Notification contents, messages, photos, or screen contents</item>
+    </string-array>
+</resources>

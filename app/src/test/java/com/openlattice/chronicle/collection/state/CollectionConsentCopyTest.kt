@@ -1,6 +1,5 @@
 package com.openlattice.chronicle.collection.state
 
-import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
 import com.openlattice.chronicle.collection.capability.DistributionChannel
@@ -34,14 +33,23 @@ class CollectionConsentCopyTest {
         }
     }
 
-    @Test fun testMinimalPublicExcludedModuleHasNoCuratedParticipantCopy() {
-        val template = CollectionConsentCopy.template(CollectionModuleId.AUDIO_CONTENT)
-        if (BuildConfig.DISTRIBUTION_CHANNEL in setOf("PLAY", "AMAZON")) {
-            assertTrue(template.whatItCollects.isEmpty())
-            assertTrue(template.whatItDoesNotCollect.isEmpty())
-        } else {
-            assertTrue(template.whatItCollects.isNotEmpty())
-            assertTrue(template.whatItDoesNotCollect.isNotEmpty())
+    /**
+     * Curated participant copy and the distribution's module policy must agree: a module this
+     * artifact refuses to collect never carries consent copy for it, and a module it does support
+     * always does. Keying on the channel name alone missed the open sideload build, which
+     * supports fewer modules than research while sharing its source set.
+     */
+    @Test fun testCuratedParticipantCopyExistsForExactlyTheSupportedModules() {
+        val distribution = DistributionChannel.current()
+        (CollectionStateMachine.ACK_GATED_MODULES + CollectionModuleId.AUDIO_CONTENT).forEach { moduleId ->
+            val template = CollectionConsentCopy.template(moduleId)
+            if (DistributionModulePolicy.supports(distribution, moduleId)) {
+                assertTrue("$moduleId is supported and needs curated copy", template.whatItCollects.isNotEmpty())
+                assertTrue("$moduleId is supported and needs curated copy", template.whatItDoesNotCollect.isNotEmpty())
+            } else {
+                assertTrue("$moduleId is unsupported and must carry no copy", template.whatItCollects.isEmpty())
+                assertTrue("$moduleId is unsupported and must carry no copy", template.whatItDoesNotCollect.isEmpty())
+            }
         }
     }
 

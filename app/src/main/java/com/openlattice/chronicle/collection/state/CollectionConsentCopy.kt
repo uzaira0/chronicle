@@ -172,13 +172,13 @@ object CollectionConsentCopy {
         CollectionModuleId.INTERACTION_EVENTS to ModuleTemplate(
             label = "Interaction Events",
             whatItCollects = listOf(
-                "Roughly where on the screen you tap and scroll (a coarse grid region)",
+                "Where on the screen you tap, scroll, or move focus: the on-screen bounds of the element you interact with, and a derived screen region",
                 "The kind of element you interact with, and which app is open",
             ),
             whatItDoesNotCollect = listOf(
                 "The text or content of what you tap or read",
                 "What you type, search, or message",
-                "Exact tap locations, screenshots, or screen contents",
+                "Your exact finger position, screenshots, or screen contents",
             ),
             privacyClass = "Interaction metadata",
         ),
@@ -256,7 +256,7 @@ object CollectionConsentCopy {
             label = "Health Connect",
             whatItCollects = listOf(
                 "The Health Connect record types listed for the active study",
-                "When each approved record was recorded",
+                HEALTH_CONNECT_COLLECTS_TRAILER,
             ),
             whatItDoesNotCollect = listOf(
                 "Any Health Connect record type not listed for the active study or not granted in Android",
@@ -342,15 +342,18 @@ object CollectionConsentCopy {
         val approvedRecordTypes = HealthConnectRecordType.entries
             .filter(healthConnectRecordTypes::contains)
             .map(::healthConnectRecordTypeLabel)
+        // "What it does NOT collect" is the template's list unchanged, so one resource
+        // (consent_health_connect_not_collects) localizes both the consent and Data Sharing views.
         return template(moduleId).copy(
-            whatItCollects = approvedRecordTypes + "When each approved record was recorded",
-            whatItDoesNotCollect = listOf(
-                "Any Health Connect record type not listed above or not granted in Android",
-                "Audio, the microphone, or the camera",
-                "Anything you type or message",
-            ),
+            whatItCollects = approvedRecordTypes + HEALTH_CONNECT_COLLECTS_TRAILER,
         )
     }
+
+    /** The bullet after the study-approved record types; resource `consent_health_connect_collects_trailer`. */
+    const val HEALTH_CONNECT_COLLECTS_TRAILER = "When each approved record was recorded"
+
+    /** Every curated template compiled into this build; drives the base-resource parity test. */
+    internal val templates: Map<CollectionModuleId, ModuleTemplate> get() = TEMPLATES
 
     /** Renders the bullet list of [modules] for a combined consent view (legacy ack screen). */
     fun bullets(modules: Set<CollectionModuleId>): String =

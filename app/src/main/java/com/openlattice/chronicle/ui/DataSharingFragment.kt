@@ -825,7 +825,6 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         isAvailable: Boolean,
         sensors: SensorDashboardSummary,
     ): View {
-        val template = CollectionConsentCopy.template(moduleId)
         val collectedByStudy = state?.serverEnabled == true
         val requiredAccepted = collectedByStudy && state.requiredApplied && state.accepted
         val optional = collectedByStudy && !state.requiredApplied

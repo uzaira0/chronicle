@@ -39,7 +39,8 @@ class HealthConnectConsentContractTest {
             template.whatItCollects,
         )
         assertFalse(template.whatItCollects.joinToString().contains("Distance"))
-        assertTrue(template.whatItDoesNotCollect.first().contains("not listed above"))
+        // One list serves the consent and Data Sharing views (and one translatable resource).
+        assertTrue(template.whatItDoesNotCollect.first().contains("not listed for the active study"))
     }
 
     @Test

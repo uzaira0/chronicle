@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from CollectionConsentCopy.kt by CollectionConsentResourceParityTest. Do not edit: change the Kotlin copy and regenerate. Translations override these keys per locale. -->
+<resources>
+    <string name="consent_activity_recognition_label">Physical Activity</string>
+    <string name="consent_activity_recognition_privacy_class">Behavioral metadata</string>
+    <string-array name="consent_activity_recognition_collects">
+        <item>Your general activity type — still, walking, running, cycling, or in a vehicle</item>
+        <item>A confidence score for each activity</item>
+    </string-array>
+    <string-array name="consent_activity_recognition_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>Anything you type or message</item>
+    </string-array>
+    <string name="consent_app_network_usage_label">App Network Usage</string>
+    <string name="consent_app_network_usage_privacy_class">Behavioral metadata</string>
+    <string-array name="consent_app_network_usage_collects">
+        <item>How much data each app sends and receives (byte counts)</item>
+        <item>Whether it was over Wi-Fi or cellular, and the time period</item>
+    </string-array>
+    <string-array name="consent_app_network_usage_not_collects">
+        <item>The contents of any data, the sites, or who you connect to</item>
+        <item>Your location</item>
+        <item>Anything you type, read, or message</item>
+    </string-array>
+    <string name="consent_audio_activity_label">Audio Status</string>
+    <string name="consent_audio_activity_privacy_class">Behavioral metadata</string>
+    <string-array name="consent_audio_activity_collects">
+        <item>Which app is playing audio and whether audio is playing</item>
+        <item>Headphone / Bluetooth / speaker connection and the media volume level</item>
+        <item>Whether a phone call is in progress (not the call, the audio, or who)</item>
+    </string-array>
+    <string-array name="consent_audio_activity_not_collects">
+        <item>The microphone or any sound around you</item>
+        <item>The audio itself or anything that is said</item>
+        <item>What you type, search, or message</item>
+    </string-array>
+    <string name="consent_audio_content_label">Audio Metadata</string>
+    <string name="consent_audio_content_privacy_class">Media content</string>
+    <string-array name="consent_audio_content_collects">
+        <item>The title, artist, and album of media you play</item>
+        <item>Playback position and duration</item>
+    </string-array>
+    <string-array name="consent_audio_content_not_collects">
+        <item>The microphone or any recording</item>
+        <item>The audio itself</item>
+        <item>Anything you type or message</item>
+    </string-array>
+    <string name="consent_health_connect_label">Health Connect</string>
+    <string name="consent_health_connect_privacy_class">Health metrics</string>
+    <string-array name="consent_health_connect_collects">
+        <item>The Health Connect record types listed for the active study</item>
+        <item>When each approved record was recorded</item>
+    </string-array>
+    <string-array name="consent_health_connect_not_collects">
+        <item>Any Health Connect record type not listed for the active study or not granted in Android</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>Anything you type or message</item>
+    </string-array>
+    <string-array name="consent_health_connect_caveats">
+        <item>Only turn this on for a device whose Health Connect data is yours alone. Health Connect collects whatever your apps and devices write into it — so if you share a smart scale, watch, fitness band, or health app with someone else, their measurements can be recorded as if they were yours. If your health devices are shared, leave this off.</item>
+    </string-array>
+    <string name="consent_health_connect_collects_trailer">When each approved record was recorded</string>
+    <string name="consent_interaction_events_label">Interaction Events</string>
+    <string name="consent_interaction_events_privacy_class">Interaction metadata</string>
+    <string-array name="consent_interaction_events_collects">
+        <item>Where on the screen you tap, scroll, or move focus: the on-screen bounds of the element you interact with, and a derived screen region</item>
+        <item>The kind of element you interact with, and which app is open</item>
+    </string-array>
+    <string-array name="consent_interaction_events_not_collects">
+        <item>The text or content of what you tap or read</item>
+        <item>What you type, search, or message</item>
+        <item>Your exact finger position, screenshots, or screen contents</item>
+    </string-array>
+    <string name="consent_notification_activity_label">Notification Activity</string>
+    <string name="consent_notification_activity_privacy_class">Behavioral metadata</string>
+    <string-array name="consent_notification_activity_collects">
+        <item>How many notifications you receive and from which app</item>
+        <item>The notification category (message, call, alarm) and when it arrives</item>
+    </string-array>
+    <string-array name="consent_notification_activity_not_collects">
+        <item>The text or content of any notification</item>
+        <item>Who sent it or what it says</item>
+        <item>Messages, names, or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_accelerometer_label">Accelerometer</string>
+    <string name="consent_sensor_accelerometer_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_accelerometer_collects">
+        <item>Device motion and acceleration along three axes</item>
+    </string-array>
+    <string-array name="consent_sensor_accelerometer_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_gravity_label">Gravity Sensor</string>
+    <string name="consent_sensor_gravity_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_gravity_collects">
+        <item>The direction and magnitude of gravity</item>
+    </string-array>
+    <string-array name="consent_sensor_gravity_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_gyroscope_label">Gyroscope</string>
+    <string name="consent_sensor_gyroscope_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_gyroscope_collects">
+        <item>Rotation and angular velocity</item>
+    </string-array>
+    <string-array name="consent_sensor_gyroscope_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_light_label">Light Sensor</string>
+    <string name="consent_sensor_light_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_light_collects">
+        <item>The ambient light level around the device</item>
+    </string-array>
+    <string-array name="consent_sensor_light_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_linear_acceleration_label">Linear Acceleration</string>
+    <string name="consent_sensor_linear_acceleration_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_linear_acceleration_collects">
+        <item>Acceleration with gravity removed</item>
+    </string-array>
+    <string-array name="consent_sensor_linear_acceleration_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_magnetometer_label">Magnetometer</string>
+    <string name="consent_sensor_magnetometer_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_magnetometer_collects">
+        <item>Magnetic field and compass heading</item>
+    </string-array>
+    <string-array name="consent_sensor_magnetometer_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_proximity_label">Proximity Sensor</string>
+    <string name="consent_sensor_proximity_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_proximity_collects">
+        <item>Whether something is near the screen</item>
+    </string-array>
+    <string-array name="consent_sensor_proximity_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_rotation_vector_label">Rotation Vector</string>
+    <string name="consent_sensor_rotation_vector_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_rotation_vector_collects">
+        <item>The device\'s orientation in space</item>
+    </string-array>
+    <string-array name="consent_sensor_rotation_vector_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_screen_orientation_label">Screen Orientation</string>
+    <string name="consent_sensor_screen_orientation_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_screen_orientation_collects">
+        <item>The screen orientation (portrait or landscape)</item>
+    </string-array>
+    <string-array name="consent_sensor_screen_orientation_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_significant_motion_label">Significant Motion</string>
+    <string name="consent_sensor_significant_motion_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_significant_motion_collects">
+        <item>When the device undergoes significant motion</item>
+    </string-array>
+    <string-array name="consent_sensor_significant_motion_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_step_counter_label">Step Counter</string>
+    <string name="consent_sensor_step_counter_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_step_counter_collects">
+        <item>The number of steps taken</item>
+    </string-array>
+    <string-array name="consent_sensor_step_counter_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sensor_tilt_detector_label">Tilt Detector</string>
+    <string name="consent_sensor_tilt_detector_privacy_class">Physical telemetry</string>
+    <string-array name="consent_sensor_tilt_detector_collects">
+        <item>When the device is tilted</item>
+    </string-array>
+    <string-array name="consent_sensor_tilt_detector_not_collects">
+        <item>Your location or GPS</item>
+        <item>Audio, the microphone, or the camera</item>
+        <item>App contents or anything you type</item>
+    </string-array>
+    <string name="consent_sleep_label">Sleep</string>
+    <string name="consent_sleep_privacy_class">Health metrics</string>
+    <string-array name="consent_sleep_collects">
+        <item>When you appear to be asleep or awake (sleep segments from Android\'s Sleep API)</item>
+        <item>A confidence score for each segment</item>
+    </string-array>
+    <string-array name="consent_sleep_not_collects">
+        <item>Audio, the microphone, or the camera</item>
+        <item>Your location</item>
+        <item>Anything you type, read, or message</item>
+    </string-array>
+</resources>
