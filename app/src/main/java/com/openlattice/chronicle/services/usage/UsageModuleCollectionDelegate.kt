@@ -23,6 +23,7 @@ import com.openlattice.chronicle.sensors.PROPERTY_TYPES
 import com.openlattice.chronicle.sensors.UsageEventsChronicleSensor
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
 import com.openlattice.chronicle.storage.StorageQueue
 import com.openlattice.chronicle.storage.UserStorageQueue
 import com.openlattice.chronicle.telemetry.LocalTelemetry
@@ -189,7 +190,10 @@ class UsageModuleCollectionDelegate(private val context: Context) {
             return true
         }
 
-        val queueEntries = buildUsageQueueEntries(queueEntry, System.currentTimeMillis()) { rand.nextLong() }
+        val queueEntries = buildUsageQueueEntries(
+            queueEntry,
+            chronicleDb.nextQueueWriteTimestamp(),
+        ) { rand.nextLong() }
         persistUsageQueueAndCheckpoint(queueEntries, currentPollTimestamp)
 
         queueEntry.asSequence().chunked(1000).forEach { chunk ->

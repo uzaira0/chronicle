@@ -9,6 +9,7 @@ import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
 import com.openlattice.chronicle.utils.Utils
 
 /**
@@ -63,6 +64,7 @@ public object DeviceLifecycleModuleHolder {
             },
             updateQueueSize = { depth -> Utils.updateUploadQueueSize(appContext, depth) },
             serializeQueueEntry = { data -> JsonSerializer.serializeQueueEntry(data) },
+            nextWriteTimestamp = { wallClockMillis -> db.nextQueueWriteTimestamp(wallClockMillis) },
         )
     }
 }

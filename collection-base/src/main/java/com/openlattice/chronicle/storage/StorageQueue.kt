@@ -17,6 +17,10 @@ interface StorageQueue {
 
     @Query("SELECT count(*) FROM dataQueue")
     fun getSize(): Int
+
+    /** Highest write cursor currently queued, or null when the queue is empty. */
+    @Query("SELECT MAX(writeTimestamp) FROM dataQueue")
+    fun maxWriteTimestamp(): Long?
     
     @Insert
     fun insertEntry( entry: QueueEntry)

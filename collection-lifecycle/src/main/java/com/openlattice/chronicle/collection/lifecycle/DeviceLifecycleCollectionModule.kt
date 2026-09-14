@@ -88,6 +88,14 @@ public class DeviceLifecycleCollectionModule(
      * byte-identical to the legacy `JsonSerializer.serializeQueueEntry` output.
      */
     private val serializeQueueEntry: (ChronicleData) -> ByteArray,
+    /**
+     * Queue write-cursor seam. `QueueEntry.writeTimestamp` is the upload cursor, not a timestamp:
+     * a row written behind the cursor is never uploaded and is pruned as delivered. Production
+     * supplies `ChronicleDb.nextQueueWriteTimestamp`, which advances past anything already queued
+     * or uploaded so a backward device-clock step cannot lose the row. The default is identity
+     * (wall clock unchanged) for tests that do not exercise ordering.
+     */
+    private val nextWriteTimestamp: (wallClockMillis: Long) -> Long = { it },
     private val clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
 ) : DataCollectionModule {
@@ -164,7 +172,7 @@ public class DeviceLifecycleCollectionModule(
         }
 
         val entry = QueueEntry(
-            writeTimestamp = now,
+            writeTimestamp = nextWriteTimestamp(now),
             id = ThreadLocalRandom.current().nextLong(),
             data = serializeQueueEntry(ChronicleData(filtered)),
         )

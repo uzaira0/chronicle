@@ -25,6 +25,7 @@ import com.openlattice.chronicle.sensors.USAGE_EVENTS_SENSOR_CHECKPOINT
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
 import com.openlattice.chronicle.storage.QueueEntry
 import com.openlattice.chronicle.storage.StorageQueue
 import com.openlattice.chronicle.storage.UsagePollCheckpointEntity
@@ -208,7 +209,10 @@ class UsageCollectionDelegate(private val context: Context) {
             return true
         }
 
-        val queueEntries = buildUsageQueueEntries(queueEntry, System.currentTimeMillis()) { rand.nextLong() }
+        val queueEntries = buildUsageQueueEntries(
+            queueEntry,
+            chronicleDb.nextQueueWriteTimestamp(),
+        ) { rand.nextLong() }
         if (!persistUsageQueueAndCheckpoint(queueEntries, currentPollTimestamp)) {
             users.clear()
             return true

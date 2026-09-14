@@ -50,6 +50,8 @@ class FakeStorageQueue : StorageQueue {
 
     override fun getSize(): Int = rows.size
 
+    override fun maxWriteTimestamp(): Long? = rows.values.maxOfOrNull { it.writeTimestamp }
+
     override fun deleteEntry(entry: QueueEntry) {
         rows.remove(entry.writeTimestamp to entry.id)
     }

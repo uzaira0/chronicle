@@ -19,6 +19,13 @@ interface UploadServerDao {
     @Query("SELECT * FROM upload_servers WHERE enabled = 1 AND enrollmentSetupComplete = 1 ORDER BY createdAt ASC")
     fun getEnabled(): List<UploadServerEntity>
 
+    /**
+     * Highest `dataQueue` write cursor any destination has already consumed. Rows are pruned once
+     * uploaded, so this survives an empty queue and is what a new row must be written past.
+     */
+    @Query("SELECT MAX(lastUploadedTimestamp) FROM upload_servers")
+    fun maxUploadedQueueTimestamp(): Long?
+
     @Query("SELECT * FROM upload_servers LIMIT 1")
     fun getConfiguredServer(): UploadServerEntity?
 

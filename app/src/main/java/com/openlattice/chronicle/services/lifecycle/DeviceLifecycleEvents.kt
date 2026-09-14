@@ -14,6 +14,7 @@ import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
 import com.openlattice.chronicle.storage.QueueEntry
 import com.openlattice.chronicle.utils.Utils
 import java.util.concurrent.Executors
@@ -134,12 +135,12 @@ object DeviceLifecycleEventRecorder {
         val filteredEvents = events.filter { shouldPersist(context, it, now) }
         if (filteredEvents.isEmpty()) return true
 
+        val db = ChronicleDb.getInstance(context)
         val entry = QueueEntry(
-            writeTimestamp = now,
+            writeTimestamp = db.nextQueueWriteTimestamp(now),
             id = ThreadLocalRandom.current().nextLong(),
             data = JsonSerializer.serializeQueueEntry(com.openlattice.chronicle.android.ChronicleData(filteredEvents))
         )
-        val db = ChronicleDb.getInstance(context)
         val persisted = ResearchPersistenceGate.persistIfCollecting(
             context,
             CollectionModuleId.DEVICE_LIFECYCLE,
