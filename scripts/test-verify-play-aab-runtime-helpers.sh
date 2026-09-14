@@ -56,7 +56,7 @@ fi
 
 sealed_repo="$TEST_ROOT/sealed-repo"
 mkdir "$sealed_repo"
-git -C "$sealed_repo" init -q
+git -C "$sealed_repo" init -q -b main
 git -C "$sealed_repo" config user.name 'Chronicle verifier fixture'
 git -C "$sealed_repo" config user.email 'verifier-fixture@example.invalid'
 printf 'sealed source\n' >"$sealed_repo/tracked.txt"
