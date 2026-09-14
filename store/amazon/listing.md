@@ -5,5 +5,4 @@ not package Google Play Services or Health Connect. Modules requiring those serv
 only when configured by a study and state that the service is unavailable; they never claim to be
 collecting. Supported device, sensor, usage, notification, and interaction modules continue to work.
 
-Privacy: https://chronicle-screentime-app.research.bcm.edu/privacy
-Withdrawal: https://chronicle-screentime-app.research.bcm.edu/withdrawal
+Privacy: https://www.bcm.edu/about-us/our-campus/compliance

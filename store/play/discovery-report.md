@@ -2,7 +2,7 @@
 
 ## Scope and exclusions
 
-Goal: prepare the existing BCM Chronicle Android Play flavor and its supporting public policy pages
+Goal: prepare the existing BCM Chronicle Android Play flavor
 for a first Google Play Console submission. Excluded from neutral discovery terms because they are
 already fixed by the product/request: Google Play/Play Console, Chronicle, Baylor College of Medicine
 (BCM), Android, Health Connect, AccessibilityService, foreground services, Data Safety, Play App
@@ -60,7 +60,7 @@ Signing, app bundles, the production hostname, the existing package ID, and the 
 - **Adopt:** Play's existing Console declarations, Internal testing, pre-launch report, App Signing,
   AAB format, and current target API. Do not build substitutes.
 - **Compose:** derive Console answers from the merged Play manifest, wire DTOs, SDK inventory, public
-  privacy page, consent UI, and IRB-approved protocol.
+  BCM compliance page, consent UI, and IRB-approved protocol.
 - **Adapt:** public Caddy routing, policy copy, listing copy, prominent sensitive-access disclosures,
   and the release verification script.
 - **Build:** only small repository artifacts/checks that Play does not provide: console-answer files,
@@ -68,9 +68,7 @@ Signing, app bundles, the production hostname, the existing package ID, and the 
 
 ## Verified gaps and changes
 
-- The live `/privacy` and `/withdrawal` URLs returned 401 Basic Auth on 2026-08-14. Source routing is
-  changed so those two SPA pages bypass the researcher dashboard guard; deployment and a public 200
-  smoke test remain required.
+- The dashboard public research-policy pages are retired. Store listings use the BCM compliance page.
 - The app previously forced Usage Access before loading the study or showing module consent. It now
   enrolls without the grant and requests it from Data Sharing only for an active accepted module,
   after a purpose/use/sharing disclosure.
@@ -89,8 +87,7 @@ Signing, app bundles, the production hostname, the existing package ID, and the 
 4. Produce a signed `bundlePlayRelease` AAB with no global mobile-signing secret, using the upload key
    registered for `com.bcm.chronicle`; inspect the AAB/package/version/signing identity and verify that
    enrollment installs only the per-device API credential issued by the selected study server.
-5. Deploy the web/config change and verify unauthenticated HTTPS 200 responses and readable policy
-   content for `/privacy` and `/withdrawal` from outside the BCM network.
+5. Verify the store privacy-policy URL points to the BCM compliance page.
 6. Exercise fresh enrollment on phone/tablet: consent precedes all sensitive access, declined modules
    remain inert, revocation stops collection, and withdrawal stops/clears as stated.
 7. Capture synthetic-data screenshots and declaration videos from that exact signed candidate.

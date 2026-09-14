@@ -165,9 +165,9 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
 - [x] The protected integration-workspace lifecycle receipt is
   `../build/operator-test-runs/selfhost-release-smoke/run.OFCETv/result.txt`
   (SHA-256 `56e78cb22448afc07bce08d05783fe98a56570ec2108e8e5485bb675f054f2eb`).
-- [x] Source configuration and a disposable local Caddy runtime historically proved anonymous
-  `/privacy`, `/withdrawal`, and `/reviewer` entrypoints before dashboard authentication. This is
-  compatibility evidence only: those routes and any current 401 response are not Internal Testing
+- [x] Source configuration and a disposable local Caddy runtime historically proved an anonymous
+  `/reviewer` entrypoint before dashboard authentication. This is
+  compatibility evidence only: that route and any current 401 response are not Internal Testing
   gates. The Play privacy-policy URL is the BCM compliance page.
 - [ ] No historically published selfhost predecessor exists. Do not claim old-binary upgrade
   compatibility until an actual released predecessor digest exists; the current proof covers the
