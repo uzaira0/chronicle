@@ -233,6 +233,7 @@ class CollectionLoopCoordinator(context: Context) {
             trigger: ConsentTrigger,
             acknowledgedAt: OffsetDateTime,
             settingsVersion: Int? = null,
+            appVersion: String? = currentAppVersion(),
             report: (server: UploadServerEntity, studyId: UUID, acknowledgment: CollectionAcknowledgment) -> Unit,
             onFailure: (server: UploadServerEntity, error: Exception) -> Unit = { _, _ -> },
         ): Boolean {
@@ -254,7 +255,7 @@ class CollectionLoopCoordinator(context: Context) {
                     declinedModules = declined,
                     unavailableModules = unavailable,
                     trigger = trigger,
-                    appVersion = null,
+                    appVersion = appVersion,
                     settingsVersion = settingsVersion,
                     disclosureVersion = server.disclosureVersion?.takeIf { server.manifestDigest != null },
                     manifestDigest = server.manifestDigest?.takeIf { server.disclosureVersion != null },

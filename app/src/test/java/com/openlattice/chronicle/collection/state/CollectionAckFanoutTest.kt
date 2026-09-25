@@ -1,5 +1,7 @@
 package com.openlattice.chronicle.collection.state
 
+import com.openlattice.chronicle.TEST_SERVER_HOST
+import com.openlattice.chronicle.assumeTestServerHostTrusted
 import com.openlattice.chronicle.collection.CollectionAcknowledgment
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.ConsentTrigger
@@ -28,7 +30,7 @@ class CollectionAckFanoutTest {
     ) = UploadServerEntity(
         id = id,
         name = "server-$id",
-        url = "https://chronicle-screentime-app.research.bcm.edu",
+        url = "https://$TEST_SERVER_HOST",
         studyId = studyId,
         participantId = "participant-$id",
         sourceDeviceId = "device-$id",
@@ -65,7 +67,37 @@ class CollectionAckFanoutTest {
             assertEquals(ConsentTrigger.PARTICIPANT_TOGGLE, acknowledgment.trigger)
             assertEquals(acknowledgedAt, acknowledgment.acknowledgedAt)
             assertEquals(7, acknowledgment.settingsVersion)
+            assertEquals("${com.openlattice.chronicle.BuildConfig.VERSION_NAME} (${com.openlattice.chronicle.BuildConfig.VERSION_CODE})", acknowledgment.appVersion)
         }
+    }
+
+    @Test
+    fun retriedAckReplaysTheAppVersionItWasRecordedWith() {
+        val record = PendingCollectionAckRecord.from(
+            server = server(1),
+            accepted = setOf(CollectionModuleId.USAGE_EVENTS),
+            declined = emptySet(),
+            trigger = ConsentTrigger.ENROLLMENT,
+            acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
+            settingsVersion = 3,
+            appVersion = "2026.01.01-old",
+        )
+        val roundTripped = JsonSerializer.fromJson<List<PendingCollectionAckRecord>>(
+            JsonSerializer.toJson(listOf(record)),
+        )!!.single()
+        assertEquals("2026.01.01-old", roundTripped.toAcknowledgmentOrNull()!!.appVersion)
+        // Records written before appVersion existed replay null, matching the server's stored receipt.
+        assertEquals(null, roundTripped.copy(appVersion = null).toAcknowledgmentOrNull()!!.appVersion)
+        assertEquals(
+            "${com.openlattice.chronicle.BuildConfig.VERSION_NAME} (${com.openlattice.chronicle.BuildConfig.VERSION_CODE})",
+            PendingCollectionAckRecord.from(
+                server = server(1),
+                accepted = setOf(CollectionModuleId.USAGE_EVENTS),
+                declined = emptySet(),
+                trigger = ConsentTrigger.ENROLLMENT,
+                acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
+            ).appVersion,
+        )
     }
 
     @Test
@@ -227,6 +259,7 @@ class CollectionAckFanoutTest {
 
     @Test
     fun retryPendingAckRemovesSuccessesAndKeepsFailures() {
+        assumeTestServerHostTrusted()
         val pending = listOf(
             PendingCollectionAckRecord.from(
                 server = server(1),
@@ -348,6 +381,7 @@ class CollectionAckFanoutTest {
 
     @Test
     fun retryUsesExactIdentityWhenTheConfiguredRowWasRecreatedWithANewId() {
+        assumeTestServerHostTrusted()
         val original = server(1)
         val pending = PendingCollectionAckRecord.from(
             server = original,
@@ -372,6 +406,7 @@ class CollectionAckFanoutTest {
 
     @Test
     fun legacyIdentityFreeRecordIsReboundOnlyToTheExactPredecessorEnrollment() {
+        assumeTestServerHostTrusted()
         val current = server(1)
         val legacy = PendingCollectionAckRecord(
             serverId = current.id,

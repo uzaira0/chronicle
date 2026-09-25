@@ -27,6 +27,8 @@ data class PendingCollectionAckRecord(
     val settingsVersion: Int? = null,
     val disclosureVersion: String? = null,
     val manifestDigest: String? = null,
+    /** App version the ack was first sent with; replayed unchanged so the server receipt matches. */
+    val appVersion: String? = null,
 ) {
     fun stableKey(): String =
         listOf(
@@ -90,7 +92,7 @@ data class PendingCollectionAckRecord(
             declinedModules = declined,
             unavailableModules = unavailable,
             trigger = parsedTrigger,
-            appVersion = null,
+            appVersion = appVersion,
             settingsVersion = settingsVersion,
             disclosureVersion = disclosureVersion?.takeIf { manifestDigest != null },
             manifestDigest = manifestDigest?.takeIf { disclosureVersion != null },
@@ -106,6 +108,7 @@ data class PendingCollectionAckRecord(
             trigger: ConsentTrigger,
             acknowledgedAt: OffsetDateTime,
             settingsVersion: Int? = null,
+            appVersion: String? = currentAppVersion(),
         ): PendingCollectionAckRecord = PendingCollectionAckRecord(
             serverId = server.id,
             studyId = server.studyId,
@@ -119,9 +122,14 @@ data class PendingCollectionAckRecord(
             settingsVersion = settingsVersion,
             disclosureVersion = server.disclosureVersion,
             manifestDigest = server.manifestDigest,
+            appVersion = appVersion,
         )
     }
 }
+
+/** The installed build, sent with every collection acknowledgment so operators see app versions. */
+internal fun currentAppVersion(): String =
+    "${com.openlattice.chronicle.BuildConfig.VERSION_NAME} (${com.openlattice.chronicle.BuildConfig.VERSION_CODE})"
 
 data class CollectionAckRetryResult(
     val removedStableKeys: Set<String>,
