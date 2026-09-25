@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
-import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import androidx.annotation.RequiresApi
@@ -22,9 +21,6 @@ class PermissionActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_permission)
-        if (Build.VERSION.SDK_INT >= 35) {
-            findViewById<View>(R.id.permissionContent).padForSystemBars(top = true)
-        }
         if (hasUsageSettingPermission(this)) {
             doMainActivity(this, intent)
             finish()

@@ -21,6 +21,7 @@
         app:itemIconTint="@color/bottom_nav_item_tint"
         app:itemRippleColor="@color/chronicle_surface_high"
         app:itemTextColor="@color/bottom_nav_item_tint"
+        app:labelMaxLines="2"
         app:labelVisibilityMode="labeled"
         app:menu="@menu/bottom_nav_menu" />
 </LinearLayout>

@@ -2,6 +2,9 @@ package com.openlattice.chronicle
 
 import android.app.Application
 import androidx.work.Configuration
+import com.openlattice.chronicle.services.crypto.FileSealedEnvelopeStore
+import com.openlattice.chronicle.services.crypto.PayloadSealer
+import java.io.File
 
 /**
  * Application shell for WorkManager **on-demand initialization** ([Configuration.Provider]).
@@ -21,6 +24,15 @@ import androidx.work.Configuration
  * that storage does not exist yet.
  */
 class ChronicleApplication : Application(), Configuration.Provider {
+
+    override fun onCreate() {
+        super.onCreate()
+        registerActivityLifecycleCallbacks(SystemBarInsets)
+        // Path only; nothing is read or written until an upload worker seals a batch after unlock.
+        // dataDir/no_backup is noBackupFilesDir, so the envelopes never enter a backup.
+        PayloadSealer.sealedEnvelopeStore =
+            FileSealedEnvelopeStore(File(applicationInfo.dataDir, "no_backup/sealed-envelopes"))
+    }
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().build()

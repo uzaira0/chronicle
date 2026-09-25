@@ -9,7 +9,6 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.R
-import com.openlattice.chronicle.padForSystemBars
 import com.openlattice.chronicle.services.sync.triggerImmediateChronicleSync
 import com.openlattice.chronicle.services.upload.LocalUploadIssueBucket
 import kotlinx.coroutines.Job
@@ -20,7 +19,6 @@ class UploadsFragment : Fragment(R.layout.fragment_uploads) {
     private var refreshJob: Job? = null
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        view.findViewById<View>(R.id.uploadsContent).padForSystemBars()
         view.findViewById<MaterialButton>(R.id.uploadNowButton).setOnClickListener { button ->
             triggerImmediateChronicleSync(requireContext().applicationContext)
             Toast.makeText(requireContext(), R.string.upload_queued, Toast.LENGTH_SHORT).show()

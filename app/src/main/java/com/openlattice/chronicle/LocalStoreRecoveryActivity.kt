@@ -29,7 +29,6 @@ class LocalStoreRecoveryActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_local_store_recovery)
-        padViewForSystemBars(R.id.localStoreRecoveryRoot, top = true)
 
         reason = intent.getStringExtra(EXTRA_REASON)
             ?.let { runCatching { LocalStoreRecoveryReason.valueOf(it) }.getOrNull() }

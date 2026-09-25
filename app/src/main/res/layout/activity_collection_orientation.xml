@@ -11,9 +11,7 @@
     android:id="@+id/orientationRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:fitsSystemWindows="true"
-    android:paddingTop="?attr/actionBarSize">
+    android:orientation="vertical">
 
     <ScrollView
         android:id="@+id/orientationScrollView"
@@ -145,10 +143,8 @@
         <com.google.android.material.button.MaterialButton
             android:id="@+id/orientationAccept"
             android:layout_width="match_parent"
-            android:layout_height="56dp"
+            android:layout_height="wrap_content"
             android:minHeight="56dp"
-            android:maxLines="1"
-            android:ellipsize="end"
             android:gravity="center"
             android:insetTop="0dp"
             android:insetBottom="0dp"
@@ -158,10 +154,8 @@
             android:id="@+id/orientationDecline"
             style="@style/Chronicle.Button.Secondary"
             android:layout_width="match_parent"
-            android:layout_height="56dp"
+            android:layout_height="wrap_content"
             android:minHeight="56dp"
-            android:maxLines="1"
-            android:ellipsize="end"
             android:gravity="center"
             android:insetTop="0dp"
             android:insetBottom="0dp"

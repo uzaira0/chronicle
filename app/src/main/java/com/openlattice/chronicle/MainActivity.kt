@@ -56,10 +56,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        // MainActivity has no ActionBar (AppTheme.NoActionBar), so the root must clear the
-        // status bar itself; the bottom nav clears the navigation bar.
-        padViewForSystemBars(R.id.mainRoot, top = true)
-        padViewForSystemBars(R.id.mainBottomNav)
 
         try {
             enrollmentSettings = EnrollmentSettings(this)

@@ -23,7 +23,6 @@ class UserIdentificationActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_user_identification)
-        padViewForSystemBars(R.id.user_identification_scroll)
 
         try {
             settings = EnrollmentSettings(this)

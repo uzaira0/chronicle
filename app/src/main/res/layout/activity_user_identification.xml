@@ -3,6 +3,8 @@
   This activity is opened from a notification and must remain usable on compact phones,
   tablets, landscape windows, and with enlarged text. Keep the decisions in a vertical,
   content-sized flow and retain the scrolling fallback rather than returning to a fixed row.
+  Both decisions share one width (the widest of prompt/labels, content is wrap_content) and sit
+  32dp apart so a hurried tap cannot land on the wrong one.
 -->
 <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -12,12 +14,12 @@
     android:layout_height="match_parent"
     android:clipToPadding="false"
     android:fillViewport="true"
-    android:paddingTop="?attr/actionBarSize"
     tools:context=".UserIdentificationActivity">
 
     <LinearLayout
         android:id="@+id/user_identification_content"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
+        android:layout_gravity="center_horizontal"
         android:layout_height="wrap_content"
         android:gravity="center"
         android:orientation="vertical"
@@ -39,14 +41,13 @@
         <com.google.android.material.button.MaterialButton
             android:id="@+id/child_user_btn"
             style="@style/Chronicle.Button.Secondary"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/eq_space_6"
             android:gravity="center"
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:maxWidth="480dp"
-            android:maxLines="2"
             android:minHeight="56dp"
             android:text="@string/user_target_child"
             app:icon="@drawable/star"
@@ -56,14 +57,13 @@
         <com.google.android.material.button.MaterialButton
             android:id="@+id/other_user_btn"
             style="@style/Chronicle.Button.Secondary"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/eq_space_3"
+            android:layout_marginTop="@dimen/eq_space_6"
             android:gravity="center"
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:maxWidth="480dp"
-            android:maxLines="2"
             android:minHeight="56dp"
             android:text="@string/user_other" />
 

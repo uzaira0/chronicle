@@ -37,7 +37,6 @@ import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
 import com.openlattice.chronicle.collection.state.CollectionStateMachine
 import com.openlattice.chronicle.collection.state.CollectionModulePhase
 import com.openlattice.chronicle.collection.state.CollectionModuleState
-import com.openlattice.chronicle.padForSystemBars
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -97,7 +96,6 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        view.findViewById<View>(R.id.dataSharingContent).padForSystemBars()
     }
 
     override fun onResume() {

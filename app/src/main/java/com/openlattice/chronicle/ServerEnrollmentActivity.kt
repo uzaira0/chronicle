@@ -59,8 +59,6 @@ class ServerEnrollmentActivity : AppCompatActivity() {
             return
         }
         setContentView(R.layout.activity_server_enrollment)
-        padViewForSystemBars(R.id.serverEnrollmentScrollView)
-        padViewForSystemBars(R.id.serverEnrollmentContent)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
         nameText = findViewById(R.id.serverNameText)

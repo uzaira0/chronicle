@@ -189,10 +189,6 @@ class AppDecisionSurfaceContractTest {
         val layout = File("src/main/res/layout/activity_collection_orientation.xml")
         val layoutSource = layout.readText()
         assertTrue(
-            "Collection orientation runs under an ActionBar; reserve its height so content does not render under the setup banner.",
-            layoutSource.contains("android:paddingTop=\"?attr/actionBarSize\""),
-        )
-        assertTrue(
             "Scrollable orientation content must not clip system-inset padding around the first/last controls.",
             layoutSource.contains("android:clipToPadding=\"false\""),
         )
@@ -215,10 +211,11 @@ class AppDecisionSurfaceContractTest {
                 "orientationActions",
                 (button.parentNode as Element).androidAttr("id")?.substringAfter("@+id/"),
             )
-            assertEquals("56dp", button.androidAttr("layout_height"))
+            // Grows with long translations and large fonts instead of cutting the label off.
+            assertEquals("wrap_content", button.androidAttr("layout_height"))
             assertEquals("56dp", button.androidAttr("minHeight"))
-            assertEquals("1", button.androidAttr("maxLines"))
-            assertEquals("end", button.androidAttr("ellipsize"))
+            assertEquals(null, button.androidAttr("maxLines"))
+            assertEquals(null, button.androidAttr("ellipsize"))
             assertEquals("0dp", button.androidAttr("insetTop"))
             assertEquals("0dp", button.androidAttr("insetBottom"))
         }
@@ -245,7 +242,7 @@ class AppDecisionSurfaceContractTest {
         val scroll = byId.getValue("user_identification_scroll")
         assertEquals("true", scroll.androidAttr("fillViewport"))
         assertEquals("false", scroll.androidAttr("clipToPadding"))
-        assertEquals("?attr/actionBarSize", scroll.androidAttr("paddingTop"))
+        assertEquals(null, scroll.androidAttr("paddingTop"))
         assertTrue(
             "The notification destination needs a real scrolling fallback on short screens.",
             layoutSource.contains("<androidx.core.widget.NestedScrollView"),
@@ -258,6 +255,12 @@ class AppDecisionSurfaceContractTest {
         assertEquals("vertical", content.androidAttr("orientation"))
         assertEquals("center", content.androidAttr("gravity"))
         assertEquals("560dp", prompt.androidAttr("maxWidth"))
+        assertEquals("wrap_content", content.androidAttr("layout_width"))
+        assertEquals(
+            "Decisions sit 32dp apart to avoid mis-taps between Target child and Other.",
+            "@dimen/eq_space_6",
+            other.androidAttr("layout_marginTop"),
+        )
 
         listOf(prompt, child, other).forEach { decisionSurface ->
             assertEquals(
@@ -277,8 +280,8 @@ class AppDecisionSurfaceContractTest {
 
         listOf(child, other).forEach { button ->
             assertEquals(
-                "Decision buttons must size within the viewport instead of competing in a fixed row.",
-                "wrap_content",
+                "Both decisions share the content column's width: equal, easy-to-tell-apart targets.",
+                "match_parent",
                 button.androidAttr("layout_width"),
             )
             assertEquals("56dp", button.androidAttr("minHeight"))
@@ -288,13 +291,13 @@ class AppDecisionSurfaceContractTest {
                 button.androidAttr("minWidth"),
             )
             assertEquals("480dp", button.androidAttr("maxWidth"))
-            assertEquals("2", button.androidAttr("maxLines"))
+            assertEquals("Labels wrap as far as the text needs; the page scrolls.", null, button.androidAttr("maxLines"))
         }
 
         val activity = File("src/main/java/com/openlattice/chronicle/UserIdentificationActivity.kt").readText()
         assertTrue(
-            "The activity must preserve system-bar clearance under targetSdk edge-to-edge behavior.",
-            activity.contains("padViewForSystemBars(R.id.user_identification_scroll)"),
+            "System-bar clearance comes from SystemBarInsets, not per-screen padding.",
+            !activity.contains("padViewForSystemBars") && !activity.contains("padForSystemBars"),
         )
         assertTrue(
             "A notification destination must route encrypted-local-store failures to explicit recovery.",
@@ -365,13 +368,28 @@ class AppDecisionSurfaceContractTest {
 
     @Test
     fun topLevelPagesKeepContentOutFromUnderSystemBarsAndBottomNavigation() {
-        // System-bar insets are applied PROGRAMMATICALLY (edge-to-edge, enforced from
-        // targetSdk 35+): MainActivity is NoActionBar and pads mainRoot for the status bar
-        // (top=true), and each page pads its own content for the remaining bars via
-        // padForSystemBars/padViewForSystemBars. So the pages no longer carry a static
-        // paddingTop="?attr/actionBarSize" (that reserved space for an ActionBar this app
-        // does not host). The static content offsets — 32dp top for tablet toolbar text
-        // bounds, 96dp bottom to clear the bottom nav — are retained.
+        // System-bar insets are applied in ONE place (edge-to-edge, enforced from targetSdk
+        // 35+): SystemBarInsets, registered by ChronicleApplication, pads every activity's
+        // content view for the status/action/navigation bars, cutout and keyboard, then
+        // consumes the insets. Screens must not add their own inset handling or static
+        // action-bar spacers, which double-pad or go stale (ScreenLayoutTest renders them).
+        // The static content offsets — 32dp top for tablet toolbar text bounds, 96dp bottom
+        // to clear the bottom nav — are retained.
+        val application = File("src/main/java/com/openlattice/chronicle/ChronicleApplication.kt").readText()
+        assertTrue(application.contains("registerActivityLifecycleCallbacks(SystemBarInsets)"))
+        val insets = File("src/main/java/com/openlattice/chronicle/SystemBarInsets.kt").readText()
+        assertTrue(insets.contains("android.R.id.content") && insets.contains("WindowInsetsCompat.CONSUMED"))
+        File("src/main/res/layout").listFiles()!!.forEach { layout ->
+            val xml = layout.readText()
+            assertTrue("${layout.name}: no static action-bar spacer.", !xml.contains("?attr/actionBarSize"))
+            assertTrue("${layout.name}: insets are handled centrally.", !xml.contains("fitsSystemWindows"))
+        }
+        listOf(File("src/main/java"), File("src/main/kotlin")).asSequence().flatMap { it.walkTopDown() }.filter { it.extension == "kt" && it.name != "SystemBarInsets.kt" }.forEach { source ->
+            assertTrue(
+                "${source.name}: insets are handled centrally by SystemBarInsets.",
+                !source.readText().contains("setOnApplyWindowInsetsListener"),
+            )
+        }
         val pageSources = mapOf(
             "fragment_overview.xml" to "ui/OverviewFragment.kt",
             "fragment_uploads.xml" to "ui/UploadsFragment.kt",
@@ -379,15 +397,10 @@ class AppDecisionSurfaceContractTest {
             "fragment_settings_home.xml" to "ui/SettingsHomeFragment.kt",
             "activity_server_enrollment.xml" to "ServerEnrollmentActivity.kt",
         )
-        pageSources.forEach { (layoutName, sourceName) ->
+        pageSources.forEach { (layoutName, _) ->
             val layout = File("src/main/res/layout/$layoutName").readText()
             assertTrue("$layoutName must keep final controls above bottom nav.", layout.contains("android:paddingBottom=\"96dp\""))
             assertTrue("$layoutName needs enough top content offset for tablet toolbar text bounds.", layout.contains("android:paddingTop=\"32dp\""))
-            val source = File("src/main/java/com/openlattice/chronicle/$sourceName").readText()
-            assertTrue(
-                "$sourceName must apply system-bar insets programmatically (edge-to-edge).",
-                source.contains("padForSystemBars") || source.contains("padViewForSystemBars"),
-            )
         }
     }
 

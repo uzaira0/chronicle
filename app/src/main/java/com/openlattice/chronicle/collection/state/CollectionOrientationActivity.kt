@@ -13,7 +13,6 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.HealthConnectRecordType
-import com.openlattice.chronicle.padViewForSystemBars
 
 /**
  * The enrollment orientation wizard (per-module consent design §6). One screen per
@@ -45,7 +44,6 @@ class CollectionOrientationActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_collection_orientation)
-        padViewForSystemBars(R.id.orientationActions)
         supportActionBar?.setTitle(R.string.orientation_action_title)
 
         val required = intent.idList(EXTRA_REQUIRED_IDS)

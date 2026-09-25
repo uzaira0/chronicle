@@ -7,7 +7,6 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
-import com.openlattice.chronicle.padForSystemBars
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -16,7 +15,6 @@ class OverviewFragment : Fragment(R.layout.fragment_overview) {
     private var refreshJob: Job? = null
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        view.findViewById<View>(R.id.overviewContent).padForSystemBars()
     }
 
     override fun onResume() {

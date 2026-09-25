@@ -1,14 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fillViewport="true">
+
+<androidx.constraintlayout.widget.ConstraintLayout
+    android:paddingStart="@dimen/page_horizontal_padding"
+    android:paddingEnd="@dimen/page_horizontal_padding"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
     tools:context="com.openlattice.chronicle.services.notifications.NotificationPermissionActivity">
 
     <TextView
         android:id="@+id/notificationPermissionsText"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
         android:text="@string/notification_permission"
@@ -22,9 +29,12 @@
         android:id="@+id/open_notification_settings_btn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="24dp"
         android:text="@string/open_settings"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toBottomOf="@id/notificationPermissionsText" />
 </androidx.constraintlayout.widget.ConstraintLayout>
+</ScrollView>
