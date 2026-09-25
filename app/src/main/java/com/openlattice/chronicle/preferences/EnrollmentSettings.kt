@@ -188,6 +188,7 @@ class EnrollmentSettings(private val context: Context) {
         }
         HealthConnectScopeStore.of(context).clear()
         LocalUploadDiagnosticsStore.of(context).clear()
+        com.openlattice.chronicle.services.crypto.PayloadSealer.clearSealedEnvelopes()
         participantId = ""
         studyId = INVALID_STUDY_ID
         check(settings.edit()
