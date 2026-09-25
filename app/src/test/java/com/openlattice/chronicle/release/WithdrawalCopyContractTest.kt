@@ -41,4 +41,27 @@ class WithdrawalCopyContractTest {
             }
         }
     }
+
+    private fun policy(source: String): String = Regex(
+        """<string\s+name="platform_privacy_policy_full"[^>]*>(.*?)</string>""",
+        RegexOption.DOT_MATCHES_ALL,
+    ).find(source)?.groupValues?.get(1).orEmpty()
+
+    @Test
+    fun policiesDiscloseEnrollmentDeviceFieldsAndAuditIp() {
+        // EnrollmentSettings sends Build.MODEL/BRAND/VERSION; the server audit log stores the request IP.
+        sources.forEach { (flavor, source) ->
+            val text = policy(source)
+            listOf("device model", "manufacturer", "Android version", "IP address").forEach { phrase ->
+                assertTrue("$flavor policy must disclose $phrase", text.contains(phrase))
+            }
+        }
+    }
+
+    @Test
+    fun openFlavorPolicyDisclosesAudioPlaybackStateAndGooglePlayServices() {
+        val text = policy(sources.getValue("googleServices"))
+        assertTrue("googleServices policy must disclose audio playback state", text.contains("audio playback state"))
+        assertTrue("googleServices policy must name Google Play services", text.contains("Google Play services"))
+    }
 }
