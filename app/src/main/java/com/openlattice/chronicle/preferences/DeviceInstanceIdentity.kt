@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION") // security-crypto 1.1.0 is deprecated upstream; Keystore migration tracked separately.
+
 package com.openlattice.chronicle.preferences
 
 import android.content.Context

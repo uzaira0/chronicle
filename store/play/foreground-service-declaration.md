@@ -14,8 +14,9 @@ is uninstalled.
   reliably associate later device data with the intended user category.
 - Why specialUse: shared-device attribution for a longitudinal research protocol does not match a
   standard FGS type.
-- Video: enable Identify user in Settings, lock/unlock, show the prompt and ongoing notification,
-  disable Identify user, and show that the service stops.
+- Video: turn on Identify device user in Settings (allow notifications, and keep Pop on screen on
+  for Device user prompts), lock/unlock, show the prompt and ongoing notification, turn off
+  Identify device user, and show that the service stops.
 
 If Play rejects this `specialUse`, do not relabel it as an inaccurate service type. Redesign the
 runtime around an approved API or remove that feature from the Play flavor.

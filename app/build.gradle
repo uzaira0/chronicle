@@ -4,6 +4,8 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.4.10'
     id 'com.google.devtools.ksp' version '2.3.7' apply true
     id 'com.android.application'
+    id 'io.github.takahirom.roborazzi' version '1.75.0'
+    id 'com.github.jk1.dependency-license-report' version '3.1.2'
 }
 
 apply plugin: 'kotlin-parcelize'
@@ -203,6 +205,16 @@ def chronicleProductionHost = readOperatorConfigValue(
     ''
 )
 
+// Research inherits ALLOW_ANY_SERVER=false and trusts only this host, so an APK built with a
+// blank host rejects every server. BuildConfig generation alone (guardrail scripts) is allowed.
+def requiresResearchArtifact = gradle.startParameter.taskNames.any { taskName ->
+    def normalized = taskName.toLowerCase(Locale.ROOT)
+    normalized.contains('research') && ['assemble', 'bundle', 'package', 'install'].any { normalized.contains(it) }
+}
+if (requiresResearchArtifact && chronicleProductionHost.isBlank()) {
+    throw new GradleException('CHRONICLE_PRODUCTION_HOST (or -PchronicleProductionHost) is required for research builds')
+}
+
 android {
 
     compileSdk = 36
@@ -218,7 +230,7 @@ android {
         minSdk = 23
         targetSdk = 36
         versionCode 61
-        versionName "2026.09.17-internal.open.1"
+        versionName "2026.09.25-internal.open.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -415,6 +427,21 @@ android {
         }
     }
 
+    testOptions {
+        unitTests {
+            // Layout screenshot tests (src/testOpen/.../layout) render real resources.
+            includeAndroidResources = true
+            all {
+                systemProperty 'robolectric.pixelCopyRenderMode', 'hardware'
+                // Robolectric reaches into these JDK internals; JDK 17+ needs them opened.
+                jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED',
+                        '--add-opens=java.base/java.lang=ALL-UNNAMED',
+                        '--add-opens=java.base/java.util=ALL-UNNAMED',
+                        '--add-exports=java.base/jdk.internal.access=ALL-UNNAMED'
+            }
+        }
+    }
+
     lint {
         abortOnError true
         // HardcodedText is promoted to an error in lint.xml (see app/src/main/res/I18N.md).
@@ -552,7 +579,7 @@ dependencies {
     // Retained only for the legacy in-process notification Intent payload.
     implementation 'com.google.code.gson:gson:2.13.2'
     implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'com.google.android.material:material:1.14.0'
     implementation 'com.squareup.retrofit2:retrofit:3.0.0'
     implementation 'com.squareup.retrofit2:converter-moshi:3.0.0'
     implementation 'com.squareup.moshi:moshi-kotlin:1.15.2'
@@ -580,7 +607,7 @@ dependencies {
     implementation 'com.google.guava:guava:33.5.0-android'
     implementation 'org.dmfs:lib-recur:0.17.1'
 
-    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+    implementation 'androidx.security:security-crypto:1.1.0'
     implementation 'net.zetetic:sqlcipher-android:4.13.0'
     implementation 'androidx.sqlite:sqlite-ktx:2.6.2'
     implementation 'androidx.room:room-runtime:2.8.4'
@@ -592,6 +619,11 @@ dependencies {
     implementation 'androidx.room:room-runtime:2.8.4'
 
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'androidx.test:core:1.7.0'
+    testImplementation 'androidx.test.ext:junit:1.3.0'
+    testImplementation 'org.robolectric:robolectric:4.17'
+    testImplementation 'io.github.takahirom.roborazzi:roborazzi:1.75.0'
+    testImplementation 'com.google.android.apps.common.testing.accessibility.framework:accessibility-test-framework:4.1.1'
     androidTestImplementation 'androidx.test:core:1.7.0'
     androidTestImplementation 'androidx.test:rules:1.7.0'
     androidTestImplementation 'androidx.test.ext:junit:1.3.0'
@@ -651,6 +683,8 @@ tasks.register('verifyAmazonRuntimeClasspath') {
     }
 }
 
+def releaseRuntimeClasspaths = ['playReleaseRuntimeClasspath', 'amazonReleaseRuntimeClasspath', 'researchReleaseRuntimeClasspath', 'openReleaseRuntimeClasspath']
+
 tasks.register('verifyNoJacksonRuntime') {
     group = 'verification'
     description = 'Fails if a release flavor ships Jackson parser, databind, or datatype code.'
@@ -659,7 +693,7 @@ tasks.register('verifyNoJacksonRuntime') {
             'com.fasterxml.jackson.core:jackson-annotations',
             'com.fasterxml.jackson:jackson-bom',
         ] as Set
-        def forbidden = ['playReleaseRuntimeClasspath', 'amazonReleaseRuntimeClasspath', 'researchReleaseRuntimeClasspath']
+        def forbidden = releaseRuntimeClasspaths
             .collectMany { configurationName ->
                 configurations.getByName(configurationName).incoming.resolutionResult.allComponents
                     .collect { it.moduleVersion }
@@ -678,6 +712,42 @@ tasks.register('verifyNoJacksonRuntime') {
     }
 }
 
+def runtimeComponents = { List<String> configurationNames ->
+    configurationNames
+        .collectMany { configurationName ->
+            configurations.getByName(configurationName).incoming.resolutionResult.allComponents
+                .collect { it.moduleVersion }
+        }
+        .findAll { it != null }
+        .collect { "${it.group}:${it.name}:${it.version}" }
+        .toSet()
+        .sort()
+}
+
+def writeCycloneDx = { File destination, List<String> coordinates ->
+    def components = coordinates.collect { coordinate ->
+        def parts = coordinate.split(':', 3)
+        [
+            type: 'library',
+            group: parts[0],
+            name: parts[1],
+            version: parts[2],
+            purl: "pkg:maven/${parts[0]}/${parts[1]}@${parts[2]}",
+        ]
+    }
+    def sbom = [
+        bomFormat: 'CycloneDX',
+        specVersion: '1.5',
+        serialNumber: "urn:uuid:${UUID.nameUUIDFromBytes(coordinates.join('\n').getBytes('UTF-8'))}",
+        version: 1,
+        metadata: [component: [type: 'application', name: 'chronicle-android', version: android.defaultConfig.versionName]],
+        components: components,
+    ]
+    destination.parentFile.mkdirs()
+    destination.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(sbom))
+    logger.lifecycle("Wrote ${components.size()} components to ${destination}")
+}
+
 tasks.register('generateRuntimeSbom') {
     group = 'verification'
     description = 'Writes a CycloneDX inventory for all release distribution runtime classpaths.'
@@ -685,38 +755,34 @@ tasks.register('generateRuntimeSbom') {
     def outputFile = layout.buildDirectory.file('reports/security/chronicle-android-runtime.cdx.json')
     outputs.file(outputFile)
     doLast {
-        def coordinates = ['playReleaseRuntimeClasspath', 'amazonReleaseRuntimeClasspath', 'researchReleaseRuntimeClasspath']
-            .collectMany { configurationName ->
-                configurations.getByName(configurationName).incoming.resolutionResult.allComponents
-                    .collect { it.moduleVersion }
-            }
-            .findAll { it != null }
-            .collect { "${it.group}:${it.name}:${it.version}" }
-            .toSet()
-            .sort()
-        def components = coordinates.collect { coordinate ->
-            def parts = coordinate.split(':', 3)
-            [
-                type: 'library',
-                group: parts[0],
-                name: parts[1],
-                version: parts[2],
-                purl: "pkg:maven/${parts[0]}/${parts[1]}@${parts[2]}",
-            ]
-        }
-        def sbom = [
-            bomFormat: 'CycloneDX',
-            specVersion: '1.5',
-            serialNumber: "urn:uuid:${UUID.nameUUIDFromBytes(coordinates.join('\n').getBytes('UTF-8'))}",
-            version: 1,
-            metadata: [component: [type: 'application', name: 'chronicle-android', version: android.defaultConfig.versionName]],
-            components: components,
-        ]
-        def destination = outputFile.get().asFile
-        destination.parentFile.mkdirs()
-        destination.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(sbom))
-        logger.lifecycle("Wrote ${components.size()} components to ${destination}")
+        writeCycloneDx(outputFile.get().asFile, runtimeComponents(releaseRuntimeClasspaths))
     }
+}
+
+// Each release bundle gets the SBOM of its own runtime classpath written next to the .aab, so the
+// inventory travels with the artifact that is uploaded or archived.
+['play', 'amazon', 'research', 'open'].each { flavor ->
+    def capitalized = flavor.capitalize()
+    def sbomTask = tasks.register("generate${capitalized}ReleaseSbom") {
+        group = 'verification'
+        description = "Writes the CycloneDX SBOM for the ${flavor} release beside its bundle."
+        def outputFile = layout.buildDirectory.file(
+            "outputs/bundle/${flavor}Release/app-${flavor}-release.cdx.json",
+        )
+        outputs.file(outputFile)
+        doLast {
+            writeCycloneDx(outputFile.get().asFile, runtimeComponents(["${flavor}ReleaseRuntimeClasspath".toString()]))
+        }
+    }
+    tasks.matching { it.name == "bundle${capitalized}Release" }.configureEach { finalizedBy(sbomTask) }
+}
+
+// License scan of the shipped runtime classpath against the same allowlist as server and web.
+// `./gradlew :app:checkLicense` fails on any dependency whose license is not on the list.
+def licenseAllowlist = rootProject.file('../config/allowed-licenses.json')
+licenseReport {
+    configurations = ['openReleaseRuntimeClasspath', 'playReleaseRuntimeClasspath']
+    allowedLicensesFile = licenseAllowlist.exists() ? licenseAllowlist : rootProject.file('config/allowed-licenses.json')
 }
 
 tasks.named('check').configure {

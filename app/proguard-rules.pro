@@ -87,11 +87,24 @@
 -keep class com.openlattice.chronicle.collection.InteractionPolicy { *; }
 -keep class com.openlattice.chronicle.collection.Collection* { *; }
 
+# Restricted-module and diagnostic upload bodies (Retrofit @Body, reflective Moshi). Conditional
+# so the play flavor, which must not package the restricted collectors, can still shrink them out.
+# scripts/verify-wire-dto-names.sh checks every @Body type against the release mapping.
+-if class com.openlattice.chronicle.collection.Android*Event
+-keep class com.openlattice.chronicle.collection.Android<1>Event { *; }
+-if class com.openlattice.chronicle.android.AndroidSensorSample
+-keep class com.openlattice.chronicle.android.AndroidSensorSample { *; }
+
+# Gson round-trips NotificationDetails through PendingIntent extras; an alarm set by one build
+# and delivered after an update must still parse, so field names cannot depend on the build.
+-keepclassmembers class com.openlattice.chronicle.services.notifications.NotificationDetails { <fields>; }
+
 # App-owned DTOs persisted or transported through reflective Moshi adapters.
 -keep class com.openlattice.chronicle.models.ExtractedUsageEvent { *; }
 -keep class com.openlattice.chronicle.models.ExtractedActivities { *; }
 -keep class com.openlattice.chronicle.models.ExtractUsageStat { *; }
 -keep class com.openlattice.chronicle.collection.state.PendingCollectionAckRecord { *; }
+-keep class com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry { *; }
 
 # ── Apache Olingo ────────────────────────────────────────────────────────────
 # FullQualifiedName is adapted explicitly and is also used by Retrofit request

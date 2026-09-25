@@ -44,7 +44,7 @@ dependencies {
 
     // EncryptedSharedPreferences for SensorSettings/EncryptedPrefsHelper. This is
     // Android keystore-backed preference encryption, NOT the SQLCipher database layer.
-    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+    implementation 'androidx.security:security-crypto:1.1.0'
 
     implementation 'com.fasterxml.jackson.core:jackson-annotations:2.13.5'
 

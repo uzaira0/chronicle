@@ -1318,6 +1318,7 @@ embedded_mapping="$unpack_dir/BUNDLE-METADATA/com.android.tools.build.obfuscatio
   printf 'ERROR: AAB does not contain its R8 original-name mapping.\n' >&2
   exit 1
 }
+"$ROOT_DIR/scripts/verify-wire-dto-names.sh" "$embedded_mapping"
 if ! cmp -s "$MAPPING_PATH" "$embedded_mapping"; then
   printf 'ERROR: supplied R8 mapping does not byte-match the mapping embedded in the AAB.\n' >&2
   exit 1
