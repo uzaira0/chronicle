@@ -1,5 +1,7 @@
 package com.openlattice.chronicle.services.upload
 
+import com.openlattice.chronicle.TEST_SERVER_HOST
+import com.openlattice.chronicle.assumeTestServerHostTrusted
 import com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
 import com.openlattice.chronicle.storage.AUTH_MODE_DEVICE_ID
 import com.openlattice.chronicle.storage.UploadServerEntity
@@ -88,6 +90,7 @@ class ActiveEnrollmentServerPolicyTest {
 
     @Test
     fun `public store policy rejects legacy device identity authentication`() {
+        assumeTestServerHostTrusted()
         val legacyServer = server(authMode = AUTH_MODE_DEVICE_ID, apiKey = null)
 
         val resolution = resolveServerForIdentity(
@@ -115,6 +118,7 @@ class ActiveEnrollmentServerPolicyTest {
 
     @Test
     fun `every destination rejection has one closed diagnostic category`() {
+        assumeTestServerHostTrusted()
         val cases = listOf(
             null to UploadDestinationIssue.DESTINATION_MISSING,
             server(participantId = "participant-b") to
@@ -125,7 +129,7 @@ class ActiveEnrollmentServerPolicyTest {
                 UploadDestinationIssue.DESTINATION_SETUP_INCOMPLETE,
             server(enabled = false) to
                 UploadDestinationIssue.DESTINATION_DISABLED,
-            server(url = "http://research.example.org") to
+            server(url = "http://$TEST_SERVER_HOST") to
                 UploadDestinationIssue.DESTINATION_NONCANONICAL,
             server(authMode = AUTH_MODE_API_KEY, apiKey = null) to
                 UploadDestinationIssue.DESTINATION_CREDENTIAL_INCOMPLETE,
@@ -143,10 +147,10 @@ class ActiveEnrollmentServerPolicyTest {
     @Test
     fun `noncanonical or unsafe origins fail closed`() {
         listOf(
-            "http://research.example.org",
-            "https://research.example.org/path",
-            "https://user@research.example.org",
-            "https://research.example.org?token=value",
+            "http://$TEST_SERVER_HOST",
+            "https://$TEST_SERVER_HOST/path",
+            "https://user@$TEST_SERVER_HOST",
+            "https://$TEST_SERVER_HOST?token=value",
         ).forEach { url ->
             assertNull(
                 completeServerForIdentity(
@@ -206,15 +210,16 @@ class ActiveEnrollmentServerPolicyTest {
 
     @Test
     fun `complete API key and exact legacy servers retain their configured destination`() {
+        assumeTestServerHostTrusted()
         val apiKeyServer = server(authMode = AUTH_MODE_API_KEY, apiKey = "test-api-key")
         val legacyServer = server(authMode = AUTH_MODE_DEVICE_ID)
 
         assertEquals(
-            "https://research.example.org",
+            "https://$TEST_SERVER_HOST",
             completeServerForIdentity(apiKeyServer, studyId, participantId)?.url,
         )
         assertEquals(
-            "https://research.example.org",
+            "https://$TEST_SERVER_HOST",
             completeServerForIdentity(
                 legacyServer,
                 studyId,
@@ -226,6 +231,7 @@ class ActiveEnrollmentServerPolicyTest {
 
     @Test
     fun `provisional acknowledgment owner requires the exact immutable issued row`() {
+        assumeTestServerHostTrusted()
         val expected = server(
             authMode = AUTH_MODE_API_KEY,
             apiKey = "test-api-key",
@@ -243,7 +249,7 @@ class ActiveEnrollmentServerPolicyTest {
     }
 
     private fun server(
-        url: String = "https://research.example.org",
+        url: String = "https://$TEST_SERVER_HOST",
         studyId: String = this.studyId.toString(),
         participantId: String = this.participantId,
         sourceDeviceId: String = "device-a",
