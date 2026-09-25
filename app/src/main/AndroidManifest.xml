@@ -23,6 +23,11 @@
         <package android:name="com.oplus.battery" />
         <package android:name="com.vivo.permissionmanager" />
         <package android:name="com.samsung.android.lool" />
+        <!-- Privacy and consent links open in a browser; Android 11+ hides browsers without this. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application

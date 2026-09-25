@@ -2,7 +2,6 @@ package com.openlattice.chronicle
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
@@ -11,6 +10,7 @@ import com.google.android.material.button.MaterialButton
 import com.openlattice.chronicle.api.EnrollmentPreviewResponse
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.state.CollectionStateMachine
+import com.openlattice.chronicle.utils.ExternalLinks
 import java.net.URI
 
 private val NON_CHOICE_MODULE_DISCLOSURES: Map<CollectionModuleId, String> = mapOf(
@@ -182,8 +182,7 @@ class StudyDisclosureActivity : AppCompatActivity() {
     }
 
     private fun openHttps(url: String) {
-        val uri = Uri.parse(url)
-        if (uri.scheme == "https") startActivity(Intent(Intent.ACTION_VIEW, uri))
+        ExternalLinks.openHttps(this, url)
     }
 
     companion object {
