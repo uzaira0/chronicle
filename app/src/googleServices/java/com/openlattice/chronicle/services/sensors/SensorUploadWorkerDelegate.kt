@@ -14,6 +14,8 @@ import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
 import com.openlattice.chronicle.services.crypto.PayloadSealer
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.RestrictedUploadApiFactory
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.handleServerUploadFailure
 import com.openlattice.chronicle.storage.ChronicleDb
@@ -95,6 +97,52 @@ internal fun deleteAllAvailableInSqlChunks(
         totalDeleted += deleted
     } while (deleted == chunkSize)
     return totalDeleted
+}
+
+/**
+ * Moves malformed rows to the encrypted dead-letter table, then counts them in the redacted
+ * upload diagnostics so the operator sees them via /upload-diagnostics. Only the count and a
+ * closed code leave the device; sample values and exception text do not.
+ */
+internal fun quarantineMalformedSensorSamples(
+    dao: SensorSampleDao,
+    diagnostics: LocalUploadDiagnosticsStore?,
+    malformed: List<Pair<SensorSampleEntry, Exception>>,
+    quarantinedAt: OffsetDateTime = OffsetDateTime.now(),
+) {
+    if (malformed.isEmpty()) return
+    val deadLetters = malformed.map { (entry, error) ->
+        SensorSampleDeadLetterEntity(
+            sampleId = entry.id,
+            sensorType = entry.sensorType,
+            timestamp = entry.timestamp,
+            timezone = entry.timezone,
+            x = entry.x,
+            y = entry.y,
+            z = entry.z,
+            w = entry.w,
+            accuracy = entry.accuracy,
+            valuesJson = entry.valuesJson,
+            quarantinedAt = quarantinedAt.toString(),
+            reason = error.javaClass.simpleName.ifBlank { "MappingFailure" },
+        )
+    }
+    dao.quarantineMalformed(deadLetters, deadLetters.map { it.sampleId })
+    recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_SAMPLE_QUARANTINED, deadLetters.size)
+}
+
+/** Diagnostics are best-effort: a prefs failure must not undo or block the local state change. */
+private fun recordSensorDiagnostic(
+    diagnostics: LocalUploadDiagnosticsStore?,
+    issue: LocalOperationalIssue,
+    count: Int,
+) {
+    if (diagnostics == null || count <= 0) return
+    try {
+        diagnostics.recordOperational(LocalUploadModuleFamily.SENSOR, issue, count)
+    } catch (e: Exception) {
+        Log.w(TAG, "Failed to record sensor diagnostic ${issue.name}", e)
+    }
 }
 
 internal data class SensorBatchDrainResult(
@@ -228,6 +276,7 @@ class SensorUploadWorkerDelegate(
         val dao = chronicleDb.sensorSampleDao()
         val serverDao = chronicleDb.uploadServerDao()
         val statsSink = UploadStatsSink(chronicleDb.uploadStatsDao())
+        val diagnostics = runCatching { LocalUploadDiagnosticsStore.of(context) }.getOrNull()
 
         val configuredServers = listOfNotNull(serverDao.getConfiguredServer())
         val servers = configuredServers.filter { it.enabled }
@@ -265,6 +314,7 @@ class SensorUploadWorkerDelegate(
                     hasPausedDestination = hasPausedDestination,
                     anyFailClosedDestination = anyFailClosed,
                 ),
+                diagnostics = diagnostics,
             )
         } catch (e: Exception) {
             Log.e(TAG, "Sensor cleanup failed, continuing with upload", e)
@@ -321,27 +371,10 @@ class SensorUploadWorkerDelegate(
                 }
             },
             quarantineMalformed = { malformed ->
-                val quarantinedAt = OffsetDateTime.now().toString()
                 malformed.forEach { (entry, error) ->
                     Log.w(TAG, "Quarantining corrupt sensor sample ${entry.id}", error)
                 }
-                val deadLetters = malformed.map { (entry, error) ->
-                    SensorSampleDeadLetterEntity(
-                        sampleId = entry.id,
-                        sensorType = entry.sensorType,
-                        timestamp = entry.timestamp,
-                        timezone = entry.timezone,
-                        x = entry.x,
-                        y = entry.y,
-                        z = entry.z,
-                        w = entry.w,
-                        accuracy = entry.accuracy,
-                        valuesJson = entry.valuesJson,
-                        quarantinedAt = quarantinedAt,
-                        reason = error.javaClass.simpleName.ifBlank { "MappingFailure" },
-                    )
-                }
-                dao.quarantineMalformed(deadLetters, deadLetters.map { it.sampleId })
+                quarantineMalformedSensorSamples(dao, diagnostics, malformed)
             },
         )
 
@@ -488,6 +521,7 @@ class SensorUploadWorkerDelegate(
             maxDeadLetterCount: Int = MAX_DEAD_LETTER_COUNT,
             deleteChunkSize: Int = SENSOR_CLEANUP_DELETE_CHUNK_SIZE,
             reportDrop: (String) -> Unit = { message -> Log.w(TAG, message) },
+            diagnostics: LocalUploadDiagnosticsStore? = null,
         ): SensorCleanupResult {
             require(maxSampleCount >= 0) { "maxSampleCount must be non-negative" }
             require(maxDeadLetterCount >= 0) { "maxDeadLetterCount must be non-negative" }
@@ -535,6 +569,7 @@ class SensorUploadWorkerDelegate(
                     "FORCED DEAD-LETTER DROP: permanently removed $dropped quarantined sensor " +
                         "sample(s) to enforce the configured $maxDeadLetterCount-row DoS bound",
                 )
+                recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_DEAD_LETTER_DROPPED, dropped)
                 dropped
             } else 0
 

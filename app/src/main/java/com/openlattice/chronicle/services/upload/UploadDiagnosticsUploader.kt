@@ -46,6 +46,11 @@ internal class UploadDiagnosticsUploader(
                 0
             }
         } catch (error: Exception) {
+            if ((error as? retrofit2.HttpException)?.code() == 400) {
+                // A server older than V104 rejects the whole batch over one newer code. Shed only
+                // those buckets so the older upload-failure buckets go through on the next run.
+                store.dropUnsupportedByLegacyServer(events.mapTo(linkedSetOf()) { it.id })
+            }
             // Intentionally do not call LocalUploadDiagnosticsStore.recordFailure here: a
             // diagnostic-delivery failure must not create a recursive diagnostic loop.
             Log.w(UPLOAD_DIAGNOSTICS_TAG, "Upload diagnostics remain queued for retry", error)

@@ -34,6 +34,19 @@ class LocalUploadDiagnosticsStoreTest {
     }
 
     @Test
+    fun legacyServerRejectionShedsOnlyTheNewerCodes() {
+        val persistence = FakePersistence()
+        val store = LocalUploadDiagnosticsStore(persistence)
+        val day = LocalDate.now()
+        store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
+        store.recordOperational(LocalUploadModuleFamily.APP_RUNTIME, LocalOperationalIssue.APP_CRASH)
+
+        store.dropUnsupportedByLegacyServer(store.pending(day).mapTo(mutableSetOf()) { it.id })
+
+        assertEquals(listOf("DESTINATION_MISSING"), store.pending(day).map { it.issue })
+    }
+
+    @Test
     fun historyIsBoundedValidatedAndClearedAtTheEnrollmentBoundary() {
         val persistence = FakePersistence().apply {
             buckets = listOf(

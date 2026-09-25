@@ -24,7 +24,31 @@ enum class LocalUploadModuleFamily {
     USAGE_LIFECYCLE,
     BATTERY,
     DEVICE_TELEMETRY,
+    SENSOR,
+    APP_RUNTIME,
 }
+
+/** Closed operational counts that are not upload failures: dead letters and process exits. */
+enum class LocalOperationalIssue {
+    SENSOR_SAMPLE_QUARANTINED,
+    SENSOR_DEAD_LETTER_DROPPED,
+    APP_CRASH,
+    APP_CRASH_NATIVE,
+    APP_ANR,
+}
+
+/** Families and codes an older server (before V104) accepts; anything else it rejects with 400. */
+internal val LEGACY_SERVER_MODULE_FAMILIES = setOf("USAGE_LIFECYCLE", "BATTERY", "DEVICE_TELEMETRY")
+internal val LEGACY_SERVER_ISSUE_CODES: Set<String> =
+    UploadDestinationIssue.entries.mapTo(mutableSetOf()) { it.name } + setOf(
+        "HTTP_SERVER_ERROR",
+        "HTTP_CLIENT_ERROR",
+        "TIMEOUT",
+        "DNS_FAILURE",
+        "TLS_FAILURE",
+        "CONNECTION_FAILURE",
+        "UPLOAD_FAILURE",
+    )
 
 /** Bounded local aggregate awaiting authenticated delivery to the enrolled study server. */
 data class LocalUploadIssueBucket(
@@ -70,6 +94,18 @@ class LocalUploadDiagnosticsStore(
         )
     }
 
+    /** Adds [count] occurrences of a closed operational issue (no payload or message text). */
+    fun recordOperational(
+        moduleFamily: LocalUploadModuleFamily,
+        issue: LocalOperationalIssue,
+        count: Int = 1,
+        occurredAt: OffsetDateTime = OffsetDateTime.now(ZoneOffset.UTC),
+        day: LocalDate = occurredAt.atZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDate(),
+    ) {
+        if (count <= 0) return
+        recordRedacted(moduleFamily, issue.name, day = day, occurredAt = occurredAt, count = count)
+    }
+
     private fun recordRedacted(
         moduleFamily: LocalUploadModuleFamily,
         issueCode: String,
@@ -77,6 +113,7 @@ class LocalUploadDiagnosticsStore(
         occurredAt: OffsetDateTime = OffsetDateTime.now(ZoneOffset.UTC),
         httpStatus: Int? = null,
         errorType: String? = null,
+        count: Int = 1,
     ) {
         synchronized(mutationLock) {
             val cutoff = day.minusDays(RETENTION_DAYS - 1)
@@ -87,15 +124,23 @@ class LocalUploadDiagnosticsStore(
             val key = stableKey(
                 day.toString(), moduleFamily.name, issueCode, httpStatus, errorType,
             )
-            val prior = merged[key]?.count ?: 0
+            val prior = merged[key]
+            val firstOccurredAt = listOfNotNull(
+                prior?.firstOccurredAt?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() },
+                occurredAt,
+            ).min()
+            val lastOccurredAt = listOfNotNull(
+                prior?.lastOccurredAt?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() },
+                occurredAt,
+            ).max()
             merged[key] = LocalUploadIssueBucket(
                 day = day.toString(),
                 moduleFamily = moduleFamily.name,
                 issue = issueCode,
-                count = if (prior >= Int.MAX_VALUE) Int.MAX_VALUE else prior + 1,
-                id = merged[key]?.id ?: UUID.randomUUID().toString(),
-                firstOccurredAt = merged[key]?.firstOccurredAt ?: occurredAt.toString(),
-                lastOccurredAt = occurredAt.toString(),
+                count = ((prior?.count ?: 0).toLong() + count).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                id = prior?.id ?: UUID.randomUUID().toString(),
+                firstOccurredAt = firstOccurredAt.toString(),
+                lastOccurredAt = lastOccurredAt.toString(),
                 httpStatus = httpStatus,
                 errorType = errorType,
             )
@@ -142,6 +187,21 @@ class LocalUploadDiagnosticsStore(
             .take(MAX_LOCAL_BUCKETS)
         if (retained != loaded) persistence.save(retained)
         return retained
+    }
+
+    /** Drops buckets a pre-V104 server cannot store, so they stop blocking the legacy ones. */
+    fun dropUnsupportedByLegacyServer(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        synchronized(mutationLock) {
+            persistence.save(
+                persistence.load().filterNot { bucket ->
+                    bucket.id in ids && (
+                        bucket.moduleFamily !in LEGACY_SERVER_MODULE_FAMILIES ||
+                            bucket.issue !in LEGACY_SERVER_ISSUE_CODES
+                        )
+                },
+            )
+        }
     }
 
     fun acknowledge(ids: Set<String>) {
@@ -205,19 +265,8 @@ class LocalUploadDiagnosticsStore(
 
     companion object {
         private val mutationLock = Any()
-        private val ALLOWED_ISSUE_CODES = UploadDestinationIssue.entries.mapTo(mutableSetOf()) { it.name }.apply {
-            addAll(
-                setOf(
-                    "HTTP_SERVER_ERROR",
-                    "HTTP_CLIENT_ERROR",
-                    "TIMEOUT",
-                    "DNS_FAILURE",
-                    "TLS_FAILURE",
-                    "CONNECTION_FAILURE",
-                    "UPLOAD_FAILURE",
-                ),
-            )
-        }
+        private val ALLOWED_ISSUE_CODES =
+            LEGACY_SERVER_ISSUE_CODES + LocalOperationalIssue.entries.map { it.name }
         private const val MAX_UPLOAD_BATCH = 500
         private const val MAX_LOCAL_BUCKETS = 500
         private const val MAX_ERROR_TYPE_LENGTH = 128

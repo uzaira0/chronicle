@@ -172,8 +172,8 @@ public class UploadTelemetryCollectionModule(
                 addWorkStatus("immediateUpload", snap.immediateWork)
                 // WorkManager exposes no next-fire wall-clock time; honestly untracked.
                 add("nextScheduledUploadEpochMs")
-                // Malformed sensor-row counts are produced per-run by
-                // SensorUploadWorkerDelegate; no cross-run local counter persists them.
+                // Malformed sensor rows are counted in the app's LocalUploadDiagnosticsStore
+                // (SENSOR_SAMPLE_QUARANTINED) and uploaded from there, not in this snapshot.
                 add("malformedRowCount")
             },
         )
