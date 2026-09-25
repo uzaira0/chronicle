@@ -101,4 +101,30 @@ class IdentifyUserNotificationPermissionTest {
             assertFalse(state.needsNotificationRecovery)
         }
     }
+
+    @Test
+    fun silentPromptChannelKeepsIdentificationRunningButSurfacesTheFix() {
+        val state = userIdentificationRuntimeState(
+            authorized = true,
+            preferenceEnabled = true,
+            notificationPermissionGranted = true,
+            promptPopsUp = false,
+        )
+
+        assertTrue(state.effective)
+        assertTrue(state.promptSilent)
+        assertFalse(state.needsNotificationRecovery)
+    }
+
+    @Test
+    fun silentChannelIsNotReportedWhileIdentificationIsOff() {
+        val state = userIdentificationRuntimeState(
+            authorized = true,
+            preferenceEnabled = false,
+            notificationPermissionGranted = true,
+            promptPopsUp = false,
+        )
+
+        assertFalse(state.promptSilent)
+    }
 }

@@ -5,12 +5,9 @@ import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.StatusBarNotification
 import android.os.Build
 import android.util.Log
-import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.NotificationEventType
-import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.audio.AudioCaptureController
-import com.openlattice.chronicle.collection.identification.TargetUserRouter
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.storage.ChronicleDb
@@ -45,25 +42,6 @@ class NotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return
-
-        // When notification to identify user has been posted, unassign current user. If user ignores
-        // notification, subsequent usage events will be assumed to belong to an 'unidentified user'.
-        if (
-            sbn.packageName == applicationContext.packageName &&
-            sbn.tag == IDENTIFY_USER_NOTIFICATION_TAG &&
-            sbn.id == applicationContext.resources.getInteger(R.integer.identify_user_notification_id)
-        ) {
-            Log.i(javaClass.name, "User identification notification posted.")
-            executeIo("target-user reset") {
-                val result = TargetUserRouter.setTargetUser(
-                    applicationContext,
-                    applicationContext.getString(R.string.user_unassigned),
-                )
-                if (result !is ModuleResult.Ok) {
-                    Log.w(javaClass.name, "Target-user reset failed: ${result.label}")
-                }
-            }
-        }
 
         recordNotificationActivity(sbn, NotificationEventType.POSTED)
     }

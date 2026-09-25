@@ -37,6 +37,12 @@ import java.util.concurrent.TimeUnit
 const val NOTIFICATIONS_INTERVAL_MIN = 15L
 const val NOTIFICATION_DELETED_ACTION = "NOTIFICATION_DELETED"
 const val CHANNEL_ID = "Chronicle"
+
+/** Unlock "who is using the device" prompts: own channel so muting surveys never mutes them. */
+const val IDENTIFY_USER_CHANNEL_ID = "chronicle_identify_user"
+
+/** Ongoing foreground notification of the unlock monitor: silent, so participants do not mute Chronicle. */
+const val UNLOCK_MONITORING_CHANNEL_ID = "chronicle_unlock_monitoring"
 const val NOTIFICATION_DETAILS = "NOTIFICATION_DETAILS"
 const val SURVEY_NOTIFICATION_ACTION = "SURVEY_NOTIFICATION_ACTION"
 

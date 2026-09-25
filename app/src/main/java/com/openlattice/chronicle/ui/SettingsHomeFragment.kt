@@ -2,10 +2,8 @@ package com.openlattice.chronicle.ui
 
 import android.Manifest
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.LinearLayout
@@ -32,19 +30,22 @@ import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.CollectionModuleState
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-import com.openlattice.chronicle.padForSystemBars
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
+import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.UnlockMonitoringRuntimeStatus
 import com.openlattice.chronicle.services.notifications.hasNotificationPermission
 import com.openlattice.chronicle.services.notifications.hasPostNotificationsRuntimePermission
+import com.openlattice.chronicle.services.notifications.notificationPopsUp
+import com.openlattice.chronicle.services.notifications.notificationSettingsIntent
 import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.services.withdrawal.WithdrawalState
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
+import com.openlattice.chronicle.utils.ExternalLinks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,7 +73,6 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        view.findViewById<View>(R.id.settingsHomeContent).padForSystemBars()
         settings = EnrollmentSettings(requireContext())
         if (BuildConfig.DISTRIBUTION_CHANNEL == "PLAY") {
             // Play participants can see the one active study/server identity below, but cannot
@@ -109,7 +109,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                 identifyUserNotificationAction(
                     sdkInt = Build.VERSION.SDK_INT,
                     runtimePermissionGranted = hasPostNotificationsRuntimePermission(requireContext()),
-                    notificationsEnabled = hasNotificationPermission(requireContext()),
+                    notificationsEnabled = hasNotificationPermission(requireContext(), IDENTIFY_USER_CHANNEL_ID),
                 )
             ) {
                 IdentifyUserNotificationAction.PROCEED -> showIdentifyUserDisclosure(toggle)
@@ -119,7 +119,11 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             }
         }
 
-        view.findViewById<MaterialButtonToggleGroup>(R.id.deviceUserGroup)
+        view.findViewById<MaterialButtonToggleGroup>(R.id.deviceUserGroup).apply {
+            // The toggle group forces each child to one ellipsized line when it is added; the
+            // stacked full-width choices wrap instead, so long translations and large fonts fit.
+            for (index in 0 until childCount) (getChildAt(index) as TextView).maxLines = Int.MAX_VALUE
+        }
             .addOnButtonCheckedListener { _, checkedId, isChecked ->
                 if (!isChecked || refreshingControls) return@addOnButtonCheckedListener
                 val user = when (checkedId) {
@@ -129,6 +133,10 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                 }
                 persistTargetUser(user)
             }
+
+        view.findViewById<MaterialButton>(R.id.identifyUserNotificationSettingsButton).setOnClickListener {
+            openIdentifyUserNotificationSettings()
+        }
 
         if (notificationAccessControlVisible(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)) {
             view.findViewById<SwitchMaterial>(R.id.notificationAccessSwitch)
@@ -151,24 +159,17 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             startActivity(Intent(requireContext(), ServerEnrollmentActivity::class.java))
         }
         view.findViewById<MaterialButton>(R.id.privacyPolicyButton).setOnClickListener {
-            val privacy = Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse(getString(R.string.platform_privacy_policy_url)),
-            )
-            if (privacy.resolveActivity(requireContext().packageManager) != null) startActivity(privacy)
+            ExternalLinks.openHttps(requireContext(), getString(R.string.platform_privacy_policy_url))
         }
         view.findViewById<MaterialButton>(R.id.studyPrivacyPolicyButton).setOnClickListener {
-            activeStudyPrivacyUrl?.let { url ->
-                val privacy = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                if (privacy.resolveActivity(requireContext().packageManager) != null) startActivity(privacy)
-            }
+            activeStudyPrivacyUrl?.let { url -> ExternalLinks.openHttps(requireContext(), url) }
         }
     }
 
     private fun setIdentifyUserEnabled(enabled: Boolean) {
         val context = requireContext()
         val appContext = context.applicationContext
-        if (enabled && !hasNotificationPermission(appContext)) {
+        if (enabled && !hasNotificationPermission(appContext, IDENTIFY_USER_CHANNEL_ID)) {
             view?.findViewById<SwitchMaterial>(R.id.identifyUserSwitch)?.isChecked = false
             showNotificationPermissionRecovery()
             return
@@ -236,14 +237,16 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             .setMessage(R.string.settings_notifications_body)
             .setNegativeButton(android.R.string.cancel) { _, _ -> view?.let(::refresh) }
             .setPositiveButton(R.string.settings_open_notification_settings) { _, _ ->
-                DeviceSettingsNavigator.open(
-                    requireContext(),
-                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                        putExtra(Settings.EXTRA_APP_PACKAGE, requireContext().packageName)
-                    },
-                )
+                openIdentifyUserNotificationSettings()
             }
             .show()
+    }
+
+    private fun openIdentifyUserNotificationSettings() {
+        DeviceSettingsNavigator.open(
+            requireContext(),
+            notificationSettingsIntent(requireContext(), IDENTIFY_USER_CHANNEL_ID),
+        )
     }
 
     private fun persistTargetUser(user: String) {
@@ -278,6 +281,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             isEnabled = false
         }
         view.findViewById<TextView>(R.id.identifyUserStatus).visibility = View.GONE
+        view.findViewById<MaterialButton>(R.id.identifyUserNotificationSettingsButton).visibility = View.GONE
         view.findViewById<MaterialButtonToggleGroup>(R.id.deviceUserGroup).apply {
             visibility = View.GONE
             isEnabled = false
@@ -305,7 +309,8 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                     activeEnrollment = activeEnrollment,
                     userIdentificationAuthorized = userIdentificationAuthorized,
                     userIdentificationPreferenceEnabled = userIdentificationPreferenceEnabled,
-                    notificationPermissionGranted = hasNotificationPermission(appContext),
+                    notificationPermissionGranted = hasNotificationPermission(appContext, IDENTIFY_USER_CHANNEL_ID),
+                    promptPopsUp = notificationPopsUp(appContext, IDENTIFY_USER_CHANNEL_ID),
                     runtimeStartDeferred = UnlockMonitoringRuntimeStatus.isDeferred(appContext),
                     snapshot = DashboardDataRepository.load(appContext),
                 )
@@ -323,6 +328,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             preferenceEnabled = state.userIdentificationPreferenceEnabled,
             notificationPermissionGranted = state.notificationPermissionGranted,
             runtimeStartDeferred = state.runtimeStartDeferred,
+            promptPopsUp = state.promptPopsUp,
         )
         val userIdentificationControls = userIdentificationControlState(
             activeEnrollment = activeEnrollment,
@@ -343,11 +349,17 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                         getString(R.string.identify_user_status_notification_recovery)
                     userIdentificationRuntime.startDeferred ->
                         getString(R.string.identify_user_status_start_deferred)
+                    userIdentificationRuntime.promptSilent ->
+                        getString(R.string.identify_user_status_silent)
                     userIdentificationRuntime.effective ->
                         getString(R.string.identify_user_status_active)
                     else -> getString(R.string.identify_user_status_off)
                 }
             }
+            view.findViewById<MaterialButton>(R.id.identifyUserNotificationSettingsButton).visibility =
+                if (userIdentificationControls.visible &&
+                    (userIdentificationRuntime.needsNotificationRecovery || userIdentificationRuntime.promptSilent)
+                ) View.VISIBLE else View.GONE
             val currentUser = settings.getCurrentUser()
             view.findViewById<MaterialButtonToggleGroup>(R.id.deviceUserGroup).apply {
                 visibility = if (userIdentificationControls.visible) View.VISIBLE else View.GONE
@@ -533,6 +545,7 @@ private data class SettingsRefreshState(
     val userIdentificationAuthorized: Boolean,
     val userIdentificationPreferenceEnabled: Boolean,
     val notificationPermissionGranted: Boolean,
+    val promptPopsUp: Boolean,
     val runtimeStartDeferred: Boolean,
     val snapshot: DashboardSnapshot,
 )
@@ -541,6 +554,8 @@ internal data class UserIdentificationRuntimeState(
     val effective: Boolean,
     val needsNotificationRecovery: Boolean,
     val startDeferred: Boolean,
+    /** Running, but the prompt channel is Silent or not "Pop on screen": prompts land unseen in the shade. */
+    val promptSilent: Boolean = false,
 )
 
 internal fun userIdentificationRuntimeState(
@@ -548,11 +563,16 @@ internal fun userIdentificationRuntimeState(
     preferenceEnabled: Boolean,
     notificationPermissionGranted: Boolean,
     runtimeStartDeferred: Boolean = false,
-): UserIdentificationRuntimeState = UserIdentificationRuntimeState(
-    effective = authorized && preferenceEnabled && notificationPermissionGranted && !runtimeStartDeferred,
-    needsNotificationRecovery = authorized && preferenceEnabled && !notificationPermissionGranted,
-    startDeferred = authorized && preferenceEnabled && notificationPermissionGranted && runtimeStartDeferred,
-)
+    promptPopsUp: Boolean = true,
+): UserIdentificationRuntimeState {
+    val effective = authorized && preferenceEnabled && notificationPermissionGranted && !runtimeStartDeferred
+    return UserIdentificationRuntimeState(
+        effective = effective,
+        needsNotificationRecovery = authorized && preferenceEnabled && !notificationPermissionGranted,
+        startDeferred = authorized && preferenceEnabled && notificationPermissionGranted && runtimeStartDeferred,
+        promptSilent = effective && !promptPopsUp,
+    )
+}
 
 internal data class UserIdentificationControlState(
     val visible: Boolean,

@@ -87,7 +87,18 @@ class DeviceUnlockMonitoringService : Service() {
         super.onCreate()
         // Android requires a service created via startForegroundService to promote promptly.
         // Receivers remain unregistered until the authoritative manifest is checked off-main.
-        startForeground()
+        // A START_STICKY restart after the process was killed happens in the background, where
+        // Android 12+ refuses foreground promotion. Record it as deferred (Settings shows the
+        // "open Chronicle" hint and MainActivity restarts it) instead of crash-looping.
+        try {
+            startForeground()
+        } catch (error: IllegalStateException) {
+            UnlockMonitoringRuntimeStatus.markDeferred(applicationContext, true)
+            Log.w(javaClass.name, "Android refused foreground promotion; unlock monitoring deferred", error)
+            destroyed = true
+            stopSelf()
+            return
+        }
         UnlockMonitoringRuntimeStatus.markDeferred(applicationContext, false)
     }
 
@@ -136,7 +147,7 @@ class DeviceUnlockMonitoringService : Service() {
                 PendingIntent.getActivity(applicationContext, 0, it, getPendingIntentMutabilityFlag(0))
             }
 
-        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(applicationContext, UNLOCK_MONITORING_CHANNEL_ID)
             .setContentTitle(getString(R.string.interactivity_monitoring_notification_title))
             .setContentText(getString(R.string.interactivity_monitoring_notification_message))
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -246,7 +257,7 @@ internal object UnlockMonitoringRuntimeStatus {
 
 /** Study authority, local opt-in, active enrollment, and notification delivery must all hold. */
 internal fun userIdentificationMayRun(context: Context): Boolean =
-    hasNotificationPermission(context.applicationContext) &&
+    hasNotificationPermission(context.applicationContext, IDENTIFY_USER_CHANNEL_ID) &&
         ResearchPersistenceGate.isActiveEnrollment(context.applicationContext) &&
         CollectionGate.collects(
             context.applicationContext,

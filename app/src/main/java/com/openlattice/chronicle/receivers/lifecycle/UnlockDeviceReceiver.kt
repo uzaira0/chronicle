@@ -4,16 +4,16 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.text.format.DateUtils
 import android.util.Log
-import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.UserIdentificationActivity
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-import com.openlattice.chronicle.services.notifications.CHANNEL_ID
+import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.identification.TargetUserRouter
+import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_NOTIFICATION_TAG
 import com.openlattice.chronicle.services.notifications.NOTIFICATION_DELETED_ACTION
@@ -58,34 +58,29 @@ class UnlockDeviceReceiver : BroadcastReceiver() {
             DeviceUnlockMonitoringService.stopService(context)
             return
         }
+        var posted = false
         ResearchPersistenceGate.persistIfActive(context) {
-            postIdentifyNotification(context, intent)
+            posted = postIdentifyNotification(context, intent)
+        }
+        // A posted prompt means the current user is unknown until someone answers it, so usage
+        // from here on is "unassigned" instead of credited to whoever answered last. The original
+        // app did this from a NotificationListener, which needs notification access; Chronicle
+        // posts the prompt itself, so it resets here in every build. Outside persistIfActive:
+        // TargetUserRouter takes the same barrier.
+        if (posted) {
+            val result = TargetUserRouter.setTargetUser(context, context.getString(R.string.user_unassigned))
+            if (result !is ModuleResult.Ok) {
+                Log.w(javaClass.name, "Target-user reset after identify prompt failed: ${result.label}")
+            }
         }
     }
 
-    private fun postIdentifyNotification(context: Context, intent: Intent) {
+    /** Returns true only when the prompt was handed to the notification manager. */
+    private fun postIdentifyNotification(context: Context, intent: Intent): Boolean {
         val action = intent.action
         if (!getValidReceiverActions(context).contains(action)) {
-            return
+            return false
         }
-
-        val layout = RemoteViews(context.packageName, R.layout.notification)
-        layout.setTextViewText(
-            R.id.timestamp,
-            DateUtils.formatDateTime(
-                context,
-                System.currentTimeMillis(),
-                DateUtils.FORMAT_SHOW_TIME
-            )
-        )
-        layout.setTextViewText(
-            R.id.notification_title,
-            context.getString(R.string.on_wake_notification_title)
-        )
-        layout.setTextViewText(
-            R.id.notification_message,
-            context.getString(R.string.on_wake_notification_message)
-        )
 
         // create intent to start UserIdentificationActivity
         val userIdentificationIntent =
@@ -100,15 +95,21 @@ class UnlockDeviceReceiver : BroadcastReceiver() {
                 getPendingIntentMutabilityFlag(PendingIntent.FLAG_UPDATE_CURRENT)
             )
 
-        val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
+        // Standard template, not a custom RemoteViews layout: Android 12+ wraps custom layouts in
+        // its own header and clips them to ~48dp, which hid the prompt text on newer devices.
+        val message = context.getString(R.string.on_wake_notification_message)
+        val notificationBuilder = NotificationCompat.Builder(context, IDENTIFY_USER_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(ContextCompat.getColor(context, R.color.colorPrimary))
-            .setCustomContentView(layout)
-            .setCustomBigContentView(layout)
+            .setContentTitle(context.getString(R.string.on_wake_notification_title))
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setShowWhen(true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setContentIntent(pendingIntent)
             .setDeleteIntent(createOnDismissedIntent())
-//            .setDefaults(NotificationCompat.DEFAULT_VIBRATE)
             .setAutoCancel(true) // remove when user taps on notification
 
         // POST_NOTIFICATIONS (API 33+) is a runtime permission the user may have denied; NotificationManagerCompat.notify
@@ -123,8 +124,9 @@ class UnlockDeviceReceiver : BroadcastReceiver() {
                 )
         } catch (e: SecurityException) {
             Log.w(javaClass.name, "Identify-user notification suppressed (POST_NOTIFICATIONS not granted)", e)
+            return false
         }
-
+        return true
     }
 
     private fun createOnDismissedIntent(): PendingIntent {

@@ -17,6 +17,8 @@ import com.openlattice.chronicle.R
 import com.openlattice.chronicle.constants.NotificationType
 import com.openlattice.chronicle.security.MobileApiSigningInterceptor
 import com.openlattice.chronicle.services.notifications.CHANNEL_ID
+import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
+import com.openlattice.chronicle.services.notifications.UNLOCK_MONITORING_CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.NotificationDetails
 import com.openlattice.chronicle.serialization.ChronicleCallAdapterFactory
 import com.openlattice.chronicle.serialization.ChronicleJson
@@ -307,10 +309,20 @@ object Utils {
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = channelDescription
             }
-            //register channel
+            val identifyUser = NotificationChannel(
+                IDENTIFY_USER_CHANNEL_ID,
+                context.getString(R.string.identify_user_channel_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply { description = context.getString(R.string.identify_user_channel_description) }
+            val unlockMonitoring = NotificationChannel(
+                UNLOCK_MONITORING_CHANNEL_ID,
+                context.getString(R.string.unlock_monitoring_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = context.getString(R.string.unlock_monitoring_channel_description) }
+            //register channels
             val notificationManager: NotificationManager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
+            notificationManager.createNotificationChannels(listOf(channel, identifyUser, unlockMonitoring))
         }
     }
 

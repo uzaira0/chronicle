@@ -7,9 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
-import android.text.format.DateUtils
 import android.util.Log
-import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -69,24 +67,14 @@ class SurveyNotificationsReceiver : BroadcastReceiver() {
                 getPendingIntentMutabilityFlag(PendingIntent.FLAG_UPDATE_CURRENT),
             )
 
-        // layout to use in custom notification
-        val notificationLayout = RemoteViews(context.packageName, R.layout.notification)
-        notificationLayout.setTextViewText(
-            R.id.timestamp,
-            DateUtils.formatDateTime(
-                context,
-                System.currentTimeMillis(),
-                DateUtils.FORMAT_SHOW_TIME
-            )
-        )
-        notificationLayout.setTextViewText(R.id.notification_title, notification.title)
-        notificationLayout.setTextViewText(R.id.notification_message, notification.message)
-
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(ContextCompat.getColor(context, R.color.colorPrimary))
-            .setCustomContentView(notificationLayout)
-            .setCustomBigContentView(notificationLayout)
+            // Standard template: Android 12+ clips custom RemoteViews layouts to ~48dp.
+            .setContentTitle(notification.title)
+            .setContentText(notification.message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(notification.message))
+            .setShowWhen(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH) //support android 7.1
             .setContentIntent(pendingIntent)
             .setDefaults(Notification.DEFAULT_VIBRATE)

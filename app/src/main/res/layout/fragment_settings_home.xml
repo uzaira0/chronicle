@@ -46,38 +46,54 @@
             android:textAppearance="@style/Chronicle.Body"
             android:visibility="gone" />
 
+        <!-- Shown while notifications are off or the prompt channel no longer pops on screen;
+             opens the exact system page that fixes it (app page or channel page). -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/identifyUserNotificationSettingsButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="56dp"
+            android:text="@string/settings_open_notification_settings"
+            android:visibility="gone" />
+
+        <!-- One full-width choice per row, 16dp apart: a side-by-side row cut "Target child"
+             off on ordinary phones and put three small targets next to each other. -->
         <com.google.android.material.button.MaterialButtonToggleGroup
             android:id="@+id/deviceUserGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:background="@drawable/bg_panel"
+            android:orientation="vertical"
             android:padding="8dp"
+            android:spacing="@dimen/eq_space_4"
             app:singleSelection="true"
             xmlns:app="http://schemas.android.com/apk/res-auto">
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/deviceUserUnset"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
                 android:text="@string/user_unassigned" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/deviceUserChild"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
                 android:text="@string/user_target_child" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/deviceUserOther"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
                 android:text="@string/user_other" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
 
