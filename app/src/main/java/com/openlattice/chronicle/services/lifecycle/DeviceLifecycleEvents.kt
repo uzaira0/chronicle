@@ -130,6 +130,7 @@ object DeviceLifecycleEventRecorder {
             Log.d(TAG, "Skipping lifecycle event because participant is not enrolled")
             return true
         }
+        val expectedOwner = ResearchPersistenceGate.captureOwner(context)
 
         val now = System.currentTimeMillis()
         val filteredEvents = events.filter { shouldPersist(context, it, now) }
@@ -144,6 +145,15 @@ object DeviceLifecycleEventRecorder {
         val persisted = ResearchPersistenceGate.persistIfCollecting(
             context,
             CollectionModuleId.DEVICE_LIFECYCLE,
+            records = filteredEvents.size,
+            expectedOwner = expectedOwner,
+            onRefused = { count ->
+                com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore.of(context).recordOperational(
+                    com.openlattice.chronicle.services.upload.LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                    com.openlattice.chronicle.services.upload.LocalOperationalIssue.COLLECTION_GATE_DROPPED,
+                    count,
+                )
+            },
         ) {
             db.queueEntryData().insertEntry(entry)
             Utils.updateUploadQueueSize(context, db.queueEntryData().getSize())

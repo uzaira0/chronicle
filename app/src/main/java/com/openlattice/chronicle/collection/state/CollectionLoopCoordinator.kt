@@ -33,6 +33,9 @@ import com.openlattice.chronicle.collection.settings.EncryptedPrefsSensorSetting
 import com.openlattice.chronicle.collection.settings.ResolvedModuleSetting
 import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
 import com.openlattice.chronicle.preferences.SensorSettings
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordPolicyErasureInTransaction
 import com.openlattice.chronicle.sensors.SensorTypeMapping
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EnrollmentSettings
@@ -191,8 +194,6 @@ class CollectionLoopCoordinator(context: Context) {
         private const val NOTIFICATION_ID_ACK = 47_001
         private const val NOTIFICATION_ID_SCOPE = 47_002
         private const val NOTIFICATION_ID_INFORM = 47_003
-        /** Cap on a HOLD_PENDING queue so a held module's data can't grow unbounded. */
-        const val HOLD_PENDING_CAP = 5_000
 
         /**
          * Drops per-sensor modules whose hardware this device does not physically have from
@@ -823,14 +824,11 @@ class CollectionLoopCoordinator(context: Context) {
     /**
      * Applies a disable disposition to the module's pending on-device queue.
      * FLUSH_THEN_STOP enqueues an immediate upload (no data loss); DISCARD_AND_STOP drops
-     * the module's pending queue; HOLD_PENDING retains it (the queue's existing retention +
-     * the gate keep it bounded — a held module no longer collects).
+     * the module's pending queue; HOLD_PENDING retains it while collection stops.
      *
      * Dedicated queues are cleared independently. Sensor rows carry their sensor type and are
-     * deleted per type. Usage, in-app activity, and lifecycle rows still share an untagged
-     * `dataQueue`; there the privacy-correct fallback is to clear the whole shared queue. That may
-     * discard sibling pending rows, but it never uploads data after the participant was promised
-     * DISCARD_AND_STOP. A future tagged queue can make that deletion selective.
+     * deleted per type. Usage, in-app activity, and lifecycle rows share `dataQueue`; the
+     * shared-queue eraser retains sibling samples and redacts only the disabled activity field.
      */
     private fun applyDisposition(moduleId: CollectionModuleId, disposition: CollectionDataDisposition) {
         // The pure policy (which queue, whether DISCARD is honorable, flush vs retain) is decided
@@ -843,6 +841,14 @@ class CollectionLoopCoordinator(context: Context) {
             is DispositionAction.ClearDedicated -> {
                 UploadQueueSingleFlight.withExclusiveMutation {
                     val db = ChronicleDb.getInstance(appContext)
+                    db.runInTransaction {
+                        val table = dispositionQueueTable(action.queue)
+                        if (table != null && action.queue != DispositionQueue.SHARED_DATA_QUEUE) {
+                            recordPolicyErasureInTransaction(
+                                db, table, dispositionQueueFamily(action.queue),
+                                LocalOperationalIssue.MODULE_POLICY_ERASED,
+                            )
+                        }
                     when (action.queue) {
                     DispositionQueue.BATTERY_SAMPLES -> {
                         Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': dropping battery_samples")
@@ -853,8 +859,8 @@ class CollectionLoopCoordinator(context: Context) {
                         db.userQueueEntryData().deleteAll()
                     }
                     DispositionQueue.SHARED_DATA_QUEUE -> {
-                        Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': dropping untagged shared dataQueue")
-                        db.queueEntryData().deleteAll()
+                        Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': erasing only known module samples")
+                        eraseSharedQueueModule(db, moduleId)
                     }
                     DispositionQueue.INTERACTION_SAMPLES,
                     DispositionQueue.AUDIO_ACTIVITY_SAMPLES,
@@ -876,12 +882,27 @@ class CollectionLoopCoordinator(context: Context) {
                     DispositionQueue.DEVICE_SETTINGS_SAMPLES -> db.deviceSettingsSampleDao().deleteAll()
                         DispositionQueue.NONE -> Unit
                     }
+                    }
                 }
             }
             is DispositionAction.ClearSensor -> {
                 UploadQueueSingleFlight.withExclusiveMutation {
                     Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': dropping only ${action.sensorType} rows")
-                    ChronicleDb.getInstance(appContext).sensorSampleDao().deleteBySensorType(action.sensorType)
+                    DistributionRestrictedRuntime.eraseDirectBootSensorSamples(appContext, action.sensorType)
+                    val db = ChronicleDb.getInstance(appContext)
+                    db.runInTransaction {
+                        recordPolicyErasureInTransaction(
+                            db, "sensor_samples", LocalUploadModuleFamily.SENSOR,
+                            LocalOperationalIssue.MODULE_POLICY_ERASED,
+                            "sensorType = ?", arrayOf(action.sensorType),
+                        )
+                        recordPolicyErasureInTransaction(
+                            db, "sensor_sample_dead_letters", LocalUploadModuleFamily.SENSOR,
+                            LocalOperationalIssue.MODULE_POLICY_ERASED,
+                            "sensorType = ?", arrayOf(action.sensorType),
+                        )
+                        db.sensorSampleDao().deleteBySensorType(action.sensorType)
+                    }
                 }
             }
             DispositionAction.NoDedicatedQueue ->
@@ -1300,6 +1321,33 @@ internal fun restrictedQueueTable(queue: DispositionQueue): String = when (queue
     DispositionQueue.ACTIVITY_RECOGNITION_SAMPLES -> "activity_recognition_samples"
     DispositionQueue.HEALTH_METRIC_SAMPLES -> "health_metric_samples"
     else -> error("Queue is not a restricted legacy table: $queue")
+}
+
+internal fun dispositionQueueTable(queue: DispositionQueue): String? = when (queue) {
+    DispositionQueue.BATTERY_SAMPLES -> "battery_samples"
+    DispositionQueue.USER_QUEUE -> "userQueue"
+    DispositionQueue.SHARED_DATA_QUEUE -> "dataQueue"
+    DispositionQueue.CONNECTIVITY_STATE_SAMPLES -> "connectivity_state_samples"
+    DispositionQueue.APP_NETWORK_USAGE_SAMPLES -> "app_network_usage_samples"
+    DispositionQueue.DEVICE_SETTINGS_SAMPLES -> "device_settings_samples"
+    DispositionQueue.NONE -> null
+    else -> restrictedQueueTable(queue)
+}
+
+internal fun dispositionQueueFamily(queue: DispositionQueue): LocalUploadModuleFamily = when (queue) {
+    DispositionQueue.BATTERY_SAMPLES -> LocalUploadModuleFamily.BATTERY
+    DispositionQueue.USER_QUEUE, DispositionQueue.SHARED_DATA_QUEUE -> LocalUploadModuleFamily.USAGE_LIFECYCLE
+    DispositionQueue.INTERACTION_SAMPLES -> LocalUploadModuleFamily.INTERACTION
+    DispositionQueue.AUDIO_ACTIVITY_SAMPLES -> LocalUploadModuleFamily.AUDIO_ACTIVITY
+    DispositionQueue.AUDIO_CONTENT_SAMPLES -> LocalUploadModuleFamily.AUDIO_CONTENT
+    DispositionQueue.NOTIFICATION_ACTIVITY_SAMPLES -> LocalUploadModuleFamily.NOTIFICATION
+    DispositionQueue.SLEEP_SAMPLES -> LocalUploadModuleFamily.SLEEP
+    DispositionQueue.ACTIVITY_RECOGNITION_SAMPLES -> LocalUploadModuleFamily.ACTIVITY_RECOGNITION
+    DispositionQueue.HEALTH_METRIC_SAMPLES -> LocalUploadModuleFamily.HEALTH
+    DispositionQueue.CONNECTIVITY_STATE_SAMPLES -> LocalUploadModuleFamily.CONNECTIVITY
+    DispositionQueue.APP_NETWORK_USAGE_SAMPLES -> LocalUploadModuleFamily.APP_NETWORK
+    DispositionQueue.DEVICE_SETTINGS_SAMPLES -> LocalUploadModuleFamily.DEVICE_SETTINGS
+    DispositionQueue.NONE -> LocalUploadModuleFamily.LOCAL_STORE
 }
 
 /**

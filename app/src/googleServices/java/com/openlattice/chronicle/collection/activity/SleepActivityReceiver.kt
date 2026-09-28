@@ -21,6 +21,8 @@ import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.SleepSampleEntry
 import com.openlattice.chronicle.storage.activityRecognitionSampleDao
 import com.openlattice.chronicle.storage.sleepSampleDao
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordAbandonedGateBatch
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -56,22 +58,24 @@ public class SleepActivityReceiver : BroadcastReceiver() {
 
     private fun handle(appContext: Context, intent: Intent) {
         val db = ChronicleDb.getInstance(appContext)
+        val owner = ResearchPersistenceGate.captureOwner(appContext)
         val nowMillis = System.currentTimeMillis()
         val elapsedNowNanos = SystemClock.elapsedRealtimeNanos()
 
         if (SleepSegmentEvent.hasEvents(intent) || SleepClassifyEvent.hasEvents(intent)) {
             if (CollectionGate.collects(appContext, CollectionModuleId.SLEEP)) {
-                persistSleep(appContext, db, intent)
+                persistSleep(appContext, db, intent, owner)
             }
         }
         if (ActivityTransitionResult.hasResult(intent)) {
             if (CollectionGate.collects(appContext, CollectionModuleId.ACTIVITY_RECOGNITION)) {
-                persistActivity(appContext, db, intent, nowMillis, elapsedNowNanos)
+                persistActivity(appContext, db, intent, nowMillis, elapsedNowNanos, owner)
             }
         }
     }
 
-    private fun persistSleep(appContext: Context, db: ChronicleDb, intent: Intent) {
+    private fun persistSleep(appContext: Context, db: ChronicleDb, intent: Intent,
+                             owner: com.openlattice.chronicle.storage.UploadServerEntity?) {
         val rows = mutableListOf<SleepSampleEntry>()
         if (SleepSegmentEvent.hasEvents(intent)) {
             for (e in SleepSegmentEvent.extractEvents(intent)) {
@@ -110,6 +114,7 @@ public class SleepActivityReceiver : BroadcastReceiver() {
                 db.sleepSampleDao(),
                 persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.SLEEP),
             ).write(rows)
+            recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.SLEEP, result, rows.size)
             logWrite(writeOutcome("sleep sample(s)", rows.size, result))
         }
     }
@@ -120,6 +125,7 @@ public class SleepActivityReceiver : BroadcastReceiver() {
         intent: Intent,
         nowMillis: Long,
         elapsedNowNanos: Long,
+        owner: com.openlattice.chronicle.storage.UploadServerEntity?,
     ) {
         val result = ActivityTransitionResult.extractResult(intent) ?: return
         val rows = result.transitionEvents.map { ev ->
@@ -140,6 +146,7 @@ public class SleepActivityReceiver : BroadcastReceiver() {
                 db.activityRecognitionSampleDao(),
                 persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.ACTIVITY_RECOGNITION),
             ).write(rows)
+            recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.ACTIVITY_RECOGNITION, result, rows.size)
             logWrite(writeOutcome("activity transition(s)", rows.size, result))
         }
     }

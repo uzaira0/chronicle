@@ -14,7 +14,7 @@ class InteractionPersistenceExecutorTest {
         val dropped = AtomicInteger()
         val firstStarted = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
-        val executor = BoundedInteractionTaskExecutor(capacity = 1) { dropped.addAndGet(it) }
+        val executor = BoundedInteractionTaskExecutor(capacity = 1, onDropped = { dropped.addAndGet(it) })
 
         assertTrue(executor.execute {
             firstStarted.countDown()

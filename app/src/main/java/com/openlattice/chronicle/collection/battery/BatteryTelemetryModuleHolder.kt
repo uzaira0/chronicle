@@ -3,6 +3,8 @@ package com.openlattice.chronicle.collection.battery
 import android.content.Context
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.sink.BatterySampleSink
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordAbandonedGateBatch
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.data.ParticipationStatus
@@ -55,6 +57,10 @@ public object BatteryTelemetryModuleHolder {
             enrolled = {
                 EnrollmentSettings(appContext).getParticipationStatus() == ParticipationStatus.ENROLLED &&
                     CollectionGate.collects(appContext, CollectionModuleId.BATTERY_TELEMETRY)
+            },
+            ownerForSample = { ResearchPersistenceGate.captureOwner(appContext) },
+            accountWriteResult = { owner, result, count ->
+                recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.BATTERY, result, count)
             },
         )
     }

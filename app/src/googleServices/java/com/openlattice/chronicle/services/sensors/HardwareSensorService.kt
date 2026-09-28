@@ -22,6 +22,8 @@ import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.directboot.DirectBootDrainWorker
+import com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal
+import com.openlattice.chronicle.collection.directboot.DirectBootStorageAdmission
 import com.openlattice.chronicle.collection.directboot.DirectBootProcessInit
 import com.openlattice.chronicle.collection.directboot.DirectBootRuntimeSettings
 import com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer
@@ -29,6 +31,7 @@ import com.openlattice.chronicle.collection.directboot.DirectBootSnapshotWriter
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.StorageAdmission
 import com.openlattice.chronicle.collection.sensors.AndroidSensorGateway
 import com.openlattice.chronicle.collection.sensors.ExecutorSensorRuntimeScheduler
 import com.openlattice.chronicle.collection.sensors.SensorGateway
@@ -41,6 +44,9 @@ import com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver
 import com.openlattice.chronicle.services.lifecycle.DeviceLifecycleEventRecorder
 import com.openlattice.chronicle.services.lifecycle.deviceLifecycleIntentFilter
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 import java.time.OffsetDateTime
 import java.util.concurrent.Executors
@@ -302,7 +308,9 @@ class HardwareSensorService : Service() {
         registerLifecycleReceiver()
         startupExecutor.execute {
             if (destroyed) return@execute
-            controller.stop() // flush remaining direct-boot samples into the DE buffer
+            // A failed final append leaves samples in the old controller. It is replaced
+            // below, so count any retained samples as shutdown loss before abandoning it.
+            controller.stop(isServiceDestroy = true)
             DirectBootDrainWorker.enqueue(applicationContext)
             DirectBootSnapshotWriter.refresh(applicationContext)
             controller = buildController(applicationContext)
@@ -375,7 +383,18 @@ class HardwareSensorService : Service() {
             // legacy path started this service, no sample for a given sensor is persisted until
             // that sensor's module is server-enabled AND acknowledged on-device. Fail-closed.
             collectionGate = { sensorType ->
-                CollectionGate.collects(appContext, SensorCollectionModules.moduleFor(sensorType))
+                CollectionLoopStore.of(appContext).collects(SensorCollectionModules.moduleFor(sensorType))
+            },
+            collectionAdmission = { StorageAdmission.allowed(appContext) },
+            reportLoss = { code, count ->
+                runCatching {
+                    ResearchPersistenceGate.runIfActive(appContext) {
+                        LocalUploadDiagnosticsStore.of(appContext).recordOperational(
+                            LocalUploadModuleFamily.SENSOR, LocalOperationalIssue.valueOf(code), count,
+                        )
+                        true
+                    }
+                }.onFailure { Log.e(TAG, "Unable to record sensor loss", it) }
             },
         )
         return built
@@ -426,6 +445,12 @@ class HardwareSensorService : Service() {
             // The snapshot set already has the consent gate applied (it is written from live
             // gate reads in unlocked mode), and gate state cannot change while still locked.
             collectionGate = { sensorType -> sensorType in collectable },
+            collectionAdmission = { DirectBootStorageAdmission.allowed(appContext, buffer) },
+            reportLoss = { code, count ->
+                runCatching { DirectBootDiagnosticsJournal(appContext).record(code, count) }
+                    .onFailure { Log.e(TAG, "Unable to journal direct-boot sensor loss", it) }
+            },
+            zeroWrittenIsCountedLoss = true,
         )
         return built
     }
@@ -446,6 +471,7 @@ class HardwareSensorService : Service() {
         // the snapshot rewrite reads credential-encrypted state.
         if (!directBootMode && ::controller.isInitialized && controller.isStarted) {
             controller.reconcile()
+            DirectBootDrainWorker.enqueue(applicationContext)
             startupExecutor.execute {
                 if (!destroyed) DirectBootSnapshotWriter.refresh(applicationContext)
             }

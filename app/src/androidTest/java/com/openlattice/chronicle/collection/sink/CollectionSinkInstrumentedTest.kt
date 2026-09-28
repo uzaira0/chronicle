@@ -104,8 +104,12 @@ class CollectionSinkInstrumentedTest {
         val sink = UploadStatsSink(db.uploadStatsDao(), NoOpCollectionLog)
         val date = "2026-05-20"
 
-        assertEquals(ModuleResult.Ok(11), sink.recordUsageUploaded(serverId, date, 11))
-        assertEquals(ModuleResult.Ok(4), sink.recordSensorUploaded(serverId, date, 4))
+        val ownedDay = com.openlattice.chronicle.storage.UploadStatsEntity(
+            serverId = serverId, date = date, studyId = "11111111-1111-1111-1111-111111111111",
+            participantId = "participant-1", deviceId = "device-1", enrollmentEpoch = "$serverId:created",
+        )
+        assertEquals(ModuleResult.Ok(11), sink.recordUsageUploaded(ownedDay, 11))
+        assertEquals(ModuleResult.Ok(4), sink.recordSensorUploaded(ownedDay, 4))
 
         val stats = db.uploadStatsDao().getRecentStats(serverId, 1).single()
         assertEquals(11, stats.usageEventsUploaded)

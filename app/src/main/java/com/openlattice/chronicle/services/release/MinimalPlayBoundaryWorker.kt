@@ -12,6 +12,9 @@ import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
 import com.openlattice.chronicle.collection.state.MinimalPlayArtifactState
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.collection.directboot.clearDirectBootSensorBuffer
+import com.openlattice.chronicle.collection.directboot.inspectDirectBootSamplesForErasure
+import com.openlattice.chronicle.collection.directboot.replayDirectBootJournalForErasure
+import com.openlattice.chronicle.collection.directboot.recordDirectBootDistributionErasure
 import com.openlattice.chronicle.preferences.InteractionPolicySettings
 import com.openlattice.chronicle.preferences.SensorSettings
 import com.openlattice.chronicle.preferences.clearDirectBootSensorSnapshot
@@ -19,6 +22,10 @@ import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringSe
 import com.openlattice.chronicle.services.notifications.userIdentificationMayRun
 import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordPolicyErasureInTransaction
+import com.openlattice.chronicle.services.upload.recordPolicyErasureCountInTransaction
 
 private const val TAG = "MinimalPlayBoundary"
 private const val UNIQUE_WORK_NAME = "minimal_play_artifact_boundary"
@@ -39,8 +46,26 @@ class MinimalPlayBoundaryWorker(
         if (BuildConfig.DISTRIBUTION_CHANNEL !in setOf("PLAY", "AMAZON")) return Result.success()
         return try {
             ResearchPersistenceGate.stop {
+                val inventory = inspectDirectBootSamplesForErasure(applicationContext)
                 UploadQueueSingleFlight.withExclusiveMutation {
-                    purgeRestrictedPlayRows(ChronicleDb.getInstance(applicationContext))
+                    val db = ChronicleDb.getInstance(applicationContext)
+                    replayDirectBootJournalForErasure(applicationContext, db)
+                    purgeRestrictedPlayRows(db)
+                    if (inventory.digest != null) {
+                        db.runInTransaction {
+                            recordDirectBootDistributionErasure(db, inventory.sampleCountsByOwner, inventory.digest)
+                        }
+                    }
+                    db.runInTransaction {
+                        inventory.corruptIncidentIds.forEach { id ->
+                            if (db.uploadDiagnosticDao().get(id) == null) {
+                                recordPolicyErasureCountInTransaction(
+                                    db, 1, LocalUploadModuleFamily.SENSOR,
+                                    LocalOperationalIssue.DIRECT_BOOT_CORRUPT_RECORD, id,
+                                )
+                            }
+                        }
+                    }
                 }
                 check(SensorSettings(applicationContext).clear()) {
                     "Unable to clear legacy high-rate sensor settings"
@@ -88,11 +113,26 @@ internal fun purgeRestrictedPlayRows(db: ChronicleDb) {
             "sleep_samples",
             "activity_recognition_samples",
             "health_metric_samples",
-        ).forEach { table -> sql.execSQL("DELETE FROM `$table`") }
+        ).forEach { table ->
+            val family = when (table) {
+                "sensor_samples", "sensor_sample_dead_letters" -> LocalUploadModuleFamily.SENSOR
+                "interaction_samples" -> LocalUploadModuleFamily.INTERACTION
+                "audio_activity_samples" -> LocalUploadModuleFamily.AUDIO_ACTIVITY
+                "audio_content_samples" -> LocalUploadModuleFamily.AUDIO_CONTENT
+                "notification_activity_samples" -> LocalUploadModuleFamily.NOTIFICATION
+                "sleep_samples" -> LocalUploadModuleFamily.SLEEP
+                "activity_recognition_samples" -> LocalUploadModuleFamily.ACTIVITY_RECOGNITION
+                else -> LocalUploadModuleFamily.HEALTH
+            }
+            recordPolicyErasureInTransaction(
+                db, table, family, LocalOperationalIssue.DISTRIBUTION_POLICY_ERASED,
+            )
+            sql.execSQL("DELETE FROM `$table`")
+        }
         val placeholders = approvedModuleIds.joinToString(",") { "?" }
         sql.execSQL(
             "DELETE FROM collection_module_state WHERE moduleId NOT IN ($placeholders)",
-            approvedModuleIds.map { it as Any }.toTypedArray(),
+            approvedModuleIds.toTypedArray(),
         )
     }
 }

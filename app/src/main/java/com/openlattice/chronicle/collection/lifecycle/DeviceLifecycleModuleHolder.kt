@@ -5,6 +5,9 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.sink.LifecycleEventSink
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordForExpectedOwner
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.serialization.JsonSerializer
@@ -65,6 +68,11 @@ public object DeviceLifecycleModuleHolder {
             updateQueueSize = { depth -> Utils.updateUploadQueueSize(appContext, depth) },
             serializeQueueEntry = { data -> JsonSerializer.serializeQueueEntry(data) },
             nextWriteTimestamp = { wallClockMillis -> db.nextQueueWriteTimestamp(wallClockMillis) },
+            originOwner = { ResearchPersistenceGate.captureOwner(appContext) },
+            accountLossForOwner = { owner, code, count ->
+                recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                    LocalOperationalIssue.valueOf(code), count)
+            },
         )
     }
 }

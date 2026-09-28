@@ -29,31 +29,6 @@ interface SensorSampleDao {
     fun countBySensorType(): List<SensorSampleTypeCount>
 
     @Query(
-        """
-        DELETE FROM sensor_samples
-        WHERE id IN (
-            SELECT id FROM sensor_samples
-            WHERE timestamp < :cutoffTimestamp
-            ORDER BY timestamp ASC, id ASC
-            LIMIT :limit
-        )
-        """,
-    )
-    fun deleteOldestBefore(cutoffTimestamp: String, limit: Int): Int
-
-    @Query(
-        """
-        DELETE FROM sensor_samples
-        WHERE id IN (
-            SELECT id FROM sensor_samples
-            ORDER BY timestamp ASC, id ASC
-            LIMIT :limit
-        )
-        """,
-    )
-    fun deleteOldest(limit: Int): Int
-
-    @Query(
         "SELECT COUNT(*) FROM sensor_sample_deliveries " +
             "WHERE serverId = :serverId AND serverGeneration = :serverGeneration " +
             "AND sampleId IN (:sampleIds)",
@@ -101,27 +76,6 @@ interface SensorSampleDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun insertDeadLetters(deadLetters: List<SensorSampleDeadLetterEntity>)
 
-    @Query("SELECT COUNT(*) FROM sensor_sample_dead_letters")
-    fun countDeadLetters(): Int
-
-    @Query("SELECT * FROM sensor_sample_dead_letters ORDER BY quarantinedAt ASC, sampleId ASC LIMIT :limit")
-    fun getOldestDeadLetters(limit: Int): List<SensorSampleDeadLetterEntity>
-
-    @Query("DELETE FROM sensor_sample_dead_letters WHERE sampleId IN (:sampleIds)")
-    fun deleteDeadLettersByIds(sampleIds: List<String>): Int
-
-    @Query(
-        """
-        DELETE FROM sensor_sample_dead_letters
-        WHERE sampleId IN (
-            SELECT sampleId FROM sensor_sample_dead_letters
-            ORDER BY quarantinedAt ASC, sampleId ASC
-            LIMIT :limit
-        )
-        """,
-    )
-    fun deleteOldestDeadLetters(limit: Int): Int
-
     /** Moves malformed rows out of the active queue without claiming network delivery. */
     @Transaction
     fun quarantineMalformed(
@@ -131,10 +85,6 @@ interface SensorSampleDao {
         insertDeadLetters(deadLetters)
         deleteByIds(sampleIds)
     }
-
-    /** Drops every pending sample — used by the DISCARD_AND_STOP disable disposition. */
-    @Query("DELETE FROM sensor_samples")
-    fun deleteAll()
 
     @Query("DELETE FROM sensor_samples WHERE sensorType = :sensorType")
     fun deleteSamplesBySensorType(sensorType: String): Int

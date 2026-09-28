@@ -15,6 +15,9 @@ import com.openlattice.chronicle.collection.InteractionEventType
 import com.openlattice.chronicle.collection.InteractionPositionSource
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.preferences.InteractionPolicySettings
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.InteractionSampleEntry
@@ -24,10 +27,12 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 
@@ -35,6 +40,7 @@ import kotlin.math.abs
 internal class BoundedInteractionTaskExecutor(
     capacity: Int,
     private val onDropped: (Int) -> Unit,
+    private val onShutdown: (Int) -> Unit = onDropped,
 ) {
     init {
         require(capacity > 0) { "capacity must be positive" }
@@ -54,13 +60,13 @@ internal class BoundedInteractionTaskExecutor(
         executor.execute(task)
         true
     } catch (_: RejectedExecutionException) {
-        onDropped(1)
+        if (executor.isShutdown) onShutdown(1) else onDropped(1)
         false
     }
 
     /** Stops the worker and reports tasks abandoned from the bounded queue. */
     fun shutdownNow(): Int = executor.shutdownNow().size.also { abandoned ->
-        if (abandoned > 0) onDropped(abandoned)
+        if (abandoned > 0) onShutdown(abandoned)
     }
 }
 
@@ -100,8 +106,24 @@ class InteractionCollectionService : AccessibilityService() {
     private val persistenceFailures = AtomicLong()
     private val writeExecutor = BoundedInteractionTaskExecutor(
         capacity = PERSISTENCE_QUEUE_CAPACITY,
-        onDropped = ::recordDroppedPersistenceTasks,
+        // Both callbacks run on the accessibility event thread: only count here, never touch Room.
+        onDropped = { count ->
+            recordDroppedPersistenceTasks(count)
+            pendingOverflowLoss.addAndGet(count.toLong())
+            scheduleLossFlush()
+        },
+        onShutdown = { count ->
+            recordDroppedPersistenceTasks(count)
+            pendingShutdownLoss.addAndGet(count.toLong())
+            scheduleLossFlush()
+        },
     )
+    private val pendingOverflowLoss = AtomicLong()
+    private val pendingShutdownLoss = AtomicLong()
+    private val lossFlushScheduled = AtomicBoolean()
+    private val lossExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "interaction-loss").apply { isDaemon = true }
+    }
     private var policySettings: InteractionPolicySettings? = null
     private var loggedPolicyUnavailable = false
 
@@ -229,12 +251,27 @@ class InteractionCollectionService : AccessibilityService() {
 
         writeExecutor.execute {
             try {
+                val expectedOwner = ResearchPersistenceGate.captureOwner(ctx)
+                    ?.takeIf { it.studyId == policySnapshot.studyId }
                 // A settings/enrollment transition invalidates the captured generation before it
                 // changes durable state, so queued events can never persist under stale policy.
-                if (!runtimePolicySettings.isCurrent(policySnapshot)) return@execute
+                if (!runtimePolicySettings.isCurrent(policySnapshot)) {
+                    com.openlattice.chronicle.services.upload.recordForExpectedOwner(
+                        ctx, expectedOwner, LocalUploadModuleFamily.INTERACTION,
+                        LocalOperationalIssue.COLLECTION_GATE_DROPPED, 1,
+                    )
+                    return@execute
+                }
                 ResearchPersistenceGate.persistIfCollecting(
                     ctx,
                     CollectionModuleId.INTERACTION_EVENTS,
+                    expectedOwner = expectedOwner,
+                    onRefused = { count ->
+                        LocalUploadDiagnosticsStore.of(ctx).recordOperational(
+                            LocalUploadModuleFamily.INTERACTION,
+                            LocalOperationalIssue.COLLECTION_GATE_DROPPED, count,
+                        )
+                    },
                 ) {
                     ChronicleDb.getInstance(ctx).interactionSampleDao().insertAll(listOf(entry))
                 }
@@ -246,6 +283,8 @@ class InteractionCollectionService : AccessibilityService() {
 
     override fun onDestroy() {
         val abandoned = writeExecutor.shutdownNow()
+        // shutdown(), not shutdownNow(): the queued flush still records the abandoned count.
+        lossExecutor.shutdown()
         Log.i(
             TAG,
             "Interaction persistence stopped: abandoned=$abandoned, " +
@@ -390,10 +429,39 @@ class InteractionCollectionService : AccessibilityService() {
     }
 
     private fun recordPersistenceFailure(error: Exception) {
+        recordLoss(LocalOperationalIssue.LOCAL_WRITE_FAILED, 1)
         val total = persistenceFailures.incrementAndGet()
         if (total == 1L || total % TELEMETRY_LOG_INTERVAL == 0L) {
             Log.w(TAG, "Failed to persist interaction event: total=$total", error)
         }
+    }
+
+    /** Coalesces drops so a saturated queue costs one background write, not one per event. */
+    private fun scheduleLossFlush() {
+        if (!lossFlushScheduled.compareAndSet(false, true)) return
+        try {
+            lossExecutor.execute {
+                lossFlushScheduled.set(false)
+                pendingOverflowLoss.getAndSet(0).takeIf { it > 0 }
+                    ?.let { recordLoss(LocalOperationalIssue.LOCAL_BUFFER_OVERFLOW, it.toInt()) }
+                pendingShutdownLoss.getAndSet(0).takeIf { it > 0 }
+                    ?.let { recordLoss(LocalOperationalIssue.LOCAL_SHUTDOWN_DROPPED, it.toInt()) }
+            }
+        } catch (_: RejectedExecutionException) {
+            lossFlushScheduled.set(false)
+            Log.w(TAG, "Interaction loss flush rejected after shutdown")
+        }
+    }
+
+    private fun recordLoss(issue: LocalOperationalIssue, count: Int) {
+        runCatching {
+            ResearchPersistenceGate.runIfActive(applicationContext) {
+                LocalUploadDiagnosticsStore.of(applicationContext).recordOperational(
+                    LocalUploadModuleFamily.INTERACTION, issue, count,
+                )
+                true
+            }
+        }.onFailure { Log.e(TAG, "Unable to record interaction loss", it) }
     }
 
     companion object {

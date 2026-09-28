@@ -5,10 +5,9 @@ import com.openlattice.chronicle.IsolatedChronicleTestDb
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.SensorSampleSink
-import com.openlattice.chronicle.services.sensors.SensorUploadWorkerDelegate
+import com.openlattice.chronicle.services.sensors.quarantineMalformedSensorSamples
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.SensorSampleDeliveryEntity
-import com.openlattice.chronicle.storage.SensorSampleDeadLetterEntity
 import com.openlattice.chronicle.storage.SensorSampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
 import org.junit.After
@@ -27,12 +26,12 @@ import java.util.UUID
  *
  * Exercises the sink → real-encrypted-Room → `sensor_samples` path the
  * [SensorRuntimeController] drives, plus durable per-destination acknowledgement and the
- * TTL/cap cleanup the Phase 6C sensor upload preserves. These are the paths the JVM fakes
+ * malformed-row quarantine. These are the paths the JVM fakes
  * cannot prove — the actual SQLCipher `SupportFactory`, the Room schema v9, and the real
  * DAO conflict strategies and exact-ID receipt queries.
  *
  * Requires a connected device or emulator. When none is available the run is recorded as
- * a BLOCKER; the JVM `SensorRuntimeControllerTest` / `SensorUploadCleanupTest` plus the
+ * a BLOCKER; the JVM `SensorRuntimeControllerTest` plus the
  * existing `ChronicleDbTests` provide the strongest local proof of the boundary.
  */
 @RunWith(AndroidJUnit4::class)
@@ -86,23 +85,6 @@ class HardwareSensorsModuleInstrumentedTest {
     }
 
     @Test
-    fun ttlCleanupDeletesSamplesBeyondSevenDaysAgainstRealDb() {
-        val dao = db.sensorSampleDao()
-        val now = OffsetDateTime.now()
-        dao.insertAll(
-            listOf(
-                sample(UUID.randomUUID().toString(), now.minusDays(10).toString()),
-                sample(UUID.randomUUID().toString(), now.toString()),
-            ),
-        )
-        assertEquals(2, dao.count())
-
-        SensorUploadWorkerDelegate.cleanupStaleData(dao)
-
-        assertEquals("only the fresh sample survives the 7-day TTL", 1, dao.count())
-    }
-
-    @Test
     fun exactIdReceiptDeletionRetainsBackdatedSamplesAgainstSingletonDestination() {
         val dao = db.sensorSampleDao()
         val serverDao = db.uploadServerDao()
@@ -139,46 +121,16 @@ class HardwareSensorsModuleInstrumentedTest {
         val dao = db.sensorSampleDao()
         val malformed = sample("bad", "not-a-timestamp")
         dao.insertAll(listOf(malformed))
-        val deadLetter = SensorSampleDeadLetterEntity(
-            sampleId = malformed.id,
-            sensorType = malformed.sensorType,
-            timestamp = malformed.timestamp,
-            timezone = malformed.timezone,
-            x = malformed.x,
-            y = malformed.y,
-            z = malformed.z,
-            w = malformed.w,
-            accuracy = malformed.accuracy,
-            valuesJson = malformed.valuesJson,
-            quarantinedAt = OffsetDateTime.now().toString(),
-            reason = "DateTimeParseException",
-        )
-
-        dao.quarantineMalformed(listOf(deadLetter), listOf(malformed.id))
+        val input = listOf(malformed to IllegalArgumentException("bad timestamp"))
+        quarantineMalformedSensorSamples(dao, null, input, db = db)
+        quarantineMalformedSensorSamples(dao, null, input, db = db)
 
         assertEquals(0, dao.count())
-        assertEquals(1, dao.countDeadLetters())
-        assertEquals("bad", dao.getOldestDeadLetters(1).single().sampleId)
-    }
-
-    @Test
-    fun capCleanupUsesConfiguredBoundedSqlChunksAgainstRealDb() {
-        val dao = db.sensorSampleDao()
-        val now = OffsetDateTime.now()
-        val entries = (0 until 10).map { i ->
-            sample(UUID.randomUUID().toString(), now.minusSeconds((10 - i).toLong()).toString())
-        }
-        dao.insertAll(entries)
-        assertEquals(10, dao.count())
-
-        val result = SensorUploadWorkerDelegate.cleanupStaleData(
-            dao,
-            skipAgeTtl = true,
-            maxSampleCount = 5,
-            deleteChunkSize = 2,
-        )
-
-        assertEquals(5, result.capacityForcedDropCount)
-        assertEquals(5, dao.count())
+        assertEquals(1, db.openHelper.readableDatabase.query(
+            "SELECT COUNT(*) FROM sensor_sample_dead_letters",
+        ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) })
+        assertEquals(1, db.openHelper.readableDatabase.query(
+            "SELECT COALESCE(SUM(count), 0) FROM upload_diagnostics WHERE issueCode = 'SENSOR_SAMPLE_QUARANTINED'",
+        ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) })
     }
 }

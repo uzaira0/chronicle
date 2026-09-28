@@ -102,7 +102,7 @@ object CollectionGate {
 
     fun collects(context: Context, moduleId: CollectionModuleId): Boolean =
         try {
-            CollectionLoopStore.of(context).collects(moduleId)
+            CollectionLoopStore.of(context).collects(moduleId) && StorageAdmission.allowed(context)
         } catch (e: Exception) {
             Log.e(TAG, "Gate read failed for '${moduleId.id}', failing closed (no collection)", e)
             false

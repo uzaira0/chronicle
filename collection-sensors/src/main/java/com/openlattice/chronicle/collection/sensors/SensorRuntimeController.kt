@@ -82,8 +82,13 @@ public class SensorRuntimeController(
     private val sink: SensorSampleWriter,
     private val scheduler: SensorRuntimeScheduler,
     private val collectionGate: (AndroidSensorType) -> Boolean = { true },
+    private val collectionAdmission: () -> Boolean = { true },
     private val clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
+    /** Redacted count of already-collected samples affected by a local loss path. */
+    private val reportLoss: (String, Int) -> Unit = { _, _ -> },
+    /** Direct-boot capacity refusal has already been counted in its encrypted journal. */
+    private val zeroWrittenIsCountedLoss: Boolean = false,
 ) {
 
     public companion object {
@@ -142,6 +147,9 @@ public class SensorRuntimeController(
     @Volatile private var lastDestroyFlushFailedMessage: String? = null
     private val samplesFlushed = AtomicLong(0L)
     private val samplesDropped = AtomicLong(0L)
+    private val shutdownLossReported = AtomicBoolean(false)
+    /** Per-sample losses are counted here and reported once per flush, not once per sample. */
+    private val pendingLoss = ConcurrentHashMap<String, AtomicLong>()
 
     /** Whether the runtime has been started and not yet stopped. */
     public val isStarted: Boolean get() = started.get()
@@ -180,6 +188,7 @@ public class SensorRuntimeController(
             log.info(TAG, "Sensor runtime already started; ignoring duplicate start")
             return
         }
+        shutdownLossReported.set(false)
         scheduler.execute { scheduleConfiguredSensors() }
     }
 
@@ -225,7 +234,7 @@ public class SensorRuntimeController(
             clearPersistentRetry(sensorType)
             return
         }
-        if (!collectionGate(sensorType)) {
+        if (!collectionGate(sensorType) || !collectionAdmission()) {
             clearPersistentRetry(sensorType)
             return
         }
@@ -300,9 +309,13 @@ public class SensorRuntimeController(
         persistentRetryAttempts.clear()
         gateway.unregisterAll()
         val result = flushBuffer()
+        reportPendingLoss()
         if (isServiceDestroy && result is ModuleResult.Failed) {
             lastDestroyFlushFailedMessage = result.redactedMessage
             log.error(TAG, "Service-destroy flush failed; samples may be lost", result.error)
+        }
+        if (isServiceDestroy && buffer.isNotEmpty() && shutdownLossReported.compareAndSet(false, true)) {
+            reportLoss("LOCAL_SHUTDOWN_DROPPED", buffer.size)
         }
         started.set(false)
     }
@@ -311,6 +324,9 @@ public class SensorRuntimeController(
     public fun recordDestroyFlushFailure(message: String) {
         lastDestroyFlushFailedMessage = message
         log.error(TAG, "Service-destroy flush failure recorded: $message")
+        if (buffer.isNotEmpty() && shutdownLossReported.compareAndSet(false, true)) {
+            reportLoss("LOCAL_SHUTDOWN_DROPPED", buffer.size)
+        }
     }
 
     // ----- per-sensor duty cycle -----
@@ -327,7 +343,7 @@ public class SensorRuntimeController(
 
         log.info(TAG, "Duty cycle ${sensorType.name} ($mode): ${activeSeconds}s active / ${idleSeconds}s idle")
 
-        if (collectionGate(sensorType) && shouldCollect()) {
+        if (collectionGate(sensorType) && collectionAdmission() && shouldCollect()) {
             startCollecting(sensorType, mode)
             scheduler.schedule(activeSeconds) {
                 stopCollecting(sensorType)
@@ -416,8 +432,14 @@ public class SensorRuntimeController(
         accuracy: Int?,
         timestamp: OffsetDateTime = OffsetDateTime.now(),
     ) {
+        if (!collectionAdmission()) {
+            // Storage pause: the pause episode itself is the recorded diagnostic.
+            stopCollecting(sensorType)
+            return
+        }
         if (!buffer.offer(toEntry(sensorType, values, accuracy, timestamp))) {
             val dropped = samplesDropped.incrementAndGet()
+            countLoss("LOCAL_BUFFER_OVERFLOW", 1)
             if (dropped == 1L || dropped % FLUSH_THRESHOLD == 0L) {
                 log.error(TAG, "Sensor sample buffer full; dropped $dropped sample(s) to protect app memory")
             }
@@ -512,6 +534,7 @@ public class SensorRuntimeController(
      * on the next flush.
      */
     public fun flushBuffer(): ModuleResult {
+        reportPendingLoss()
         val drained = mutableListOf<SensorSampleEntry>()
         while (true) {
             val entry = buffer.poll() ?: break
@@ -530,6 +553,7 @@ public class SensorRuntimeController(
             }
         }
         if (dropped.isNotEmpty()) {
+            reportLoss("COLLECTION_GATE_DROPPED", dropped.size)
             log.info(TAG, "Collection gate closed; dropped ${dropped.size} un-acknowledged sensor sample(s)")
         }
         if (keep.isEmpty()) {
@@ -540,22 +564,43 @@ public class SensorRuntimeController(
         log.info(TAG, "Flushing ${keep.size} sensor samples to sensor_samples")
         val result = sink.write(keep)
         when (result) {
-            is ModuleResult.Ok -> samplesFlushed.addAndGet(keep.size.toLong())
+            is ModuleResult.Ok -> {
+                samplesFlushed.addAndGet(result.items.toLong())
+                // The sink refused the rest on purpose (persistence gate, or a full direct-boot
+                // buffer that already journaled its own loss); requeueing them would loop forever.
+                val refused = keep.size - result.items
+                if (refused > 0) {
+                    samplesDropped.addAndGet(refused.toLong())
+                    if (!zeroWrittenIsCountedLoss) reportLoss("COLLECTION_GATE_DROPPED", refused)
+                }
+            }
             is ModuleResult.Failed -> {
                 log.error(TAG, "Failed to flush ${keep.size} sensor samples, re-queuing for retry", result.error)
                 requeueAfterFailedFlush(keep)
             }
             is ModuleResult.Retry -> requeueAfterFailedFlush(keep)
-            else -> Unit
+            is ModuleResult.Skipped -> reportLoss("COLLECTION_GATE_DROPPED", keep.size)
         }
         lastFlushResult = result
         return result
+    }
+
+    private fun countLoss(code: String, count: Long) {
+        pendingLoss.getOrPut(code) { AtomicLong() }.addAndGet(count)
+    }
+
+    private fun reportPendingLoss() {
+        pendingLoss.forEach { (code, counter) ->
+            val count = counter.getAndSet(0L)
+            if (count > 0) reportLoss(code, count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+        }
     }
 
     private fun requeueAfterFailedFlush(entries: List<SensorSampleEntry>) {
         entries.forEach { entry ->
             if (!buffer.offer(entry)) {
                 samplesDropped.incrementAndGet()
+                countLoss("LOCAL_REQUEUE_OVERFLOW", 1)
             }
         }
     }

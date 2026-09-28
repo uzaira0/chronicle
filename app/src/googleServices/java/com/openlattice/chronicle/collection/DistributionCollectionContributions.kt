@@ -161,20 +161,8 @@ internal object DistributionCollectionContributions {
         return failures
     }
 
-    fun purgeAdditionalSamples(db: ChronicleDb, cutoff: String): Int {
-        val activityPurged = if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
-            db.sleepSampleDao().deleteOlderThan(cutoff) +
-                db.activityRecognitionSampleDao().deleteOlderThan(cutoff)
-        } else {
-            0
-        }
-        val healthPurged = if (BuildConfig.HAS_HEALTH_CONNECT) {
-            db.healthMetricSampleDao().deleteOlderThan(cutoff)
-        } else {
-            0
-        }
-        return activityPurged + healthPurged + db.appNetworkUsageSampleDao().deleteOlderThan(cutoff)
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun purgeAdditionalSamples(db: ChronicleDb, cutoff: String): Int = 0
 
     fun pendingUploadCounts(db: ChronicleDb): RestrictedPendingUploadCounts =
         RestrictedPendingUploadCounts(

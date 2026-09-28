@@ -42,7 +42,11 @@ object MinimalPlayArtifactState {
         Context.MODE_PRIVATE,
     )
 
-    fun isReady(context: Context): Boolean {
+    fun isReady(context: Context): Boolean = isReady(context, strictStorage = false)
+
+    fun isReadyOrThrow(context: Context): Boolean = isReady(context, strictStorage = true)
+
+    private fun isReady(context: Context, strictStorage: Boolean): Boolean {
         if (!isMinimalPublicDistribution()) return true
         return try {
             val prefs = prefs(context)
@@ -53,7 +57,8 @@ object MinimalPlayArtifactState {
                 policyRegistrySha256 = prefs.getString(KEY_POLICY_REGISTRY_SHA256, null),
                 runtimePolicyClosed = runtimePolicyClosed.get(),
             )
-        } catch (_: RuntimeException) {
+        } catch (error: RuntimeException) {
+            if (strictStorage) throw error
             false
         }
     }

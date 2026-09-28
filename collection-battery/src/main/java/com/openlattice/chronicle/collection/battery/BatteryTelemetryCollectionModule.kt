@@ -12,6 +12,7 @@ import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.sink.BatterySampleSink
 import com.openlattice.chronicle.storage.BatterySampleEntry
+import com.openlattice.chronicle.storage.UploadServerEntity
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -63,6 +64,8 @@ public class BatteryTelemetryCollectionModule(
      * boolean. A non-enrolled participant skips the write.
      */
     private val enrolled: () -> Boolean,
+    private val ownerForSample: () -> UploadServerEntity? = { null },
+    private val accountWriteResult: (UploadServerEntity?, ModuleResult, Int) -> Unit = { _, _, _ -> },
     private val clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
 ) : DataCollectionModule {
@@ -127,6 +130,7 @@ public class BatteryTelemetryCollectionModule(
         if (!enrolled()) {
             return ModuleResult.Skipped("participant not enrolled")
         }
+        val owner = ownerForSample()
 
         val reading: BatteryReading? = try {
             source.read()
@@ -156,7 +160,9 @@ public class BatteryTelemetryCollectionModule(
             health = reading.health.name,
         )
 
-        return when (val writeResult = sink.write(listOf(entry))) {
+        return when (val writeResult = sink.write(listOf(entry)).also {
+            accountWriteResult(owner, it, 1)
+        }) {
             is ModuleResult.Ok -> {
                 log.info(TAG, "Persisted 1 battery sample (level=${reading.levelPercent}%)")
                 ModuleResult.Ok(1)

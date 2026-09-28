@@ -15,8 +15,22 @@ import kotlin.concurrent.write
 public class ResearchPersistenceBarrier {
     private val lock = ReentrantReadWriteLock(true)
 
-    public fun persistIf(allowed: () -> Boolean, persist: () -> Unit): Boolean = lock.read {
-        if (!allowed()) return@read false
+    /**
+     * Holds a read lease across [block]. A caller that takes its own lock inside the lease keeps
+     * the barrier-then-lock order that [stop] uses, so the two cannot deadlock. Nested
+     * [persistIf] calls re-enter the read side even while a stop is queued.
+     */
+    public fun <T> withReadLease(block: () -> T): T = lock.read(block)
+
+    public fun persistIf(
+        allowed: () -> Boolean,
+        onRefused: () -> Unit = {},
+        persist: () -> Unit,
+    ): Boolean = lock.read {
+        if (!allowed()) {
+            onRefused()
+            return@read false
+        }
         persist()
         true
     }

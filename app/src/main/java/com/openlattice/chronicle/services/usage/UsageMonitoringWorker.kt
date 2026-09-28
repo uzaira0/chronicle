@@ -249,6 +249,8 @@ class UsageCollectionDelegate(private val context: Context) {
     ): Boolean = ResearchPersistenceGate.persistIfCollecting(
         context,
         CollectionModuleId.USAGE_EVENTS,
+        // Not a loss: the checkpoint advances only in this transaction, so the next poll re-reads.
+        records = 0,
     ) {
         chronicleDb.runInTransaction {
             if (queueEntries.isNotEmpty()) {

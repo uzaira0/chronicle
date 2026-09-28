@@ -4,6 +4,7 @@ import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.core.RecordingCollectionLog
 import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,6 +51,17 @@ class SensorSampleSinkTest {
 
         assertTrue("expected Failed, got $result", result is ModuleResult.Failed)
         assertTrue(log.problems.any { it.level == RecordingCollectionLog.Level.ERROR })
+    }
+
+    @Test
+    fun guardWriteExceptionReturnsFailedSoRuntimeCanRetry() {
+        val dao = FakeSensorSampleDao()
+        val sink = SensorSampleSink(dao, NoOpCollectionLog,
+            persistenceGuard = CollectionPersistenceGuard { persist ->
+                persist()
+                throw IllegalStateException("commit outcome unknown")
+            })
+        assertTrue(sink.write(listOf(sample("a"))) is ModuleResult.Failed)
     }
 
     @Test

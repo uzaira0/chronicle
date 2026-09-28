@@ -28,6 +28,28 @@ import java.time.OffsetDateTime
  */
 class SensorRuntimeControllerTest {
 
+    @Test
+    fun bufferOverflowAndClosedGateReportExactCounts() {
+        val losses = mutableListOf<Pair<String, Int>>()
+        val controller = SensorRuntimeController(
+            gateway = FakeSensorGateway(),
+            settings = FakeSensorRuntimeSettings(),
+            sink = SensorSampleSink(FakeSensorSampleDao(), NoOpCollectionLog),
+            scheduler = ManualSensorRuntimeScheduler(executeImmediately = false),
+            collectionGate = { false },
+            log = NoOpCollectionLog,
+            reportLoss = { code, count -> losses += code to count },
+        )
+        repeat(SensorRuntimeController.MAX_BUFFERED_SAMPLES + 1) {
+            controller.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f, 2f, 3f), 3)
+        }
+        assertTrue("losses are aggregated until flush", losses.isEmpty())
+        controller.flushBuffer()
+
+        assertEquals(1, losses.count { it == ("LOCAL_BUFFER_OVERFLOW" to 1) })
+        assertEquals(1, losses.count { it == ("COLLECTION_GATE_DROPPED" to SensorRuntimeController.MAX_BUFFERED_SAMPLES) })
+    }
+
     private fun controller(
         gateway: FakeSensorGateway = FakeSensorGateway(),
         settings: FakeSensorRuntimeSettings = FakeSensorRuntimeSettings(),

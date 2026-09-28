@@ -10,6 +10,9 @@ import com.openlattice.chronicle.collection.NotificationEventType
 import com.openlattice.chronicle.collection.audio.AudioCaptureController
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.NotificationActivitySampleEntry
 import com.openlattice.chronicle.storage.notificationActivitySampleDao
@@ -71,6 +74,7 @@ class NotificationListener : NotificationListenerService() {
         }
         executeIo("notification-activity capture") {
             runCatching {
+                val expectedOwner = ResearchPersistenceGate.captureOwner(applicationContext)
                 val entry = NotificationActivitySampleEntry(
                     id = UUID.randomUUID().toString(),
                     timestamp = OffsetDateTime.now(ZoneOffset.UTC).toString(),
@@ -84,6 +88,13 @@ class NotificationListener : NotificationListenerService() {
                 ResearchPersistenceGate.persistIfCollecting(
                     applicationContext,
                     CollectionModuleId.NOTIFICATION_ACTIVITY,
+                    expectedOwner = expectedOwner,
+                    onRefused = { count ->
+                        LocalUploadDiagnosticsStore.of(applicationContext).recordOperational(
+                            LocalUploadModuleFamily.NOTIFICATION,
+                            LocalOperationalIssue.COLLECTION_GATE_DROPPED, count,
+                        )
+                    },
                 ) {
                     ChronicleDb.getInstance(applicationContext)
                         .notificationActivitySampleDao()

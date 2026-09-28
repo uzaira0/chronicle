@@ -101,9 +101,6 @@ class FakeSensorSampleDao : SensorSampleDao {
     val deliveries = LinkedHashSet<SensorSampleDeliveryEntity>()
     val deadLetters = LinkedHashMap<String, SensorSampleDeadLetterEntity>()
     val configuredServerGenerations = LinkedHashSet<Pair<Long, Long>>()
-    val deleteOldestBeforeRequests = mutableListOf<Int>()
-    val deleteOldestRequests = mutableListOf<Int>()
-    val deleteOldestDeadLetterRequests = mutableListOf<Int>()
     var failNextInsert = false
 
     override fun insertAll(samples: List<SensorSampleEntry>) {
@@ -133,24 +130,6 @@ class FakeSensorSampleDao : SensorSampleDao {
             .eachCount()
             .map { (sensorType, count) -> SensorSampleTypeCount(sensorType, count) }
             .sortedWith(compareByDescending<SensorSampleTypeCount> { it.count }.thenBy { it.sensorType })
-
-    override fun deleteOldestBefore(cutoffTimestamp: String, limit: Int): Int {
-        deleteOldestBeforeRequests += limit
-        val removedIds = rows.values
-            .filter { it.timestamp < cutoffTimestamp }
-            .sortedWith(compareBy({ it.timestamp }, { it.id }))
-            .take(limit)
-            .map { it.id }
-        deleteByIds(removedIds)
-        return removedIds.size
-    }
-
-    override fun deleteOldest(limit: Int): Int {
-        deleteOldestRequests += limit
-        val removedIds = getOldest(limit).map { it.id }
-        deleteByIds(removedIds)
-        return removedIds.size
-    }
 
     override fun countDeliveriesForServer(
         serverId: Long,
@@ -189,28 +168,6 @@ class FakeSensorSampleDao : SensorSampleDao {
         deadLetters.forEach { this.deadLetters[it.sampleId] = it }
     }
 
-    override fun countDeadLetters(): Int = deadLetters.size
-
-    override fun getOldestDeadLetters(limit: Int): List<SensorSampleDeadLetterEntity> =
-        deadLetters.values.sortedWith(compareBy({ it.quarantinedAt }, { it.sampleId })).take(limit)
-
-    override fun deleteDeadLettersByIds(sampleIds: List<String>): Int {
-        val before = deadLetters.size
-        sampleIds.forEach(deadLetters::remove)
-        return before - deadLetters.size
-    }
-
-    override fun deleteOldestDeadLetters(limit: Int): Int {
-        deleteOldestDeadLetterRequests += limit
-        return deleteDeadLettersByIds(getOldestDeadLetters(limit).map { it.sampleId })
-    }
-
-    override fun deleteAll() {
-        rows.clear()
-        deliveries.clear()
-        deadLetters.clear()
-    }
-
     override fun deleteSamplesBySensorType(sensorType: String): Int {
         val ids = rows.values.filter { it.sensorType == sensorType }.map { it.id }
         deleteByIds(ids)
@@ -219,7 +176,8 @@ class FakeSensorSampleDao : SensorSampleDao {
 
     override fun deleteDeadLettersBySensorType(sensorType: String): Int {
         val ids = deadLetters.values.filter { it.sensorType == sensorType }.map { it.sampleId }
-        return deleteDeadLettersByIds(ids)
+        ids.forEach(deadLetters::remove)
+        return ids.size
     }
 }
 
@@ -242,6 +200,17 @@ class FakeUploadStatsDao : UploadStatsDao {
     override fun insertDay(stats: UploadStatsEntity) {
         checkFailure()
         rows.putIfAbsent(stats.serverId to stats.date, stats)
+    }
+
+    override fun backfillOwner(serverId: Long, date: String, studyId: String, participantId: String,
+                               deviceId: String, epoch: String): Int {
+        checkFailure()
+        val key = serverId to date
+        val old = rows[key] ?: return 0
+        if (old.studyId != null || old.participantId != null || old.deviceId != null || old.enrollmentEpoch != null) return 0
+        rows[key] = old.copy(studyId = studyId, participantId = participantId,
+            deviceId = deviceId, enrollmentEpoch = epoch)
+        return 1
     }
 
     override fun incrementUsageCount(serverId: Long, date: String, count: Int) {
@@ -283,25 +252,32 @@ class FakeUploadStatsDao : UploadStatsDao {
     override fun getRecentStats(serverId: Long, days: Int): List<UploadStatsEntity> =
         rows.values.filter { it.serverId == serverId }.sortedByDescending { it.date }.take(days)
 
+    override fun getRecentStats(serverId: Long, epoch: String, days: Int): List<UploadStatsEntity> =
+        rows.values.filter { it.serverId == serverId && it.enrollmentEpoch == epoch }
+            .sortedByDescending { it.date }.take(days)
+
     override fun rowCount(): Int = rows.size
 
-    override fun usageUploadedOn(date: String): Int =
-        rows.values.filter { it.date == date }.sumOf { it.usageEventsUploaded }
+    override fun usageUploadedOn(date: String, serverId: Long, epoch: String): Int =
+        scoped(date, serverId, epoch).sumOf { it.usageEventsUploaded }
 
-    override fun sensorUploadedOn(date: String): Int =
-        rows.values.filter { it.date == date }.sumOf { it.sensorSamplesUploaded }
+    override fun sensorUploadedOn(date: String, serverId: Long, epoch: String): Int =
+        scoped(date, serverId, epoch).sumOf { it.sensorSamplesUploaded }
 
-    override fun batteryUploadedOn(date: String): Int =
-        rows.values.filter { it.date == date }.sumOf { it.batterySamplesUploaded }
+    override fun batteryUploadedOn(date: String, serverId: Long, epoch: String): Int =
+        scoped(date, serverId, epoch).sumOf { it.batterySamplesUploaded }
 
-    override fun usageFailuresOn(date: String): Int =
-        rows.values.filter { it.date == date }.sumOf { it.usageUploadFailures }
+    override fun usageFailuresOn(date: String, serverId: Long, epoch: String): Int =
+        scoped(date, serverId, epoch).sumOf { it.usageUploadFailures }
 
-    override fun sensorFailuresOn(date: String): Int =
-        rows.values.filter { it.date == date }.sumOf { it.sensorUploadFailures }
+    override fun sensorFailuresOn(date: String, serverId: Long, epoch: String): Int =
+        scoped(date, serverId, epoch).sumOf { it.sensorUploadFailures }
 
-    override fun batteryFailuresOn(date: String): Int =
-        rows.values.filter { it.date == date }.sumOf { it.batteryUploadFailures }
+    override fun batteryFailuresOn(date: String, serverId: Long, epoch: String): Int =
+        scoped(date, serverId, epoch).sumOf { it.batteryUploadFailures }
+
+    private fun scoped(date: String, serverId: Long, epoch: String) =
+        rows.values.filter { it.date == date && it.serverId == serverId && it.enrollmentEpoch == epoch }
 
     override fun deleteOlderThan(cutoffDate: String): Int {
         val before = rows.size

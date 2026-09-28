@@ -9,8 +9,8 @@ import androidx.room.Index
  *
  * On the normal upload path, a sample leaves [SensorSampleEntry]'s queue only after every row in
  * [UploadServerEntity] has a matching acknowledgement. Disabled destinations therefore keep
- * their place without timestamp watermarks. Explicit retention/capacity cleanup and malformed
- * quarantine are separate, observable boundaries and do not create delivery receipts.
+ * their place without timestamp watermarks. Malformed quarantine is a separate, observable
+ * boundary and does not create delivery receipts.
  */
 @Entity(
     tableName = "sensor_sample_deliveries",

@@ -58,7 +58,7 @@ internal object AppTestState {
 
     fun clearMutableTables() {
         val db = db()
-        db.sensorSampleDao().deleteAll()
+        db.openHelper.writableDatabase.execSQL("DELETE FROM sensor_samples")
         db.batterySampleDao().deleteAll()
         db.userQueueEntryData().deleteAll()
         db.queueEntryData().deleteEntries(db.queueEntryData().getNextEntries(10_000))

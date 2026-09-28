@@ -14,6 +14,7 @@ import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.sink.LifecycleEventSink
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.storage.QueueEntry
+import com.openlattice.chronicle.storage.UploadServerEntity
 import java.util.concurrent.ThreadLocalRandom
 
 private const val TAG = "DeviceLifecycleCollectionModule"
@@ -98,6 +99,9 @@ public class DeviceLifecycleCollectionModule(
     private val nextWriteTimestamp: (wallClockMillis: Long) -> Long = { it },
     private val clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
+    private val gateRefused: (Int) -> Unit = {},
+    private val originOwner: () -> UploadServerEntity? = { null },
+    private val accountLossForOwner: (UploadServerEntity?, String, Int) -> Unit = { _, _, _ -> },
 ) : DataCollectionModule {
 
     override val id: CollectionModuleId = CollectionModuleId.DEVICE_LIFECYCLE
@@ -150,6 +154,8 @@ public class DeviceLifecycleCollectionModule(
             return lastResult
         }
 
+        val owner = originOwner()
+
         if (!enrolled()) {
             log.info(TAG, "Skipping ${events.size} lifecycle event(s): participant is not enrolled")
             lastResult = ModuleResult.Skipped("participant not enrolled")
@@ -194,6 +200,7 @@ public class DeviceLifecycleCollectionModule(
                 lastResult
             }
             is ModuleResult.Failed -> {
+                accountLossForOwner(owner, "LOCAL_WRITE_FAILED", filtered.size)
                 lastEventCount = 0
                 lastError = result.redactedMessage
                 lastResult = result
@@ -201,7 +208,10 @@ public class DeviceLifecycleCollectionModule(
                 result
             }
             else -> {
-                // LifecycleEventSink only ever returns Ok / Failed; defensively record.
+                if (result is ModuleResult.Skipped) {
+                    gateRefused(filtered.size)
+                    accountLossForOwner(owner, "COLLECTION_GATE_DROPPED", filtered.size)
+                }
                 lastResult = result
                 result
             }

@@ -8,6 +8,8 @@ import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.activity.ActivityRecognitionIntegration
 import com.openlattice.chronicle.collection.directboot.DirectBootDrainWorker
+import com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal
+import com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer
 import com.openlattice.chronicle.collection.directboot.DirectBootProcessInit
 import com.openlattice.chronicle.collection.device.HealthConnectPermissions
 import com.openlattice.chronicle.collection.interaction.InteractionAccessibilityOnboarding
@@ -35,6 +37,25 @@ internal object DistributionRestrictedRuntime {
         DirectBootProcessInit.reinitializeAfterUnlock(context)
 
     fun drainDirectBootSamples(context: Context) = DirectBootDrainWorker.enqueue(context)
+
+    fun eraseDirectBootSensorSamples(context: Context, sensorType: String) {
+        val db = ChronicleDb.getInstance(context)
+        val server = com.openlattice.chronicle.services.upload.exactActiveEnrollmentServer(context, db)
+            ?: return
+        val owner = DirectBootDiagnosticsJournal.Owner(
+            server.studyId, server.participantId, server.sourceDeviceId,
+            "${server.id}:${server.createdAt}",
+        )
+        val journal = DirectBootDiagnosticsJournal(context)
+        journal.bind(context)
+        val erased = DirectBootSampleBuffer(context).eraseSensorType(
+            sensorType, DirectBootSampleBuffer.ownerKey(owner),
+        )
+        if (erased > 0) {
+            journal.record("MODULE_POLICY_ERASED", erased)
+            DirectBootDrainWorker.enqueue(context)
+        }
+    }
 
     fun uploadSensors(context: Context, db: ChronicleDb): Int {
         val worker = SensorUploadWorkerDelegate(context, db)

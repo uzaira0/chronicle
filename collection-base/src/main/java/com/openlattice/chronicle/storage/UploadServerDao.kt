@@ -577,6 +577,9 @@ interface UploadServerDao {
     """)
     fun recordUsageUploadSuccess(id: Long, time: String, lastTimestamp: Long, lastQueueId: Long, count: Int): Int
 
+    @Query("UPDATE upload_servers SET lastUploadedTimestamp = :lastTimestamp, lastUploadedQueueId = :lastQueueId WHERE id = :id")
+    fun advanceUsageCursor(id: Long, lastTimestamp: Long, lastQueueId: Long): Int
+
     @Query("""
         UPDATE upload_servers
         SET lastUploadTime = :time,

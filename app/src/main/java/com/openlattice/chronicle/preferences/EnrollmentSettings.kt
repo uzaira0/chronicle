@@ -57,7 +57,12 @@ class EnrollmentSettings(private val context: Context) {
         userStorageQueue = chronicleDb.userQueueEntryData()
     }
 
-    fun isEnrolled(): Boolean {
+    fun isEnrolled(): Boolean = isEnrolled(strictStorage = false)
+
+    /** Persistence gates retry on storage faults instead of treating them as a consent refusal. */
+    fun isEnrolledOrThrow(): Boolean = isEnrolled(strictStorage = true)
+
+    private fun isEnrolled(strictStorage: Boolean): Boolean {
         if (studyId == INVALID_STUDY_ID || participantId.isBlank()) return false
         val server = try {
             // This legacy synchronous API is used by Activity lifecycle callbacks. Room rejects
@@ -66,8 +71,9 @@ class EnrollmentSettings(private val context: Context) {
             runBlocking(Dispatchers.IO) {
                 chronicleDb.uploadServerDao().getConfiguredServer()
             }
-        } catch (_: RuntimeException) {
+        } catch (error: RuntimeException) {
             // A transient storage failure is not evidence that the enrollment disappeared.
+            if (strictStorage) throw error
             return false
         }
         if (server == null || server.studyId != studyId.toString() || server.participantId != participantId) {
@@ -88,10 +94,8 @@ class EnrollmentSettings(private val context: Context) {
 
     /** Clears non-authoritative identity/configuration when Room has no matching destination. */
     private fun clearOrphanedEnrollmentState() {
-        val orphanedStudyId = studyId
-        if (orphanedStudyId != INVALID_STUDY_ID) {
-            runCatching { EncryptionSettingStore.of(context).evict(orphanedStudyId) }
-        }
+        // A transient or replaced destination is not evidence of explicit erasure. Keep the
+        // local encryption material and data so an enrollment recovery can still reconcile them.
         clearEnrollment()
     }
 
@@ -178,17 +182,19 @@ class EnrollmentSettings(private val context: Context) {
             .apply()
     }
 
-    /** Clears enrollment identity after a completed withdrawal while preserving app-level preferences. */
-    fun clearEnrollment() {
+    /** Clears identity; only explicit withdrawal may erase locally retained research data. */
+    fun clearEnrollment(eraseLocalData: Boolean = false) {
         InteractionPolicySettings.invalidateMemoryCache()
-        // No direct-boot collection for a withdrawn participant (fail closed).
+        // Retire collection permission even when identity is temporarily orphaned.
         clearDirectBootSensorSnapshot(context)
-        check(clearDirectBootSensorBuffer(context)) {
-            "Failed to clear direct-boot research samples"
+        if (eraseLocalData) {
+            check(clearDirectBootSensorBuffer(context)) {
+                "Failed to clear direct-boot research samples"
+            }
         }
         HealthConnectScopeStore.of(context).clear()
-        LocalUploadDiagnosticsStore.of(context).clear()
-        com.openlattice.chronicle.services.crypto.PayloadSealer.clearSealedEnvelopes()
+        if (eraseLocalData) LocalUploadDiagnosticsStore.of(context).clear()
+        if (eraseLocalData) com.openlattice.chronicle.services.crypto.PayloadSealer.clearSealedEnvelopes()
         participantId = ""
         studyId = INVALID_STUDY_ID
         check(settings.edit()

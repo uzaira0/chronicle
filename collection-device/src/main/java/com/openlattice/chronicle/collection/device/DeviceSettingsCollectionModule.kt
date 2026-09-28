@@ -15,6 +15,7 @@ import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.sink.DeviceSettingsSampleSink
 import com.openlattice.chronicle.storage.DeviceSettingsSampleEntry
+import com.openlattice.chronicle.storage.UploadServerEntity
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -33,6 +34,8 @@ public class DeviceSettingsCollectionModule(
     private val sink: DeviceSettingsSampleSink,
     private val source: DeviceSettingsSource,
     private val enrolled: () -> Boolean,
+    private val ownerForSample: () -> UploadServerEntity? = { null },
+    private val accountWriteResult: (UploadServerEntity?, ModuleResult, Int) -> Unit = { _, _, _ -> },
     private val clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
 ) : DataCollectionModule {
@@ -64,6 +67,7 @@ public class DeviceSettingsCollectionModule(
 
     private fun runSample(now: Long): ModuleResult {
         if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
+        val owner = ownerForSample()
 
         val reading: DeviceSettingsReading? = try {
             source.read()
@@ -103,7 +107,9 @@ public class DeviceSettingsCollectionModule(
             ringerMode = reading.ringerMode?.name,
         )
 
-        return when (val writeResult = sink.write(listOf(entry))) {
+        return when (val writeResult = sink.write(listOf(entry)).also {
+            accountWriteResult(owner, it, 1)
+        }) {
             is ModuleResult.Ok -> {
                 log.info(TAG, "Persisted 1 device-settings snapshot")
                 ModuleResult.Ok(1)

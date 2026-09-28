@@ -18,6 +18,7 @@ internal object DistributionRestrictedRuntime {
     fun scheduleSensorSettingsRefresh(context: Context): Unit = Unit
     fun reinitializeDirectBootProcess(context: Context): Unit = Unit
     fun drainDirectBootSamples(context: Context): Unit = Unit
+    fun eraseDirectBootSensorSamples(context: Context, sensorType: String): Unit = Unit
     fun uploadSensors(context: Context, db: ChronicleDb): Int = 0
 
     fun reportSensorAvailability(

@@ -12,6 +12,7 @@ import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.BatterySampleSink
 import com.openlattice.chronicle.storage.BatterySampleDao
 import com.openlattice.chronicle.storage.BatterySampleEntry
+import com.openlattice.chronicle.storage.UploadServerEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -98,6 +99,27 @@ class BatteryTelemetryCollectionModuleTest {
         val result = mod.sample()
         assertTrue(result is ModuleResult.Failed)
         assertEquals(CollectionModuleStatus.FAILED, mod.status())
+    }
+
+    @Test fun failedSampleKeepsTheOwnerCapturedBeforeSourceRead() {
+        val a = UploadServerEntity(id = 1, name = "A", url = "https://example.invalid",
+            studyId = "study-a", participantId = "participant-a", sourceDeviceId = "device-a")
+        val b = a.copy(id = 2, name = "B", studyId = "study-b")
+        var active = a
+        var accountedOwner: UploadServerEntity? = null
+        val module = BatteryTelemetryCollectionModule(
+            sink = BatterySampleSink(FakeBatterySampleDao(failOnInsert = true), NoOpCollectionLog),
+            source = { active = b; reading },
+            enrolled = { true },
+            ownerForSample = { active },
+            accountWriteResult = { owner, result, count ->
+                if (result is ModuleResult.Failed && count == 1) accountedOwner = owner
+            },
+            log = NoOpCollectionLog,
+        )
+
+        assertTrue(module.sample() is ModuleResult.Failed)
+        assertEquals(a, accountedOwner)
     }
 
     @Test fun testIdAndPrivacyClass() {
