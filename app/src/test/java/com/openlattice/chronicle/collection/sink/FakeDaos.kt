@@ -60,6 +60,12 @@ class FakeStorageQueue : StorageQueue {
         entries.forEach { deleteEntry(it) }
     }
 
+    override fun deleteOldest(count: Int): Int {
+        val oldest = rows.keys.sortedWith(compareBy({ it.first }, { it.second })).take(count)
+        oldest.forEach { rows.remove(it) }
+        return oldest.size
+    }
+
     override fun getEntriesAfter(cursor: Long, limit: Int): List<QueueEntry> =
         rows.values.filter { it.writeTimestamp > cursor }.sortedBy { it.writeTimestamp }.take(limit)
 

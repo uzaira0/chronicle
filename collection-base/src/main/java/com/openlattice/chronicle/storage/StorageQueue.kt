@@ -60,6 +60,10 @@ interface StorageQueue {
     )
     fun deleteEntriesBeforeOrAt(maxTimestamp: Long, maxId: Long)
 
+    /** Low-storage eviction: removes the [count] oldest rows, returning how many went. */
+    @Query("DELETE FROM dataQueue WHERE rowid IN (SELECT rowid FROM dataQueue ORDER BY writeTimestamp ASC, id ASC LIMIT :count)")
+    fun deleteOldest(count: Int): Int
+
     /** Privacy-first fallback for untagged shared usage/lifecycle rows. */
     @Query("DELETE FROM dataQueue")
     fun deleteAll()
