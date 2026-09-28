@@ -269,6 +269,8 @@ object Utils {
             // Any host can be enrolled from a QR code, so a hostile or broken server must not
             // be able to exhaust memory with one response. The largest real response (study
             // settings) is a few KiB.
+            // Application interceptors see the body after OkHttp's transparent gzip expansion.
+            .addInterceptor(ResponseSizeLimitInterceptor())
             .addNetworkInterceptor(ResponseSizeLimitInterceptor())
         // Every supported public endpoint uses Android's system trust store. Research builds
         // may restrict the hostname above, but no tenant certificate or infrastructure name is

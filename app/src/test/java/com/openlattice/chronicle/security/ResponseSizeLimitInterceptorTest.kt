@@ -9,6 +9,10 @@ import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.asResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
+import okio.GzipSink
+import okio.GzipSource
+import okio.buffer
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -32,6 +36,19 @@ class ResponseSizeLimitInterceptorTest {
         val chunked = Buffer().writeUtf8("x".repeat(11)).asResponseBody(null, -1)
         val response = call(chunked)
         assertThrows(IOException::class.java) { response.body!!.string() }
+    }
+
+    @Test
+    fun decompressedGzipBombIsCappedAtTheApplicationBoundary() {
+        val compressed = Buffer()
+        GzipSink(compressed).buffer().use { it.writeUtf8("x".repeat(10_000)) }
+        val inflated = GzipSource(compressed).buffer().asResponseBody(null, -1)
+        assertThrows(IOException::class.java) { call(inflated).body!!.string() }
+
+        val source = sequenceOf(File("app/src/main/java"), File("src/main/java"))
+            .map { File(it, "com/openlattice/chronicle/utils/Utils.kt") }
+            .first(File::isFile).readText()
+        assertEquals(1, Regex("\\.addInterceptor\\(ResponseSizeLimitInterceptor\\(\\)\\)").findAll(source).count())
     }
 
     private fun call(body: ResponseBody): Response = OkHttpClient.Builder()
