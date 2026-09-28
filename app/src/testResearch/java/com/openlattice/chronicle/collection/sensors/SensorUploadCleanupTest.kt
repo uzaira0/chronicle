@@ -80,6 +80,18 @@ class SensorUploadCleanupTest {
     }
 
     @Test
+    fun failingDestinationSkipsAgeTtl() {
+        assertTrue(
+            shouldSkipSensorAgeTtl(
+                hasEnabledDestination = true,
+                hasPausedDestination = false,
+                anyFailClosedDestination = false,
+                anyFailingDestination = true,
+            ),
+        )
+    }
+
+    @Test
     fun retentionExpiryIsReportedAsPermanentLoss() {
         val dao = FakeSensorSampleDao().apply {
             insertAll((1..5).map { oldSample("expired-$it") })

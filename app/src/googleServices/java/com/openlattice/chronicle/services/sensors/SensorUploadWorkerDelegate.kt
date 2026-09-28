@@ -51,7 +51,8 @@ internal fun shouldSkipSensorAgeTtl(
     hasEnabledDestination: Boolean,
     hasPausedDestination: Boolean,
     anyFailClosedDestination: Boolean,
-): Boolean = !hasEnabledDestination || hasPausedDestination || anyFailClosedDestination
+    anyFailingDestination: Boolean = false,
+): Boolean = !hasEnabledDestination || hasPausedDestination || anyFailClosedDestination || anyFailingDestination
 
 internal fun isCompleteSensorUploadAcceptance(
     encrypted: Boolean,
@@ -313,6 +314,9 @@ class SensorUploadWorkerDelegate(
                     hasEnabledDestination = servers.isNotEmpty(),
                     hasPausedDestination = hasPausedDestination,
                     anyFailClosedDestination = anyFailClosed,
+                    // An unreachable server is not a reason to discard what it has not yet
+                    // received; the count cap still bounds storage.
+                    anyFailingDestination = servers.any { it.sensorConsecutiveFailures > 0 },
                 ),
                 diagnostics = diagnostics,
             )
@@ -520,7 +524,7 @@ class SensorUploadWorkerDelegate(
             maxSampleCount: Int = SENSOR_RETENTION_CAP_SAMPLES,
             maxDeadLetterCount: Int = MAX_DEAD_LETTER_COUNT,
             deleteChunkSize: Int = SENSOR_CLEANUP_DELETE_CHUNK_SIZE,
-            reportDrop: (String) -> Unit = { message -> Log.w(TAG, message) },
+            reportDrop: (String) -> Unit = { message -> Log.e(TAG, message) },
             diagnostics: LocalUploadDiagnosticsStore? = null,
         ): SensorCleanupResult {
             require(maxSampleCount >= 0) { "maxSampleCount must be non-negative" }
