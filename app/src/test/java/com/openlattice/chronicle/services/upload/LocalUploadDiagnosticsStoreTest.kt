@@ -47,6 +47,24 @@ class LocalUploadDiagnosticsStoreTest {
     }
 
     @Test
+    fun v104ServerRejectionShedsOnlyTheNewestTierFirst() {
+        val persistence = FakePersistence()
+        val store = LocalUploadDiagnosticsStore(persistence)
+        val day = LocalDate.now()
+        store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
+        store.recordOperational(LocalUploadModuleFamily.APP_RUNTIME, LocalOperationalIssue.APP_CRASH)
+        store.recordOperational(LocalUploadModuleFamily.SENSOR, LocalOperationalIssue.SENSOR_AGE_EXPIRED, 40)
+
+        // A 2026.9.25 (V104) server rejects the batch: only the post-V104 code goes.
+        store.dropUnsupportedByLegacyServer(store.pending(day).mapTo(mutableSetOf()) { it.id })
+        assertEquals(setOf("DESTINATION_MISSING", "APP_CRASH"), store.pending(day).mapTo(hashSetOf()) { it.issue })
+
+        // A pre-V104 server rejects again: then the V104 tier goes too.
+        store.dropUnsupportedByLegacyServer(store.pending(day).mapTo(mutableSetOf()) { it.id })
+        assertEquals(listOf("DESTINATION_MISSING"), store.pending(day).map { it.issue })
+    }
+
+    @Test
     fun historyIsBoundedValidatedAndClearedAtTheEnrollmentBoundary() {
         val persistence = FakePersistence().apply {
             buckets = listOf(

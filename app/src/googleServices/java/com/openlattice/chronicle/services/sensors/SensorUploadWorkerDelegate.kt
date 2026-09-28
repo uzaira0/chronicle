@@ -543,6 +543,7 @@ class SensorUploadWorkerDelegate(
                                 "older than the configured ${SAMPLE_TTL_DAYS}-day limit; " +
                                 "delivery is not guaranteed beyond that limit",
                         )
+                        recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_AGE_EXPIRED, dropped)
                     }
                 }
             } else 0
@@ -559,6 +560,7 @@ class SensorUploadWorkerDelegate(
                         "sample(s) to enforce the configured $maxSampleCount-row DoS bound; " +
                         "this can include data held for a paused destination",
                 )
+                recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_CAPACITY_DROPPED, dropped)
                 dropped
             } else 0
 

@@ -88,4 +88,22 @@ class SensorUploadWorkerDelegateTest {
         assertEquals("SENSOR_DEAD_LETTER_DROPPED", bucket.issue)
         assertEquals(3, bucket.count)
     }
+
+    @Test
+    fun ageAndCapacityDropsAreCountedForTheResearcher() {
+        val old = (1..3).map { sample("old-$it").copy(timestamp = "2020-01-01T00:00:00Z") }
+        val fresh = (1..2).map { sample("new-$it").copy(timestamp = "9999-01-01T00:00:00Z") }
+        val dao = FakeSensorSampleDao().apply { insertAll(old + fresh) }
+        val store = LocalUploadDiagnosticsStore(MemoryPersistence())
+
+        SensorUploadWorkerDelegate.cleanupStaleData(
+            dao,
+            maxSampleCount = 1,
+            reportDrop = {},
+            diagnostics = store,
+        )
+
+        val counts = store.pending(LocalDate.now()).associate { it.issue to it.count }
+        assertEquals(mapOf("SENSOR_AGE_EXPIRED" to 3, "SENSOR_CAPACITY_DROPPED" to 1), counts)
+    }
 }

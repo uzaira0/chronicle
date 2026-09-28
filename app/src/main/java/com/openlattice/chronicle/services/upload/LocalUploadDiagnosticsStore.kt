@@ -28,14 +28,26 @@ enum class LocalUploadModuleFamily {
     APP_RUNTIME,
 }
 
-/** Closed operational counts that are not upload failures: dead letters and process exits. */
+/** Closed operational counts that are not upload failures: dead letters, process exits, local drops. */
 enum class LocalOperationalIssue {
     SENSOR_SAMPLE_QUARANTINED,
     SENSOR_DEAD_LETTER_DROPPED,
     APP_CRASH,
     APP_CRASH_NATIVE,
     APP_ANR,
+    SENSOR_AGE_EXPIRED,
+    SENSOR_CAPACITY_DROPPED,
+    USAGE_QUEUE_EVICTED,
 }
+
+/** Codes a V104 server (release 2026.9.25) accepts beyond [LEGACY_SERVER_ISSUE_CODES]. */
+internal val V104_SERVER_ISSUE_CODES = setOf(
+    "SENSOR_SAMPLE_QUARANTINED",
+    "SENSOR_DEAD_LETTER_DROPPED",
+    "APP_CRASH",
+    "APP_CRASH_NATIVE",
+    "APP_ANR",
+)
 
 /** Families and codes an older server (before V104) accepts; anything else it rejects with 400. */
 internal val LEGACY_SERVER_MODULE_FAMILIES = setOf("USAGE_LIFECYCLE", "BATTERY", "DEVICE_TELEMETRY")
@@ -189,18 +201,25 @@ class LocalUploadDiagnosticsStore(
         return retained
     }
 
-    /** Drops buckets a pre-V104 server cannot store, so they stop blocking the legacy ones. */
+    /**
+     * Sheds the newest tier of a batch an older server rejected, so the codes it does know stop
+     * being blocked: codes newer than V104 first, then (on a pre-V104 server's next rejection)
+     * everything outside the legacy upload-failure vocabulary.
+     */
     fun dropUnsupportedByLegacyServer(ids: Set<String>) {
         if (ids.isEmpty()) return
         synchronized(mutationLock) {
-            persistence.save(
-                persistence.load().filterNot { bucket ->
-                    bucket.id in ids && (
-                        bucket.moduleFamily !in LEGACY_SERVER_MODULE_FAMILIES ||
-                            bucket.issue !in LEGACY_SERVER_ISSUE_CODES
-                        )
-                },
-            )
+            val loaded = persistence.load()
+            val batch = loaded.filter { it.id in ids }
+            val newerThanV104 = batch.filter {
+                it.issue !in LEGACY_SERVER_ISSUE_CODES && it.issue !in V104_SERVER_ISSUE_CODES
+            }
+            val shed = newerThanV104.ifEmpty {
+                batch.filter {
+                    it.moduleFamily !in LEGACY_SERVER_MODULE_FAMILIES || it.issue !in LEGACY_SERVER_ISSUE_CODES
+                }
+            }.mapTo(hashSetOf()) { it.id }
+            persistence.save(loaded.filterNot { it.id in shed })
         }
     }
 
