@@ -688,6 +688,13 @@ tasks.register('verifyAmazonRuntimeClasspath') {
 
 def releaseRuntimeClasspaths = ['playReleaseRuntimeClasspath', 'amazonReleaseRuntimeClasspath', 'researchReleaseRuntimeClasspath', 'openReleaseRuntimeClasspath']
 
+// What ships is pinned in app/gradle.lockfile: a release classpath that resolves to anything else
+// fails the build, and osv-scanner reads the lockfile. After a dependency change:
+//   ./gradlew :app:verifyNoJacksonRuntime --write-locks
+configurations.matching { it.name in releaseRuntimeClasspaths }.configureEach {
+    resolutionStrategy.activateDependencyLocking()
+}
+
 tasks.register('verifyNoJacksonRuntime') {
     group = 'verification'
     description = 'Fails if a release flavor ships Jackson parser, databind, or datatype code.'
