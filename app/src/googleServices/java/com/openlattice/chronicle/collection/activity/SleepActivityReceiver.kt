@@ -10,6 +10,7 @@ import com.google.android.gms.location.SleepClassifyEvent
 import com.google.android.gms.location.SleepSegmentEvent
 import com.openlattice.chronicle.collection.ActivityTransitionType
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.SleepEventType
 import com.openlattice.chronicle.collection.sink.ActivityRecognitionSampleSink
 import com.openlattice.chronicle.collection.sink.SleepSampleSink
@@ -45,7 +46,8 @@ public class SleepActivityReceiver : BroadcastReceiver() {
             try {
                 handle(appContext, intent)
             } catch (e: Exception) {
-                Log.w(TAG, "Sleep/activity receive failed", e)
+                // The broadcast is not redelivered: whatever it carried is lost.
+                Log.e(TAG, "Sleep/activity receive failed", e)
             } finally {
                 pending.finish()
             }
@@ -104,11 +106,11 @@ public class SleepActivityReceiver : BroadcastReceiver() {
             }
         }
         if (rows.isNotEmpty()) {
-            SleepSampleSink(
+            val result = SleepSampleSink(
                 db.sleepSampleDao(),
                 persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.SLEEP),
             ).write(rows)
-            Log.i(TAG, "Persisted ${rows.size} sleep sample(s)")
+            logWrite(writeOutcome("sleep sample(s)", rows.size, result))
         }
     }
 
@@ -134,12 +136,16 @@ public class SleepActivityReceiver : BroadcastReceiver() {
             )
         }
         if (rows.isNotEmpty()) {
-            ActivityRecognitionSampleSink(
+            val result = ActivityRecognitionSampleSink(
                 db.activityRecognitionSampleDao(),
                 persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.ACTIVITY_RECOGNITION),
             ).write(rows)
-            Log.i(TAG, "Persisted ${rows.size} activity transition(s)")
+            logWrite(writeOutcome("activity transition(s)", rows.size, result))
         }
+    }
+
+    private fun logWrite(outcome: Pair<Int, String>) {
+        Log.println(outcome.first, TAG, outcome.second)
     }
 
     private fun isoUtc(epochMillis: Long): String =
@@ -150,6 +156,18 @@ public class SleepActivityReceiver : BroadcastReceiver() {
 
         /** Action the capture controller's PendingIntent targets; matched by the manifest receiver. */
         public const val ACTION_SLEEP_ACTIVITY: String = "com.openlattice.chronicle.SLEEP_ACTIVITY_UPDATE"
+
+        /**
+         * Log priority and text for one sink write. Only [ModuleResult.Ok] reports rows as persisted;
+         * a failed or retry result is an error because a broadcast is never redelivered.
+         */
+        internal fun writeOutcome(kind: String, attempted: Int, result: ModuleResult): Pair<Int, String> =
+            when (result) {
+                is ModuleResult.Ok -> Log.INFO to "Persisted $attempted $kind"
+                is ModuleResult.Skipped -> Log.INFO to "Skipped $attempted $kind: ${result.reason}"
+                is ModuleResult.Retry -> Log.ERROR to "Dropped $attempted $kind: ${result.reason}"
+                is ModuleResult.Failed -> Log.ERROR to "Failed to persist $attempted $kind: ${result.redactedMessage}"
+            }
 
         // GMS ActivityTransition.ACTIVITY_TRANSITION_ENTER = 0 / _EXIT = 1 (stable API contract).
         private fun transitionTypeFor(gmsTransition: Int): ActivityTransitionType =
