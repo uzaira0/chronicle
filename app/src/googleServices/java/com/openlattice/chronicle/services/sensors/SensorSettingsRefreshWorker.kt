@@ -7,6 +7,7 @@ import com.openlattice.chronicle.collection.sensors.SensorSettingsMigration
 import com.openlattice.chronicle.collection.sensors.SensorSettingsRefreshDelegate
 import com.openlattice.chronicle.collection.sensors.SensorSettingsRefreshOutcome
 import com.openlattice.chronicle.preferences.SensorSettings
+import com.openlattice.chronicle.serialization.ChronicleCallException
 import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.storage.ChronicleDb
 import java.util.UUID
@@ -134,7 +135,7 @@ class SensorSettingsRefreshWorker(context: Context, params: WorkerParameters) : 
 
             return Result.success()
         } catch (e: Exception) {
-            if (e.message?.contains("code 404") == true && e.message?.contains("AndroidSensor") == true) {
+            if (e is ChronicleCallException && e.code == 404 && e.url.contains("/type/AndroidSensor")) {
                 val sensorSettings = SensorSettings(applicationContext)
                 if (sensorSettings.isEnabled()) {
                     sensorSettings.clear()
