@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection.device
 
 import android.content.Context
+import com.openlattice.chronicle.collection.CollectionCadenceModules
 import com.openlattice.chronicle.collection.CollectionModuleId
 
 /**
@@ -59,15 +60,10 @@ public class ExpansionPullSchedule(context: Context) {
         /**
          * The modules whose per-module interval is enforced by a periodic-worker last-run gate.
          * [CollectionLoopCoordinator] writes their intervals here from the resolved settings.
+         * Defined once in chronicle-models; the web study form reads the same list.
          */
         @JvmField
-        public val INTERVAL_GATED_MODULES: List<CollectionModuleId> = listOf(
-            CollectionModuleId.CONNECTIVITY_STATE,
-            CollectionModuleId.DEVICE_SETTINGS,
-            CollectionModuleId.APP_NETWORK_USAGE,
-            CollectionModuleId.HEALTH_CONNECT,
-            CollectionModuleId.BATTERY_TELEMETRY,
-        )
+        public val INTERVAL_GATED_MODULES: List<CollectionModuleId> = CollectionCadenceModules.intervalGated
 
         /**
          * Pure due check: due when never run before, or when the elapsed time since the last
