@@ -4,6 +4,10 @@ import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.storage.SensorSampleEntry
 import java.io.File
+import java.io.DataOutputStream
+import java.io.FileOutputStream
+import java.util.UUID
+import com.openlattice.chronicle.serialization.JsonSerializer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -29,6 +33,9 @@ class DirectBootSampleBufferTest {
     }
 
     private fun buffer(dir: File = tmp.root) = DirectBootSampleBuffer(dir, cipher, NoOpCollectionLog)
+    private fun transferred(batch: List<SensorSampleEntry>) =
+        DirectBootSampleBuffer.DrainTransfer(batch.mapTo(linkedSetOf()) { it.id })
+    private val refused = DirectBootSampleBuffer.DrainTransfer(emptySet(), failed = true)
 
     private fun sample(id: String, sensorType: String = "accelerometer") = SensorSampleEntry(
         id = id,
@@ -52,7 +59,7 @@ class DirectBootSampleBufferTest {
         val persisted = mutableListOf<SensorSampleEntry>()
         val result = buffer.drain { batch ->
             persisted.addAll(batch)
-            ModuleResult.Ok(batch.size)
+            transferred(batch)
         }
 
         assertEquals(listOf("a", "b", "c"), persisted.map { it.id })
@@ -63,7 +70,7 @@ class DirectBootSampleBufferTest {
         assertTrue(buffer.isEmpty())
 
         // A second drain is a no-op.
-        val again = buffer.drain { ModuleResult.Ok(it.size) }
+        val again = buffer.drain { transferred(it) }
         assertEquals(0, again.persisted)
         assertFalse(again.failed)
     }
@@ -84,14 +91,14 @@ class DirectBootSampleBufferTest {
         val buffer = buffer()
         buffer.append(listOf(sample("a")))
 
-        val failed = buffer.drain { ModuleResult.Failed(RuntimeException("db closed")) }
+        val failed = buffer.drain { refused }
         assertTrue(failed.failed)
         assertFalse(buffer.isEmpty())
 
         val persisted = mutableListOf<SensorSampleEntry>()
         val retry = buffer.drain { batch ->
             persisted.addAll(batch)
-            ModuleResult.Ok(batch.size)
+            transferred(batch)
         }
         assertEquals(listOf("a"), persisted.map { it.id })
         assertFalse(retry.failed)
@@ -102,7 +109,7 @@ class DirectBootSampleBufferTest {
     fun `explicit enrollment reset removes live and interrupted drain records`() {
         val buffer = buffer()
         buffer.append(listOf(sample("old-study")))
-        buffer.drain { ModuleResult.Failed(RuntimeException("interrupted")) }
+        buffer.drain { refused }
         buffer.append(listOf(sample("newer-old-study")))
         assertFalse(buffer.isEmpty())
 
@@ -114,17 +121,33 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
+    fun `sensor discard erases only that sensor from both buffer files`() {
+        val buffer = buffer()
+        buffer.append(listOf(sample("a", "accelerometer"), sample("g", "gyroscope")))
+        buffer.drain { refused }
+        buffer.append(listOf(sample("b", "accelerometer")))
+
+        assertEquals(2, buffer.eraseSensorType("accelerometer"))
+        val drained = mutableListOf<String>()
+        buffer.drain { batch ->
+            drained += batch.map { it.id }
+            transferred(batch)
+        }
+        assertEquals(listOf("g"), drained)
+    }
+
+    @Test
     fun `appends after a crashed drain are preserved and drain after the older records`() {
         val buffer = buffer()
         buffer.append(listOf(sample("old")))
         // Crash mid-drain: the rename happened but persistence never completed.
-        buffer.drain { ModuleResult.Failed(RuntimeException("crash")) }
+        buffer.drain { refused }
         buffer.append(listOf(sample("new")))
 
         val persisted = mutableListOf<SensorSampleEntry>()
         val result = buffer.drain { batch ->
             persisted.addAll(batch)
-            ModuleResult.Ok(batch.size)
+            transferred(batch)
         }
 
         assertEquals(listOf("old", "new"), persisted.map { it.id })
@@ -142,13 +165,33 @@ class DirectBootSampleBufferTest {
         val persisted = mutableListOf<SensorSampleEntry>()
         val result = buffer.drain { batch ->
             persisted.addAll(batch)
-            ModuleResult.Ok(batch.size)
+            transferred(batch)
         }
 
         assertEquals(listOf("good"), persisted.map { it.id })
         assertEquals(1, result.corruptRecordsDropped)
         assertFalse(result.failed)
         assertTrue(buffer.isEmpty())
+    }
+
+    @Test
+    fun `bad encrypted record does not discard the valid record after it`() {
+        val buffer = buffer()
+        buffer.append(listOf(sample("before")))
+        DataOutputStream(FileOutputStream(File(tmp.root, "buffer.bin"), true)).use {
+            it.writeInt(3)
+            it.write(byteArrayOf(1, 2, 3))
+        }
+        buffer.append(listOf(sample("after")))
+
+        val drained = mutableListOf<String>()
+        val result = buffer.drain { batch ->
+            drained += batch.map { it.id }
+            transferred(batch)
+        }
+
+        assertEquals(listOf("before", "after"), drained)
+        assertEquals(1, result.corruptRecordsDropped)
     }
 
     @Test
@@ -162,6 +205,26 @@ class DirectBootSampleBufferTest {
 
         assertTrue(result is ModuleResult.Ok)
         assertEquals(0, (result as ModuleResult.Ok).items)
+    }
+
+    @Test
+    fun `full buffer records exact capacity loss in device protected journal seam`() {
+        val losses = mutableListOf<Pair<String, Int>>()
+        val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
+            reportLoss = { code, count, _ -> losses += code to count })
+        File(tmp.root, "buffer.bin").writeBytes(ByteArray(DirectBootSampleBuffer.MAX_BUFFER_BYTES.toInt()))
+
+        buffer.append(listOf(sample("one"), sample("two")))
+
+        assertEquals(listOf("DIRECT_BOOT_CAPACITY_DROPPED" to 2), losses)
+    }
+
+    @Test
+    fun `admission pauses before the next maximum record could fill the buffer`() {
+        val buffer = buffer()
+        assertTrue(buffer.hasAdmissionCapacity())
+        File(tmp.root, "buffer.bin").writeBytes(ByteArray(DirectBootSampleBuffer.MAX_RECORD_BYTES + 1))
+        assertFalse(buffer.hasAdmissionCapacity())
     }
 
     @Test
@@ -180,9 +243,100 @@ class DirectBootSampleBufferTest {
         val persisted = mutableListOf<SensorSampleEntry>()
         buffer.drain { batch ->
             persisted.addAll(batch)
-            ModuleResult.Ok(batch.size)
+            transferred(batch)
         }
 
         assertEquals(listOf(entry), persisted)
+    }
+
+    @Test
+    fun `old enrollment records are quarantined while current records drain`() {
+        val old = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
+            ownerForAppend = { "owner-A" })
+        val current = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
+            ownerForAppend = { "owner-B" })
+        old.append(listOf(sample("A")))
+        current.append(listOf(sample("B")))
+        val imported = mutableListOf<String>()
+
+        val result = current.drain("owner-B") { batch ->
+            imported += batch.map { it.id }
+            transferred(batch)
+        }
+
+        assertFalse(result.failed)
+        assertEquals(listOf("B"), imported)
+        assertEquals(1, File(tmp.root, "quarantine").listFiles()?.size)
+        assertTrue(current.isEmpty())
+    }
+
+    @Test
+    fun `only transferred samples checkpoint while gate refused samples wait for later drain`() {
+        val losses = mutableListOf<Pair<String, Int>>()
+        val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
+            reportLoss = { code, count, _ -> losses += code to count })
+        buffer.append(listOf(sample("one"), sample("two"), sample("three")))
+        val first = buffer.drain { DirectBootSampleBuffer.DrainTransfer(setOf("one", "three")) }
+        assertEquals(2, first.persisted)
+        assertTrue(first.failed)
+        assertFalse(buffer.isEmpty())
+        buffer.append(listOf(sample("later")))
+        val later = mutableListOf<String>()
+        buffer.drain { batch ->
+            later += batch.map { it.id }
+            transferred(batch)
+        }
+        assertEquals(listOf("two", "later"), later)
+        assertTrue(losses.isEmpty())
+    }
+
+    @Test
+    fun `successful batch is not replayed after a later batch fails`() {
+        val buffer = buffer()
+        buffer.append((0..DirectBootSampleBuffer.DRAIN_BATCH).map { sample("id-$it") })
+        var calls = 0
+        val first = buffer.drain { batch ->
+            calls++
+            if (calls == 1) transferred(batch) else refused
+        }
+        assertTrue(first.failed)
+        assertEquals(DirectBootSampleBuffer.DRAIN_BATCH, first.persisted)
+        val replayed = mutableListOf<String>()
+        buffer.drain { batch ->
+            replayed += batch.map { it.id }
+            transferred(batch)
+        }
+        assertEquals(listOf("id-${DirectBootSampleBuffer.DRAIN_BATCH}"), replayed)
+    }
+
+    @Test
+    fun `records from before ownership drain under the current enrollment after an upgrade`() {
+        val plaintext = JsonSerializer.toJson(listOf(sample("legacy"))).toByteArray()
+        val blob = cipher.encrypt(plaintext)
+        DataOutputStream(FileOutputStream(File(tmp.root, "buffer.bin"))).use {
+            it.writeInt(blob.size)
+            it.write(blob)
+        }
+        val imported = mutableListOf<String>()
+        buffer().drain { batch ->
+            imported += batch.map { it.id }
+            transferred(batch)
+        }
+        // 2026.9.27 and earlier cleared the buffer with the enrollment, so an ownerless record
+        // can only belong to the enrollment that is draining it.
+        assertEquals(listOf("legacy"), imported)
+        assertTrue(File(tmp.root, "quarantine").listFiles().isNullOrEmpty())
+    }
+
+    @Test
+    fun `corruption incident id is a UUID`() {
+        val ids = mutableListOf<String>()
+        val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
+            reportLoss = { code, _, id -> if (code == "DIRECT_BOOT_CORRUPT_RECORD") ids += id })
+        buffer.append(listOf(sample("good")))
+        File(tmp.root, "buffer.bin").appendBytes(byteArrayOf(0, 0, 1, 0, 42))
+        buffer.drain { transferred(it) }
+        assertEquals(1, ids.size)
+        assertEquals(ids.single(), UUID.fromString(ids.single()).toString())
     }
 }

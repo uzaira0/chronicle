@@ -19,13 +19,13 @@ import com.openlattice.chronicle.services.upload.UPLOAD_NETWORK_CONSTRAINT
 import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.RestrictedUploadApiFactory
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.quarantineMalformedSample
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.audioActivitySampleDao
 import com.openlattice.chronicle.storage.audioContentSampleDao
 import com.openlattice.chronicle.storage.notificationActivitySampleDao
-import java.time.OffsetDateTime
-import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -34,7 +34,6 @@ private val TAG = AudioUploadWorker::class.java.simpleName
 internal const val AUDIO_UPLOAD_WORK_NAME = "app_audio_upload"
 private const val AUDIO_UPLOAD_INTERVAL_MIN = 15L
 private const val AUDIO_UPLOAD_MAX_BATCH = 5000
-private const val AUDIO_SAMPLE_TTL_DAYS = 14L
 private const val AUDIO_UPLOAD_MAX_ATTEMPTS = 5
 
 /**
@@ -91,21 +90,6 @@ class AudioUploadWorkerDelegate(
     /** @return number of (stream, server) upload failures this run; `0` = everything succeeded. */
     fun execute(): Int {
         val servers = listOfNotNull(db.uploadServerDao().getEnabledServer())
-        val anyFailClosed = servers.isNotEmpty() && run {
-            val store = EncryptionSettingStore.of(context)
-            servers.any { server ->
-                runCatching { UUID.fromString(server.studyId) }.getOrNull()?.let { studyId ->
-                    PayloadSealer.routing(
-                        store.get(studyId), store.isEncryptionRequired(studyId),
-                    ) == PayloadSealer.EncryptionRouting.FAIL_CLOSED
-                } ?: false
-            }
-        }
-
-        // Bound table growth even with no enabled server (the interaction template purges before the
-        // empty-servers check); a fail-closed study deliberately retaining PHI for retry is exempted.
-        purgeAll(anyFailClosed)
-
         if (servers.isEmpty()) {
             Log.i(TAG, "No enabled upload servers; skipping audio upload")
             return 0
@@ -151,26 +135,7 @@ class AudioUploadWorkerDelegate(
         return failures
     }
 
-    /**
-     * TTL-purges all three buffers. Skipped when a study is fail-closed (deliberately retaining PHI
-     * for retry). The cutoff is in the same UTC `…Z` format the rows are stored in, so the TEXT
-     * comparison in `deleteOlderThan` is chronological (a local-offset cutoff would compare lexically
-     * wrong against the stored `…Z` strings).
-     */
-    private fun purgeAll(anyFailClosed: Boolean) {
-        if (anyFailClosed) {
-            Log.w(TAG, "Skipping audio TTL purge: a study is fail-closed (e2ee required, key pending)")
-            return
-        }
-        val cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(AUDIO_SAMPLE_TTL_DAYS).toString()
-        runCatching {
-            val purged = db.audioActivitySampleDao().deleteOlderThan(cutoff) +
-                db.audioContentSampleDao().deleteOlderThan(cutoff) +
-                db.notificationActivitySampleDao().deleteOlderThan(cutoff)
-            if (purged > 0) Log.w(TAG, "Purged $purged audio/notification sample(s) past the ${AUDIO_SAMPLE_TTL_DAYS}-day TTL")
-        }.onFailure { Log.e(TAG, "Audio TTL cleanup failed; continuing", it) }
-    }
-
+    /** Uploads one retained stream and removes only acknowledged, valid rows. */
     private fun <T, D> uploadStream(
         servers: List<UploadServerEntity>,
         getOldest: (Int) -> List<T>,
@@ -185,12 +150,22 @@ class AudioUploadWorkerDelegate(
         if (pending.isEmpty()) return 0
 
         var malformed = 0
+        val validIds = mutableListOf<String>()
         val events = pending.mapNotNull { entry ->
             try {
-                toDto(entry)
+                toDto(entry).also { validIds += idOf(entry) }
             } catch (e: Exception) {
                 malformed++
-                Log.w(TAG, "Skipping corrupt $label sample ${idOf(entry)}", e)
+                Log.w(TAG, "Quarantining corrupt $label sample ${idOf(entry)}", e)
+                quarantineMalformedSample(db, servers.single(), label, idOf(entry),
+                    JsonSerializer.toJson(entry as Any, (entry as Any)::class.java).toByteArray(),
+                    when (payloadType) {
+                        EncryptedPayloadType.AUDIO_ACTIVITY -> LocalUploadModuleFamily.AUDIO_ACTIVITY
+                        EncryptedPayloadType.AUDIO_CONTENT -> LocalUploadModuleFamily.AUDIO_CONTENT
+                        else -> LocalUploadModuleFamily.NOTIFICATION
+                    }) {
+                    deleteByIds(listOf(idOf(entry)))
+                }
                 null
             }
         }
@@ -234,7 +209,7 @@ class AudioUploadWorkerDelegate(
             }
         }
 
-        if (failureCount == 0) deleteByIds(pending.map { idOf(it) })
+        if (failureCount == 0) deleteByIds(validIds)
         Log.i(TAG, "$label upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount
     }

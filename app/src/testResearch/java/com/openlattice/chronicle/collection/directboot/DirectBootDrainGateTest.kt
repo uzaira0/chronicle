@@ -4,8 +4,10 @@ import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.SensorSampleWriter
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.storage.SensorSampleEntry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
@@ -29,7 +31,7 @@ class DirectBootDrainGateTest {
     )
 
     @Test
-    fun `closed-gate and unparseable sensors are dropped, open-gate samples persist`() {
+    fun `closed-gate and unparseable sensors remain buffered while open-gate samples transfer`() {
         val written = mutableListOf<SensorSampleEntry>()
         val sink = SensorSampleWriter { samples ->
             written.addAll(samples)
@@ -42,24 +44,35 @@ class DirectBootDrainGateTest {
                 sample("closed", AndroidSensorType.light.name),
                 sample("unknown", "NO_SUCH_SENSOR"),
             ),
-            sink = sink,
+            sinkFor = { type -> if (type == AndroidSensorType.accelerometer) sink else SensorSampleWriter { ModuleResult.Skipped("hold") } },
             log = NoOpCollectionLog,
-        ) { sensorType -> sensorType == AndroidSensorType.accelerometer }
+        )
 
         assertEquals(listOf("open"), written.map { it.id })
-        assertEquals(ModuleResult.Ok(1), result)
+        assertEquals(setOf("open"), result.transferredIds)
     }
 
     @Test
-    fun `all-dropped batch is still an idempotent success`() {
-        val sink = SensorSampleWriter { samples -> ModuleResult.Ok(samples.size) }
+    fun `all-refused batch transfers no samples`() {
+        val sink = SensorSampleWriter { ModuleResult.Skipped("hold") }
 
         val result = DirectBootDrainWorker.persistGated(
             samples = listOf(sample("closed", AndroidSensorType.light.name)),
-            sink = sink,
+            sinkFor = { sink },
             log = NoOpCollectionLog,
-        ) { false }
+        )
 
-        assertEquals(ModuleResult.Ok(0), result)
+        assertEquals(emptySet<String>(), result.transferredIds)
+    }
+
+    @Test
+    fun `reenrollment changes owner inside persistence lease and blocks insert`() {
+        var owner = "enrollment-A"
+        var inserted = false
+        val guard = ResearchPersistenceGate.expectedOwnerGuard("enrollment-A", { owner }, { true })
+        owner = "enrollment-B"
+
+        assertFalse(guard.persist { inserted = true })
+        assertFalse(inserted)
     }
 }

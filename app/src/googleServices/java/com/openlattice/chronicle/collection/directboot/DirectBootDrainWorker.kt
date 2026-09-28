@@ -17,6 +17,8 @@ import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServer
 
 private val TAG = DirectBootDrainWorker::class.java.simpleName
 private const val UNIQUE_WORK_NAME = "direct_boot_sample_drain"
@@ -36,22 +38,58 @@ private const val MAX_RETRY_ATTEMPTS = 5
 class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
 
     override fun doWork(): Result {
-        val buffer = DirectBootSampleBuffer(applicationContext)
-        if (buffer.isEmpty()) return Result.success()
-
-        val sink = SensorSampleSink(
-            ChronicleDb.getInstance(applicationContext).sensorSampleDao(),
-            persistenceGuard = ResearchPersistenceGate.guard(applicationContext),
-            sampleAllowedAtPersistence = { sample ->
-                runCatching { AndroidSensorType.valueOf(sample.sensorType) }
-                    .getOrNull()
-                    ?.let { CollectionGate.collects(applicationContext, SensorCollectionModules.moduleFor(it)) } == true
-            },
-        )
-        val result = buffer.drain { samples ->
-            persistGated(samples, sink) { sensorType ->
-                CollectionGate.collects(applicationContext, SensorCollectionModules.moduleFor(sensorType))
+        val journal = DirectBootDiagnosticsJournal(applicationContext)
+        try {
+            journal.replay(applicationContext)
+        } catch (error: Exception) {
+            Log.e(TAG, "Direct-boot diagnostics replay failed; quarantining journal", error)
+            try {
+                if (!journal.quarantineCorruptJournal()) return Result.retry()
+            } catch (quarantineError: Exception) {
+                Log.e(TAG, "Unable to quarantine corrupt direct-boot journal", quarantineError)
+                return Result.retry()
             }
+        }
+        try {
+            journal.recordQuarantinedIncidents(applicationContext)
+        } catch (error: Exception) {
+            Log.e(TAG, "Direct-boot journal quarantine recording will retry after sample drain", error)
+        }
+        val buffer = DirectBootSampleBuffer(applicationContext)
+        if (buffer.isEmpty()) {
+            return try {
+                journal.replay(applicationContext)
+                Result.success()
+            } catch (error: Exception) {
+                Log.e(TAG, "Direct-boot corruption incident replay failed", error)
+                Result.retry()
+            }
+        }
+
+        val db = ChronicleDb.getInstance(applicationContext)
+        val server = exactActiveEnrollmentServer(applicationContext, db) ?: return Result.retry()
+        val expectedOwner = ownerKey(server)
+        // Barrier before buffer lock, the same order as ResearchPersistenceGate.stop{} erasures;
+        // taking the buffer lock first and the barrier inside persist deadlocked a sensor discard.
+        val result = ResearchPersistenceGate.withReadLease { buffer.drain(expectedOwner) { samples ->
+            persistGated(samples, sinkFor = { sensorType ->
+                SensorSampleSink(
+                    db.sensorSampleDao(),
+                    persistenceGuard = ResearchPersistenceGate.guardForExpectedOwner(
+                        applicationContext, expectedOwner,
+                        ownerNow = {
+                            if (!CollectionGate.collects(applicationContext, SensorCollectionModules.moduleFor(sensorType))) null
+                            else exactActiveEnrollmentServer(applicationContext, db)?.let(::ownerKey)
+                        },
+                    ),
+                )
+            })
+        } }
+        try {
+            DirectBootDiagnosticsJournal(applicationContext).replay(applicationContext)
+        } catch (error: Exception) {
+            Log.e(TAG, "Direct-boot diagnostics replay failed; journal retained", error)
+            return Result.retry()
         }
         Log.i(
             TAG,
@@ -78,30 +116,31 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker
             )
         }
 
-        /**
-         * Gate-filters [samples] per sensor, then writes the survivors through [sink].
-         * Samples whose gate is closed — or whose persisted sensor type no longer parses —
-         * are dropped (fail closed), mirroring the live runtime's gated flush.
-         */
+        private fun ownerKey(server: UploadServerEntity): String =
+            DirectBootSampleBuffer.ownerKey(DirectBootDiagnosticsJournal.Owner(
+                server.studyId, server.participantId, server.sourceDeviceId, "${server.id}:${server.createdAt}",
+            ))
+
+        /** Write each sensor group under its own gate lease and report exact transferred IDs. */
         fun persistGated(
             samples: List<SensorSampleEntry>,
-            sink: SensorSampleWriter,
+            sinkFor: (AndroidSensorType) -> SensorSampleWriter,
             log: CollectionLog = CollectionLog.LOGCAT,
-            gate: (AndroidSensorType) -> Boolean,
-        ): ModuleResult {
-            val kept = samples.filter { entry ->
-                val sensorType = try {
-                    AndroidSensorType.valueOf(entry.sensorType)
-                } catch (_: IllegalArgumentException) {
-                    null
+        ): DirectBootSampleBuffer.DrainTransfer {
+            val transferred = linkedSetOf<String>()
+            for ((typeName, group) in samples.groupBy { it.sensorType }) {
+                val type = runCatching { AndroidSensorType.valueOf(typeName) }.getOrNull() ?: continue
+                when (val result = sinkFor(type).write(group)) {
+                    is ModuleResult.Ok -> {
+                        // Production sinks accept a whole group or none. A partial result cannot
+                        // identify individual rows, so replay the group by its idempotent IDs.
+                        if (result.items == group.size) transferred += group.map { it.id }
+                    }
+                    is ModuleResult.Skipped -> log.info(TAG, "Retaining ${group.size} buffered sample(s) for a later drain")
+                    else -> return DirectBootSampleBuffer.DrainTransfer(transferred, failed = true)
                 }
-                sensorType != null && gate(sensorType)
             }
-            val dropped = samples.size - kept.size
-            if (dropped > 0) {
-                log.info(TAG, "Dropping $dropped buffered sample(s) whose gate is closed at drain time")
-            }
-            return sink.write(kept)
+            return DirectBootSampleBuffer.DrainTransfer(transferred)
         }
     }
 }

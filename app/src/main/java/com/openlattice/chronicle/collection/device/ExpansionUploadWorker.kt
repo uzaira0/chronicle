@@ -20,11 +20,10 @@ import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.quarantineMalformedSample
 import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServerResolution
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
-import java.time.OffsetDateTime
-import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -34,7 +33,6 @@ internal const val EXPANSION_UPLOAD_WORK_NAME = "expansion_modules_upload"
 internal const val INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD = "collect_expansion_before_upload"
 private const val EXPANSION_UPLOAD_INTERVAL_MIN = 15L
 private const val EXPANSION_UPLOAD_MAX_BATCH = 5000
-private const val EXPANSION_SAMPLE_TTL_DAYS = 14L
 private const val EXPANSION_UPLOAD_MAX_ATTEMPTS = 5
 
 /**
@@ -100,19 +98,6 @@ class ExpansionUploadWorkerDelegate(
             return 1
         }
         val servers = listOf(server)
-        val anyFailClosed = run {
-            val store = EncryptionSettingStore.of(context)
-            servers.any { server ->
-                runCatching { UUID.fromString(server.studyId) }.getOrNull()?.let { studyId ->
-                    PayloadSealer.routing(
-                        store.get(studyId), store.isEncryptionRequired(studyId),
-                    ) == PayloadSealer.EncryptionRouting.FAIL_CLOSED
-                } ?: false
-            }
-        }
-
-        purgeAll(anyFailClosed)
-
         var failures = 0
         failures += DistributionCollectionContributions.uploadAdditionalStreams(this, servers)
         failures += uploadStream(
@@ -148,20 +133,6 @@ class ExpansionUploadWorkerDelegate(
         return failures
     }
 
-    private fun purgeAll(anyFailClosed: Boolean) {
-        if (anyFailClosed) {
-            Log.w(TAG, "Skipping expansion TTL purge: a study is fail-closed (e2ee required, key pending)")
-            return
-        }
-        val cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(EXPANSION_SAMPLE_TTL_DAYS).toString()
-        runCatching {
-            val purged = DistributionCollectionContributions.purgeAdditionalSamples(db, cutoff) +
-                db.connectivityStateSampleDao().deleteOlderThan(cutoff) +
-                db.deviceSettingsSampleDao().deleteOlderThan(cutoff)
-            if (purged > 0) Log.w(TAG, "Purged $purged expansion sample(s) past the ${EXPANSION_SAMPLE_TTL_DAYS}-day TTL")
-        }.onFailure { Log.e(TAG, "Expansion TTL cleanup failed; continuing", it) }
-    }
-
     internal fun <T, D> uploadStream(
         servers: List<UploadServerEntity>,
         getOldest: (Int) -> List<T>,
@@ -176,12 +147,25 @@ class ExpansionUploadWorkerDelegate(
         if (pending.isEmpty()) return 0
 
         var malformed = 0
+        val validIds = mutableListOf<String>()
         val events = pending.mapNotNull { entry ->
             try {
-                toDto(entry)
+                toDto(entry).also { validIds += idOf(entry) }
             } catch (e: Exception) {
                 malformed++
-                Log.w(TAG, "Skipping corrupt $label sample ${idOf(entry)}", e)
+                Log.w(TAG, "Quarantining corrupt $label sample ${idOf(entry)}", e)
+                quarantineMalformedSample(db, servers.single(), label, idOf(entry),
+                    serializeMalformedRow(entry as Any),
+                    when (payloadType) {
+                        EncryptedPayloadType.CONNECTIVITY_STATE -> LocalUploadModuleFamily.CONNECTIVITY
+                        EncryptedPayloadType.DEVICE_SETTINGS -> LocalUploadModuleFamily.DEVICE_SETTINGS
+                        EncryptedPayloadType.APP_NETWORK_USAGE -> LocalUploadModuleFamily.APP_NETWORK
+                        EncryptedPayloadType.SLEEP -> LocalUploadModuleFamily.SLEEP
+                        EncryptedPayloadType.ACTIVITY_RECOGNITION -> LocalUploadModuleFamily.ACTIVITY_RECOGNITION
+                        else -> LocalUploadModuleFamily.HEALTH
+                    }) {
+                    deleteByIds(listOf(idOf(entry)))
+                }
                 null
             }
         }
@@ -226,7 +210,7 @@ class ExpansionUploadWorkerDelegate(
             }
         }
 
-        if (failureCount == 0) deleteByIds(pending.map { idOf(it) })
+        if (failureCount == 0) deleteByIds(validIds)
         Log.i(TAG, "$label upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount
     }

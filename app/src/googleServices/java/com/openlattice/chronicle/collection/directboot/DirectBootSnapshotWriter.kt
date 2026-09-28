@@ -35,12 +35,13 @@ object DirectBootSnapshotWriter {
                         dutyCyclePeriodSeconds = sensorSettings.getDutyCyclePeriodSeconds(sensor),
                     )
                 }
+            // Make sure the buffer key exists before the first locked boot needs it.
+            KeystoreDirectBootRecordCipher.ensureKey()
+            DirectBootDiagnosticsJournal(context).bind(context)
             if (!DirectBootSensorSnapshot(context).write(collectable)) {
                 Log.e(TAG, "Direct-boot snapshot commit failed")
                 return
             }
-            // Make sure the buffer key exists before the first locked boot needs it.
-            KeystoreDirectBootRecordCipher.ensureKey()
             Log.i(TAG, "Direct-boot snapshot updated: ${collectable.size} collectable sensor(s)")
         } catch (e: Exception) {
             // Snapshot maintenance must never take down the sensor service; a stale/absent

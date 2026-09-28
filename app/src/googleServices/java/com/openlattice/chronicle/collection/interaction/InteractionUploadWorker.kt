@@ -18,9 +18,10 @@ import com.openlattice.chronicle.services.upload.UPLOAD_NETWORK_CONSTRAINT
 import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.RestrictedUploadApiFactory
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.quarantineMalformedSample
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.interactionSampleDao
-import java.time.OffsetDateTime
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -34,9 +35,6 @@ private const val INTERACTION_UPLOAD_INTERVAL_MIN = 15L
 
 /** Single-pass row cap; one request ships the backlog (interaction volume is modest). */
 private const val INTERACTION_UPLOAD_MAX_BATCH = 5000
-
-/** Rows older than this are dropped even if never uploaded — bounds table growth. */
-private const val INTERACTION_SAMPLE_TTL_DAYS = 14L
 
 /** Run-attempt count above which a failing upload stops retrying. */
 private const val INTERACTION_UPLOAD_MAX_ATTEMPTS = 5
@@ -97,36 +95,6 @@ class InteractionUploadWorkerDelegate(
         val serverDao = db.uploadServerDao()
         val servers = listOfNotNull(serverDao.getEnabledServer())
 
-        // A fail-closed study (e2ee required, key pending) is deliberately retaining PHI for retry;
-        // the age TTL must not silently drop it. Only computed when servers exist.
-        val anyFailClosed = servers.isNotEmpty() && run {
-            val store = EncryptionSettingStore.of(context)
-            servers.any { server ->
-                runCatching { UUID.fromString(server.studyId) }.getOrNull()?.let { studyId ->
-                    PayloadSealer.routing(
-                        store.get(studyId), store.isEncryptionRequired(studyId),
-                    ) == PayloadSealer.EncryptionRouting.FAIL_CLOSED
-                } ?: false
-            }
-        }
-
-        try {
-            if (anyFailClosed) {
-                Log.w(
-                    TAG,
-                    "Skipping interaction TTL purge: a study is fail-closed (e2ee required, key pending); retaining PHI for retry",
-                )
-            } else {
-                val cutoff = OffsetDateTime.now().minusDays(INTERACTION_SAMPLE_TTL_DAYS).toString()
-                val purged = dao.deleteOlderThan(cutoff)
-                if (purged > 0) {
-                    Log.w(TAG, "Purged $purged interaction sample(s) past the ${INTERACTION_SAMPLE_TTL_DAYS}-day TTL")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Interaction sample TTL cleanup failed; continuing with upload", e)
-        }
-
         if (servers.isEmpty()) {
             Log.i(TAG, "No enabled upload servers; skipping interaction upload")
             return 0
@@ -139,12 +107,17 @@ class InteractionUploadWorkerDelegate(
 
         // Convert rows to wire DTOs; a corrupt row is skipped (counted), never aborts the batch.
         var malformed = 0
+        val validIds = mutableListOf<String>()
         val events = pending.mapNotNull { entry ->
             try {
-                entry.toAndroidInteractionEvent()
+                entry.toAndroidInteractionEvent().also { validIds += entry.id }
             } catch (e: Exception) {
                 malformed++
-                Log.w(TAG, "Skipping corrupt interaction sample ${entry.id}", e)
+                Log.w(TAG, "Quarantining corrupt interaction sample ${entry.id}", e)
+                quarantineMalformedSample(db, servers.single(), "interaction_samples", entry.id,
+                    JsonSerializer.toJson(entry).toByteArray(), LocalUploadModuleFamily.INTERACTION) {
+                    dao.deleteByIds(listOf(entry.id))
+                }
                 null
             }
         }
@@ -193,7 +166,7 @@ class InteractionUploadWorkerDelegate(
 
         // Delete the batch only after the active study server received it (idempotent server-side).
         if (failureCount == 0) {
-            dao.deleteByIds(pending.map { it.id })
+            dao.deleteByIds(validIds)
         }
         Log.i(TAG, "Interaction upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount
