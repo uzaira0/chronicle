@@ -14,7 +14,21 @@ cp app/signing.properties.example app/signing.properties
 adb install -r app/build/outputs/apk/open/release/app-open-release.apk
 ```
 
-Unit tests: `./gradlew :app:testOpenReleaseUnitTest`. Lint: `./gradlew :app:lintOpenRelease`.
+Unit tests: `./gradlew :app:testOpenDebugUnitTest`. Lint: `./gradlew :app:lintOpenRelease`.
+
+### Build settings
+
+Set either the environment variable or the Gradle property.
+
+| Environment variable | Gradle property | Needed for |
+|---|---|---|
+| `CHRONICLE_MODELS_DIR` | `-PchronicleModelsDir` | A `chronicle-models` checkout other than `../chronicle-models` (the monorepo layout is used when neither exists). |
+| `GITHUB_ACTOR`, `GITHUB_TOKEN` | `gpr.user`, `gpr.key` | Resolving packages from GitHub Packages; not needed inside the monorepo. |
+| `CHRONICLE_PRODUCTION_HOST` | `chronicleProductionHost` | `research` builds (required); the fixed server host. |
+| `MOBILE_SIGNING_SECRET` | `mobileSigningSecret` | `research` builds only; the deployment-wide request-signing key. Public flavors do not use it. |
+| `CHRONICLE_RC_ID` | `chronicleRcId` | Store release candidates; recorded in the build. |
+
+Put Gradle properties in `~/.gradle/gradle.properties`, not in this repository.
 
 ## Third-party SDK inventory (`open` and `research` flavors)
 

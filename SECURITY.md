@@ -21,3 +21,11 @@ deployments you do not operate.
 ## Supported versions
 
 Only the tip of each repository's default branch receives security fixes.
+
+## Transport security
+
+The app requires HTTPS and trusts the system certificate store. It does not pin
+certificates or public keys: each self-host deployment uses its own domain and
+certificate authority, and Let's Encrypt certificates rotate every 90 days, so a pin
+shipped in the app would break every deployment it did not name. After enrollment each
+device authenticates with its own API key.

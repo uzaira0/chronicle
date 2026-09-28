@@ -71,8 +71,8 @@ object Utils {
     /**
      * Canonicalizes and authorizes an upload server URL before it is used for enrollment,
      * health checks, Retrofit construction, or upload. Public distribution flavors accept any
-     * hostname over standard HTTPS; controlled research builds retain the BCM allowlist and
-     * certificate pin. Debug builds may additionally use local development servers.
+     * hostname over standard HTTPS; controlled research builds retain the BCM host allowlist.
+     * No build pins certificates. Debug builds may additionally use local development servers.
      */
     @JvmStatic
     fun normalizeTrustedServerUrl(url: String): String? {
