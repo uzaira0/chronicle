@@ -9,12 +9,13 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
 import com.openlattice.chronicle.preferences.DeviceInstanceIdentity
 import com.openlattice.chronicle.preferences.getDevice
-import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
 import com.openlattice.chronicle.services.upload.UploadWorker
+import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.SingleEnrollmentReservation
@@ -321,28 +322,46 @@ class ServerEnrollmentActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Deleting the enrolled server is a withdrawal: collection stops at once, the credential and
+     * local data stay until the server acknowledges deletion, and the withdrawal worker erases local
+     * data only after that. Without an API key the server can never be asked to delete, so nothing
+     * changes and the participant is sent to the study team.
+     */
     private fun doDelete() {
         if (editServerId <= 0) return
 
         executor.execute {
-            val db = ChronicleDb.getInstance(applicationContext)
-            val removed = db.uploadServerDao().getById(editServerId)
-            db.uploadServerDao().delete(editServerId)
-
-            // Un-enrollment releases this server's data (see UploadServerDao hard-delete note).
-            // Forget the study's cached e2ee public key too — but only once NO remaining enrolled
-            // server references that study, so a study still enrolled via another server keeps its
-            // key. A removed study's key is not retained, and re-enrollment starts from a clean slate.
-            removed?.studyId?.let { studyIdStr ->
-                runCatching { UUID.fromString(studyIdStr) }.getOrNull()?.let { studyId ->
-                    val stillEnrolled = db.uploadServerDao().getConfiguredServer()?.studyId == studyIdStr
-                    if (!stillEnrolled) {
-                        EncryptionSettingStore.of(applicationContext).evict(studyId)
-                    }
+            val server = ChronicleDb.getInstance(applicationContext).uploadServerDao().getById(editServerId)
+            runOnUiThread {
+                when {
+                    server == null -> finish()
+                    server.apiKey.isNullOrBlank() -> Toast.makeText(
+                        this, getString(R.string.server_delete_needs_support), Toast.LENGTH_LONG,
+                    ).show()
+                    else -> MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.server_delete_confirm_title)
+                        .setMessage(R.string.server_delete_confirm_message)
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .setPositiveButton(R.string.server_delete_confirm_action) { _, _ -> beginWithdrawal() }
+                        .show()
                 }
             }
+        }
+    }
 
-            runOnUiThread { finish() }
+    private fun beginWithdrawal() {
+        deleteBtn.isEnabled = false
+        executor.execute {
+            val started = ParticipantWithdrawalManager.begin(applicationContext)
+            runOnUiThread {
+                if (started) {
+                    finish()
+                } else {
+                    deleteBtn.isEnabled = true
+                    Toast.makeText(this, getString(R.string.server_delete_failed), Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 }
