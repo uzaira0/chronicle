@@ -3,10 +3,12 @@ package com.openlattice.chronicle.services.upload
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
+import org.json.JSONArray
 import com.google.common.util.concurrent.RateLimiter
 import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.android.ChronicleUsageEvent
 import com.openlattice.chronicle.android.ChronicleSample
+import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.android.fromInteractionType
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.preferences.*
@@ -17,6 +19,7 @@ import com.openlattice.chronicle.services.sinks.ChronicleUploadSink
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.UploadStatsEntity
+import com.openlattice.chronicle.storage.insertOwnedDay
 import com.openlattice.chronicle.telemetry.LocalTelemetry
 import com.openlattice.chronicle.utils.Utils.updateUploadInfo
 import java.io.IOException
@@ -33,6 +36,9 @@ class UploadExecutor(
     private val context: Context,
     private val chronicleDb: ChronicleDb,
     private val propertyTypeIds: Map<org.apache.olingo.commons.api.edm.FullQualifiedName, UUID>,
+    private val studyApiFor: (UploadServerEntity) -> ChronicleStudyApi = {
+        UploadWorker.getChronicleStudyApi(it.url, it.mobileSigningSecretOverride)
+    },
 ) {
     private val limiter = RateLimiter.create(10.0)
 
@@ -41,7 +47,7 @@ class UploadExecutor(
         val participantId = server.participantId
         val deviceId = server.sourceDeviceId
         val apiKey = server.apiKey
-        val studyApi = UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
+        val studyApi = studyApiFor(server)
         val queue = chronicleDb.queueEntryData()
 
         Log.i(UPLOAD_EXECUTOR_TAG, "Starting upload for server '${server.name}' (authMode=${server.authMode})")
@@ -60,32 +66,101 @@ class UploadExecutor(
         val encryptionRequired = encryptionStore.isEncryptionRequired(studyId)
         val sink = ChronicleUploadSink(
             studyId, participantId, deviceId, apiKey, studyApi, encryptionSetting, encryptionRequired,
+            onShortWrite = { count ->
+                LocalUploadDiagnosticsStore.of(context).recordOperational(
+                    LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                    LocalOperationalIssue.SAMPLE_QUARANTINED,
+                    count,
+                )
+            },
         )
 
         while (nextEntries.isNotEmpty()) {
             limiter.acquire()
             val w = com.google.common.base.Stopwatch.createStarted()
             val data = nextEntries.flatMap { queueEntry ->
-                val queueData =
-                    try {
-                        JsonSerializer.deserializeQueueEntry(queueEntry.data)
-                    } catch (ex: IOException) {
-                        Log.w(UPLOAD_EXECUTOR_TAG, "Error deserializing. Attempting to use legacy deserializer!")
-                        mapLegacyQueueEntry(JsonSerializer.deserializeLegacyQueueEntry(queueEntry.data))
+                val sourceId = "${queueEntry.writeTimestamp}:${queueEntry.id}"
+                val queueData = try {
+                    JsonSerializer.deserializeQueueEntry(queueEntry.data)
+                } catch (_: IOException) {
+                    null
+                }
+                if (queueData == null) {
+                    Log.w(UPLOAD_EXECUTOR_TAG, "Error deserializing. Attempting legacy deserializer")
+                    val rawItems = runCatching {
+                        val array = JSONArray(queueEntry.data.toString(Charsets.UTF_8))
+                        (0 until array.length()).map { array.get(it).toString() }
+                    }.getOrNull()
+                    if (rawItems == null) {
+                        quarantineMalformedSample(
+                            chronicleDb, server, "dataQueue", sourceId, queueEntry.data,
+                            LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                        )
+                        emptyList()
+                    } else if (rawItems.isEmpty()) {
+                        quarantineMalformedSample(
+                            chronicleDb, server, "dataQueue", sourceId, queueEntry.data,
+                            LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                        )
+                        emptyList()
+                    } else {
+                        mapLegacyQueueItems(rawItems, mapItem = { rawItem ->
+                                mapUsageSamplesForUpload(
+                                    mapLegacyQueueEntry(JsonSerializer.deserializeLegacyQueueEntry(
+                                        "[$rawItem]".toByteArray(Charsets.UTF_8),
+                                    )), studyId, participantId, queueEntry.writeTimestamp,
+                                )
+                            }, onMalformed = { index, rawItem ->
+                            quarantineMalformedSample(
+                                chronicleDb, server, "dataQueue", "$sourceId:$index",
+                                rawItem.toByteArray(Charsets.UTF_8),
+                                LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                            )
+                        })
                     }
-
-                mapUsageSamplesForUpload(
-                    queueData,
-                    studyId,
-                    participantId,
-                    queueEntry.writeTimestamp,
-                )
+                } else {
+                    val mapped = runCatching {
+                        mapUsageSamplesForUpload(queueData, studyId, participantId, queueEntry.writeTimestamp)
+                    }
+                    mapped.fold(onSuccess = { samples ->
+                        val omitted = queueData.size - samples.size
+                        if (queueData.isEmpty()) quarantineMalformedSample(
+                            chronicleDb, server, "dataQueue", sourceId, queueEntry.data,
+                            LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                        )
+                        else if (omitted > 0) quarantineMalformedSample(
+                            chronicleDb, server, "dataQueue", sourceId, queueEntry.data,
+                            LocalUploadModuleFamily.USAGE_LIFECYCLE, count = omitted,
+                        )
+                        samples
+                    }, onFailure = {
+                        quarantineMalformedSample(
+                            chronicleDb, server, "dataQueue", sourceId, queueEntry.data,
+                            LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                        )
+                        emptyList()
+                    })
+                }
             }
 
             Log.i(UPLOAD_EXECUTOR_TAG, "[${server.name}] Processing ${data.size} items took ${w.elapsed(TimeUnit.MILLISECONDS)}ms")
             w.reset()
             w.start()
 
+            val maxQueueCursor = nextEntries.maxWith(
+                compareBy<com.openlattice.chronicle.storage.QueueEntry> { it.writeTimestamp }
+                    .thenBy { it.id }
+            )
+            if (data.isEmpty()) {
+                // Every omitted item is durably quarantined above; a failed quarantine throws.
+                check(chronicleDb.uploadServerDao().advanceUsageCursor(
+                    server.id, maxQueueCursor.writeTimestamp, maxQueueCursor.id,
+                ) == 1)
+                cursorTimestamp = maxQueueCursor.writeTimestamp
+                cursorId = maxQueueCursor.id
+                nextEntries = queue.getEntriesAfter(cursorTimestamp, cursorId, BATCH_SIZE)
+                continue
+            }
             val result = sink.submit(data)
 
             if (result[ChronicleUploadSink::class.java.name] == true) {
@@ -99,21 +174,23 @@ class UploadExecutor(
                     latestTimestampBatch
                 ).maxOrNull()
 
-                val maxQueueCursor = nextEntries.maxWith(
-                    compareBy<com.openlattice.chronicle.storage.QueueEntry> { it.writeTimestamp }
-                        .thenBy { it.id }
-                )
+                val today = LocalDate.now().toString()
+                try {
+                    chronicleDb.runInTransaction {
+                        check(chronicleDb.uploadServerDao().recordUsageUploadSuccess(
+                            server.id, OffsetDateTime.now().toString(),
+                            maxQueueCursor.writeTimestamp, maxQueueCursor.id, data.size,
+                        ) == 1)
+                        val statsDao = chronicleDb.uploadStatsDao()
+                        statsDao.insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                        statsDao.incrementUsageCount(server.id, today, data.size)
+                    }
+                } catch (error: Exception) {
+                    Log.e(UPLOAD_EXECUTOR_TAG, "Server accepted usage batch but local cursor/stat commit failed", error)
+                    throw error
+                }
                 cursorTimestamp = maxQueueCursor.writeTimestamp
                 cursorId = maxQueueCursor.id
-
-                chronicleDb.uploadServerDao().recordUsageUploadSuccess(
-                    server.id, OffsetDateTime.now().toString(), cursorTimestamp, cursorId, data.size
-                )
-
-                val today = LocalDate.now().toString()
-                val statsDao = chronicleDb.uploadStatsDao()
-                statsDao.insertDay(UploadStatsEntity(serverId = server.id, date = today))
-                statsDao.incrementUsageCount(server.id, today, data.size)
 
                 Log.i(UPLOAD_EXECUTOR_TAG, "[${server.name}] Uploaded ${data.size} items in ${w.elapsed(TimeUnit.MILLISECONDS)}ms")
                 nextEntries = queue.getEntriesAfter(cursorTimestamp, cursorId, BATCH_SIZE)
@@ -132,7 +209,7 @@ class UploadExecutor(
     }
 
     private fun mapLegacyQueueEntry(data: List<com.google.common.collect.SetMultimap<UUID, Any>>): List<ChronicleSample> {
-        return data.mapNotNull { datum ->
+        return data.map { datum ->
             val appPackageName = getFirstValueOrNull(datum, GENERAL_NAME)
             val interactionType = getFirstValueOrNull(datum, IMPORTANCE)
             val timestamp = getFirstValueOrNull(datum, TIMESTAMP)
@@ -151,7 +228,7 @@ class UploadExecutor(
                     user = user,
                     applicationLabel = applicationLabel,
                 )
-            } else null
+            } else throw IllegalArgumentException("Legacy usage queue item is missing required fields")
         }
     }
 
@@ -165,6 +242,21 @@ class UploadExecutor(
         }
         return null
     }
+}
+
+/** A malformed legacy event never hides valid siblings, and quarantine failure aborts the row. */
+internal fun <T> mapLegacyQueueItems(
+    rawItems: List<String>,
+    mapItem: (String) -> List<T>,
+    onMalformed: (Int, String) -> Unit,
+): List<T> {
+    val valid = mutableListOf<T>()
+    rawItems.forEachIndexed { index, rawItem ->
+        val mapped = runCatching { mapItem(rawItem) }.getOrNull()
+        if (mapped.isNullOrEmpty()) onMalformed(index, rawItem)
+        else valid += mapped
+    }
+    return valid
 }
 
 /**

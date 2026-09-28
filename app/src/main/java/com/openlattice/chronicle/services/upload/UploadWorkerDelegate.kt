@@ -6,6 +6,7 @@ import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.preferences.*
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadStatsEntity
+import com.openlattice.chronicle.storage.insertOwnedDay
 import com.openlattice.chronicle.telemetry.LocalTelemetry
 import com.openlattice.chronicle.utils.Utils.updateUploadQueueSize
 import java.time.LocalDate
@@ -64,7 +65,7 @@ class UploadWorkerDelegate(
                     )
                 }
                 val today = LocalDate.now().toString()
-                chronicleDb.uploadStatsDao().insertDay(UploadStatsEntity(serverId = server.id, date = today))
+                chronicleDb.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
                 chronicleDb.uploadStatsDao().incrementUsageFailureCount(server.id, today, 1)
             },
             afterUploads = {
@@ -73,40 +74,15 @@ class UploadWorkerDelegate(
                 if (minCursor != null && minCursor.lastUploadedTimestamp > 0) {
                     queue.deleteEntriesBeforeOrAt(minCursor.lastUploadedTimestamp, minCursor.lastUploadedQueueId)
                 }
-                val evictCount = lowStorageEvictionCount(context.filesDir.usableSpace, queue.getSize())
-                if (evictCount > 0) {
-                    val evicted = queue.deleteOldest(evictCount)
-                    Log.e(
-                        UPLOAD_WORKER_DELEGATE_TAG,
-                        "LOW-STORAGE DROP: permanently removed $evicted oldest queued usage row(s) " +
-                            "because device storage is below $LOW_STORAGE_BYTES bytes",
-                    )
-                    try {
-                        LocalUploadDiagnosticsStore.of(context).recordOperational(
-                            LocalUploadModuleFamily.USAGE_LIFECYCLE,
-                            LocalOperationalIssue.USAGE_QUEUE_EVICTED,
-                            evicted,
-                        )
-                    } catch (e: Exception) {
-                        Log.w(UPLOAD_WORKER_DELEGATE_TAG, "Failed to record usage eviction diagnostic", e)
-                    }
-                }
                 updateUploadQueueSize(context, queue.getSize())
             },
         )
     }
 }
 
-/** Free space below which the usage queue sheds its oldest rows instead of filling the device. */
+/** Reserve for existing data and the diagnostics journal. Collection pauses below this level. */
 internal const val LOW_STORAGE_BYTES: Long = 200L * 1024 * 1024
-
-/**
- * The usage queue has no row cap: it keeps everything the server has not received, however long
- * that takes. Only when the device itself runs low on storage does it drop the oldest tenth per
- * run (at least one row), so collection and the rest of the phone keep working.
- */
-internal fun lowStorageEvictionCount(usableBytes: Long, queueSize: Int): Int =
-    if (usableBytes >= LOW_STORAGE_BYTES || queueSize <= 0) 0 else maxOf(1, queueSize / 10)
+internal const val LOCAL_STORAGE_RESERVE_BYTES: Long = LOW_STORAGE_BYTES
 
 internal fun runUsageUploadForEligibleServers(
     servers: List<com.openlattice.chronicle.storage.UploadServerEntity>,

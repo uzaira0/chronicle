@@ -561,10 +561,10 @@ class AppDecisionSurfaceContractTest {
     fun perServerNetworkPathsPropagateSigningOverride() {
         val expected = mapOf(
             "services/upload/UploadExecutor.kt" to listOf(
-                "UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)",
+                "UploadWorker.getChronicleStudyApi(it.url, it.mobileSigningSecretOverride)",
             ),
             "services/sensors/SensorUploadWorkerDelegate.kt" to listOf(
-                "UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)",
+                "UploadWorker.getChronicleStudyApi(it.url, it.mobileSigningSecretOverride)",
             ),
             "collection/battery/BatteryUploadWorker.kt" to listOf(
                 "UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)",

@@ -79,12 +79,13 @@ class SensitiveStorageInvariantTest {
         assertTrue(entity.contains("val singletonKey: Int = 1"))
 
         val database = read(root, "collection-base/src/main/java/com/openlattice/chronicle/storage/ChronicleDb.kt")
-        assertTrue(database.contains("version = 28"))
+        assertTrue(database.contains("version = 29"))
         assertTrue(database.contains("MIGRATION_23_24"))
         assertTrue(database.contains("MIGRATION_24_25"))
         assertTrue(database.contains("MIGRATION_25_26"))
         assertTrue(database.contains("MIGRATION_26_27"))
         assertTrue(database.contains("MIGRATION_27_28"))
+        assertTrue(database.contains("MIGRATION_28_29"))
 
         val diagnosticMigration = read(
             root,

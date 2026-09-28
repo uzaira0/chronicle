@@ -20,6 +20,40 @@ import java.util.UUID
  * lost response must therefore resend the envelope it already sealed, not a fresh one.
  */
 class ChronicleUploadSinkRetryTest {
+    @Test
+    fun encryptedUploadAcknowledgesEnvelopesSoItNeverReportsMissingEvents() {
+        val missing = mutableListOf<Int>()
+        val sink = ChronicleUploadSink(
+            studyId, participantId, "device-1", "api-key", capturingApi(mutableListOf()), setting,
+            onShortWrite = { missing += it },
+        )
+
+        sink.submit(listOf(event("one"), event("two"), event("three")))
+
+        assertEquals(emptyList<Int>(), missing)
+    }
+
+    @Test
+    fun serverShortWriteReportsExactlyTheMissingCountAndPreservesAcknowledgment() {
+        val missing = mutableListOf<Int>()
+        val api = Proxy.newProxyInstance(
+            ChronicleStudyApi::class.java.classLoader,
+            arrayOf(ChronicleStudyApi::class.java),
+        ) { _, method, _ ->
+            check(method.name == "uploadAndroidUsageEventData")
+            1
+        } as ChronicleStudyApi
+        val sink = ChronicleUploadSink(
+            studyId, participantId, "device-1", "api-key", api,
+            onShortWrite = { missing += it },
+        )
+
+        val result = sink.submit(listOf(event("one"), event("two"), event("three")))
+
+        assertEquals(listOf(2), missing)
+        assertEquals(true, result[ChronicleUploadSink::class.java.name])
+    }
+
     private val studyId = UUID.fromString("22222222-2222-2222-2222-222222222222")
     private val participantId = "participant-retry"
 
@@ -61,6 +95,7 @@ class ChronicleUploadSinkRetryTest {
 
     private fun sink(posted: MutableList<EncryptedEnvelope>) = ChronicleUploadSink(
         studyId, participantId, "device-1", "api-key", capturingApi(posted), setting,
+        onShortWrite = {},
     )
 
     @Test

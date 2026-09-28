@@ -21,8 +21,10 @@ import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServerResolution
 import com.openlattice.chronicle.services.upload.handleServerUploadFailure
+import com.openlattice.chronicle.services.upload.quarantineMalformedSample
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadStatsEntity
+import com.openlattice.chronicle.storage.insertOwnedDay
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -46,7 +48,6 @@ private const val BATTERY_UPLOAD_MAX_BATCH = 5000
  * Rows older than this are dropped even if never uploaded. This bounds `battery_samples`
  * growth if an upload server is persistently unreachable.
  */
-private const val BATTERY_SAMPLE_TTL_DAYS = 14L
 
 /** Run-attempt count above which a failing upload stops retrying. */
 private const val BATTERY_UPLOAD_MAX_ATTEMPTS = 5
@@ -122,42 +123,6 @@ class BatteryUploadWorkerDelegate(
         }
         val servers = listOf(server)
 
-        // Is any enabled study fail-closed (e2ee required but no usable key cached)? Its pending PHI
-        // is being deliberately retained for retry, so the age-based TTL purge below must NOT drop
-        // it — that would silently lose PHI we cannot upload yet. (The post-upload deletion is
-        // already gated on all-servers-succeeded; the TTL purge is a separate path.) The missing
-        // destination check above prevents encrypted-preference access without a server.
-        val anyFailClosed = run {
-            val encryptionStore = EncryptionSettingStore.of(context)
-            servers.any { server ->
-                runCatching { UUID.fromString(server.studyId) }.getOrNull()?.let { studyId ->
-                    PayloadSealer.routing(
-                        encryptionStore.get(studyId), encryptionStore.isEncryptionRequired(studyId),
-                    ) == PayloadSealer.EncryptionRouting.FAIL_CLOSED
-                } ?: false
-            }
-        }
-
-        // TTL cleanup bounds table growth even if a server is persistently unreachable — but is
-        // SKIPPED while any study is fail-closed (above), and the skip is logged so the retained
-        // backlog is observable rather than silently dropped as PHI loss.
-        try {
-            if (anyFailClosed) {
-                Log.w(
-                    TAG,
-                    "Skipping battery TTL purge: a study is fail-closed (e2ee required, key pending); retaining PHI for retry",
-                )
-            } else {
-                val cutoff = OffsetDateTime.now().minusDays(BATTERY_SAMPLE_TTL_DAYS).toString()
-                val purged = dao.deleteOlderThan(cutoff)
-                if (purged > 0) {
-                    Log.w(TAG, "Purged $purged battery sample(s) past the ${BATTERY_SAMPLE_TTL_DAYS}-day TTL")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Battery sample TTL cleanup failed; continuing with upload", e)
-        }
-
         val pending = dao.getOldest(BATTERY_UPLOAD_MAX_BATCH)
         if (pending.isEmpty()) {
             return 0
@@ -165,17 +130,23 @@ class BatteryUploadWorkerDelegate(
 
         // Convert rows to wire DTOs; a corrupt row is skipped (counted), never aborts the batch.
         var malformed = 0
+        val validIds = mutableListOf<String>()
         val samples = pending.mapNotNull { entry ->
             try {
-                entry.toBatterySample()
+                entry.toBatterySample().also { validIds += entry.id }
             } catch (e: Exception) {
                 malformed++
-                Log.w(TAG, "Skipping corrupt battery sample ${entry.id}", e)
+                Log.w(TAG, "Quarantining corrupt battery sample ${entry.id}", e)
+                quarantineMalformedSample(db, server, "battery_samples", entry.id,
+                    JsonSerializer.toJson(entry).toByteArray(), LocalUploadModuleFamily.BATTERY) {
+                    dao.deleteByIds(listOf(entry.id))
+                }
                 null
             }
         }
 
         var failureCount = 0
+        var statsFailureCount = 0
         for (server in servers) {
             try {
                 if (samples.isNotEmpty()) {
@@ -226,9 +197,14 @@ class BatteryUploadWorkerDelegate(
                     OffsetDateTime.now().toString(),
                     samples.size,
                 )
-                val today = LocalDate.now().toString()
-                db.uploadStatsDao().insertDay(UploadStatsEntity(serverId = server.id, date = today))
-                db.uploadStatsDao().incrementBatteryCount(server.id, today, samples.size)
+                try {
+                    val today = LocalDate.now().toString()
+                    db.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                    db.uploadStatsDao().incrementBatteryCount(server.id, today, samples.size)
+                } catch (statsError: Exception) {
+                    statsFailureCount++
+                    Log.e(TAG, "[${server.name}] Server accepted battery batch but stats write failed", statsError)
+                }
             } catch (e: Exception) {
                 failureCount++
                 handleServerUploadFailure(
@@ -241,9 +217,14 @@ class BatteryUploadWorkerDelegate(
                 ) { failures, errorMsg ->
                     serverDao.recordBatteryUploadFailure(server.id, OffsetDateTime.now().toString(), errorMsg, failures)
                 }
-                val today = LocalDate.now().toString()
-                db.uploadStatsDao().insertDay(UploadStatsEntity(serverId = server.id, date = today))
-                db.uploadStatsDao().incrementBatteryFailureCount(server.id, today, 1)
+                try {
+                    val today = LocalDate.now().toString()
+                    db.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                    db.uploadStatsDao().incrementBatteryFailureCount(server.id, today, 1)
+                } catch (statsError: Exception) {
+                    statsFailureCount++
+                    Log.e(TAG, "[${server.name}] Failed to record battery upload failure stats", statsError)
+                }
             }
         }
 
@@ -251,10 +232,10 @@ class BatteryUploadWorkerDelegate(
         // rows are kept and re-uploaded next run (idempotent server-side). Corrupt rows
         // that produced no sample are still purged here, so they are not retried forever.
         if (failureCount == 0) {
-            dao.deleteByIds(pending.map { it.id })
+            dao.deleteByIds(validIds)
         }
         Log.i(TAG, "Battery upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
-        return failureCount
+        return failureCount + statsFailureCount
     }
 }
 

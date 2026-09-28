@@ -14,10 +14,13 @@ import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
 import com.openlattice.chronicle.services.crypto.PayloadSealer
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.RestrictedUploadApiFactory
+import com.openlattice.chronicle.api.RestrictedChronicleStudyApi
+import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.services.upload.LocalOperationalIssue
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.handleServerUploadFailure
+import com.openlattice.chronicle.services.upload.recordPolicyErasureCountInTransaction
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.SensorSampleDao
 import com.openlattice.chronicle.storage.SensorSampleDeadLetterEntity
@@ -25,34 +28,13 @@ import com.openlattice.chronicle.storage.SensorSampleDeliveryEntity
 import com.openlattice.chronicle.storage.SensorSampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.UploadStatsEntity
+import com.openlattice.chronicle.storage.insertOwnedDay
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.*
 
 private val TAG = SensorUploadWorkerDelegate::class.java.simpleName
 internal const val SENSOR_UPLOAD_BATCH_SIZE = 500
-// Six samples/second is the configured worst-case aggregate duty-cycle envelope:
-// 6 * 60 * 60 * 24 * 7 = 3,628,800 samples per seven-day TTL. Four million retains that
-// full envelope (and ~15 days at the observed Pixel average near three/second) while keeping
-// SQLite bounded. Actual encrypted-database size remains payload-dependent and must be monitored.
-internal const val SENSOR_RETENTION_CAP_SAMPLES = 4_000_000
-internal const val WORST_CASE_SENSOR_SAMPLES_PER_SECOND = 6
-internal const val MAX_DEAD_LETTER_COUNT = 1_000
-internal const val SENSOR_CLEANUP_DELETE_CHUNK_SIZE = 10_000
-private const val SAMPLE_TTL_DAYS = 7L
-
-data class SensorCleanupResult(
-    val retentionExpiredDropCount: Int,
-    val capacityForcedDropCount: Int,
-    val deadLetterForcedDropCount: Int,
-)
-
-internal fun shouldSkipSensorAgeTtl(
-    hasEnabledDestination: Boolean,
-    hasPausedDestination: Boolean,
-    anyFailClosedDestination: Boolean,
-    anyFailingDestination: Boolean = false,
-): Boolean = !hasEnabledDestination || hasPausedDestination || anyFailClosedDestination || anyFailingDestination
 
 internal fun isCompleteSensorUploadAcceptance(
     encrypted: Boolean,
@@ -60,45 +42,6 @@ internal fun isCompleteSensorUploadAcceptance(
     acceptedCount: Int,
 ): Boolean = acceptedCount == if (encrypted) 1 else submittedSampleCount
 
-/** Deletes at most [maximumRows] in bounded SQL transactions without materializing row IDs. */
-internal fun deleteInSqlChunks(
-    maximumRows: Int,
-    chunkSize: Int,
-    deleteChunk: (Int) -> Int,
-): Int {
-    require(maximumRows >= 0) { "maximumRows must be non-negative" }
-    require(chunkSize > 0) { "chunkSize must be positive" }
-    var remaining = maximumRows
-    var totalDeleted = 0
-    while (remaining > 0) {
-        val requested = minOf(remaining, chunkSize)
-        val deleted = deleteChunk(requested)
-        check(deleted in 0..requested) {
-            "Chunk delete returned $deleted for a $requested-row request"
-        }
-        totalDeleted += deleted
-        remaining -= deleted
-        if (deleted < requested) break
-    }
-    return totalDeleted
-}
-
-/** Deletes every currently matching row in bounded SQL transactions. */
-internal fun deleteAllAvailableInSqlChunks(
-    chunkSize: Int,
-    deleteChunk: (Int) -> Int,
-): Int {
-    require(chunkSize > 0) { "chunkSize must be positive" }
-    var totalDeleted = 0
-    do {
-        val deleted = deleteChunk(chunkSize)
-        check(deleted in 0..chunkSize) {
-            "Chunk delete returned $deleted for a $chunkSize-row request"
-        }
-        totalDeleted += deleted
-    } while (deleted == chunkSize)
-    return totalDeleted
-}
 
 /**
  * Moves malformed rows to the encrypted dead-letter table, then counts them in the redacted
@@ -110,6 +53,7 @@ internal fun quarantineMalformedSensorSamples(
     diagnostics: LocalUploadDiagnosticsStore?,
     malformed: List<Pair<SensorSampleEntry, Exception>>,
     quarantinedAt: OffsetDateTime = OffsetDateTime.now(),
+    db: ChronicleDb? = null,
 ) {
     if (malformed.isEmpty()) return
     val deadLetters = malformed.map { (entry, error) ->
@@ -128,8 +72,27 @@ internal fun quarantineMalformedSensorSamples(
             reason = error.javaClass.simpleName.ifBlank { "MappingFailure" },
         )
     }
-    dao.quarantineMalformed(deadLetters, deadLetters.map { it.sampleId })
-    recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_SAMPLE_QUARANTINED, deadLetters.size)
+    if (db == null) {
+        dao.quarantineMalformed(deadLetters, deadLetters.map { it.sampleId })
+        recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_SAMPLE_QUARANTINED, deadLetters.size)
+    } else {
+        db.runInTransaction {
+            val ids = deadLetters.map { it.sampleId }
+            val placeholders = ids.joinToString(",") { "?" }
+            val present = db.openHelper.writableDatabase.query(
+                "SELECT id FROM sensor_samples WHERE id IN ($placeholders)", ids.toTypedArray(),
+            ).use { cursor ->
+                buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
+            }
+            if (present.isNotEmpty()) {
+                dao.quarantineMalformed(deadLetters.filter { it.sampleId in present }, present.toList())
+                recordPolicyErasureCountInTransaction(
+                    db, present.size.toLong(), LocalUploadModuleFamily.SENSOR,
+                    LocalOperationalIssue.SENSOR_SAMPLE_QUARANTINED,
+                )
+            }
+        }
+    }
 }
 
 /** Diagnostics are best-effort: a prefs failure must not undo or block the local state change. */
@@ -157,8 +120,7 @@ internal data class SensorBatchDrainResult(
  *
  * A failed batch records no new destination acknowledgements, so its successful deliveries are
  * deliberately replayed on retry. Once every attempted destination succeeds, [acknowledgeAndDelete]
- * persists that batch's receipts and conditionally deletes only its exact IDs. Configured
- * retention/capacity limits remain an explicit forced-drop boundary outside this drain. It may return zero
+ * persists that batch's receipts and conditionally deletes only its exact IDs. It may return zero
  * when a disabled destination still holds the batch; in that case the drain stops instead of
  * repeatedly submitting the same data to enabled destinations.
  */
@@ -236,13 +198,12 @@ internal fun <Destination, Payload : Any> drainSensorBatches(
  * Phase 6C wraps this delegate behind [SensorUploadModule] (see [asModule]). Its upload contract is:
  *  - the `/android/sensors` upload route;
  *  - batch size [SENSOR_UPLOAD_BATCH_SIZE] (500);
- *  - TTL ([SAMPLE_TTL_DAYS]) + retention-aware cap ([SENSOR_RETENTION_CAP_SAMPLES]) cleanup;
+ *  - pending and quarantined sample retention until study erasure;
  *  - immutable oldest-first batches and, on the normal delivery path, exact-ID deletion only
  *    after every configured destination has a durable receipt;
  *  - disabled destinations retain their undelivered batches until re-enabled or deleted;
- *  - malformed rows move to a bounded encrypted dead-letter table rather than receiving a
+ *  - malformed rows move to an encrypted dead-letter table rather than receiving a
  *    false delivery receipt;
- *  - explicit TTL/cap forced-drop boundaries (TTL pauses with any paused destination);
  *  - upload-stats increments and the per-server failure handling.
  *
  * Phase 6C changes, both behaviour-preserving:
@@ -252,9 +213,15 @@ internal fun <Destination, Payload : Any> drainSensorBatches(
  *  - a corrupt row never aborts the valid remainder of the batch; it is quarantined and the
  *    number quarantined is surfaced via [SensorUploadResult.malformedSampleCount].
  */
-class SensorUploadWorkerDelegate(
+class SensorUploadWorkerDelegate internal constructor(
     private val context: Context,
-    private val chronicleDb: ChronicleDb
+    private val chronicleDb: ChronicleDb,
+    private val studyApiFor: (UploadServerEntity) -> ChronicleStudyApi = {
+        UploadWorker.getChronicleStudyApi(it.url, it.mobileSigningSecretOverride)
+    },
+    private val restrictedApiFor: (UploadServerEntity) -> RestrictedChronicleStudyApi = {
+        RestrictedUploadApiFactory.get(it.url, it.mobileSigningSecretOverride)
+    },
 ) {
     /**
      * Count of corrupt sensor samples skipped during the most recent [execute] run.
@@ -281,49 +248,6 @@ class SensorUploadWorkerDelegate(
 
         val configuredServers = listOfNotNull(serverDao.getConfiguredServer())
         val servers = configuredServers.filter { it.enabled }
-        val hasPausedDestination = configuredServers.any { !it.enabled }
-
-        // Skip the age-based TTL purge while any enabled study is fail-closed (e2ee required, key
-        // pending) so deliberately-retained PHI isn't silently dropped; the absolute count cap in
-        // cleanupStaleData still bounds storage. Only computed when servers exist, so the no-server
-        // path never touches EncryptedSharedPreferences.
-        val anyFailClosed = servers.isNotEmpty() && run {
-            val encryptionStore = EncryptionSettingStore.of(context)
-            servers.any { server ->
-                runCatching { UUID.fromString(server.studyId) }.getOrNull()?.let { studyId ->
-                    PayloadSealer.routing(
-                        encryptionStore.get(studyId), encryptionStore.isEncryptionRequired(studyId),
-                    ) == PayloadSealer.EncryptionRouting.FAIL_CLOSED
-                } ?: false
-            }
-        }
-
-        if (anyFailClosed) {
-            Log.w(
-                TAG,
-                "A study is fail-closed (e2ee required, key pending); skipping sensor age-TTL purge to retain PHI for retry",
-            )
-        }
-        if (hasPausedDestination) {
-            Log.i(TAG, "Skipping sensor age-TTL purge while a configured destination is paused")
-        }
-        try {
-            cleanupStaleData(
-                dao,
-                skipAgeTtl = shouldSkipSensorAgeTtl(
-                    hasEnabledDestination = servers.isNotEmpty(),
-                    hasPausedDestination = hasPausedDestination,
-                    anyFailClosedDestination = anyFailClosed,
-                    // An unreachable server is not a reason to discard what it has not yet
-                    // received; the count cap still bounds storage.
-                    anyFailingDestination = servers.any { it.sensorConsecutiveFailures > 0 },
-                ),
-                diagnostics = diagnostics,
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Sensor cleanup failed, continuing with upload", e)
-        }
-
         if (servers.isEmpty()) {
             Log.i(TAG, "No enabled upload servers, skipping sensor upload")
             return 0
@@ -335,6 +259,7 @@ class SensorUploadWorkerDelegate(
         val diagnosticCursors = servers.associate { server ->
             server.id to server.lastUploadedSensorId
         }.toMutableMap()
+        var statsFailureCount = 0
 
         val result = drainSensorBatches(
             enabledDestinations = servers,
@@ -354,6 +279,7 @@ class SensorUploadWorkerDelegate(
                     statsSink = statsSink,
                     currentFailureCounts = currentFailureCounts,
                     diagnosticCursors = diagnosticCursors,
+                    onStatsFailure = { statsFailureCount++ },
                 )
             },
             acknowledgeAndDelete = { acknowledgedServers, sampleIds ->
@@ -378,7 +304,7 @@ class SensorUploadWorkerDelegate(
                 malformed.forEach { (entry, error) ->
                     Log.w(TAG, "Quarantining corrupt sensor sample ${entry.id}", error)
                 }
-                quarantineMalformedSensorSamples(dao, diagnostics, malformed)
+                quarantineMalformedSensorSamples(dao, diagnostics, malformed, db = chronicleDb)
             },
         )
 
@@ -390,7 +316,7 @@ class SensorUploadWorkerDelegate(
             TAG,
             "Sensor upload complete; skipped ${result.malformedSampleCount} malformed sample(s)",
         )
-        return result.failedDestinationCount
+        return result.failedDestinationCount + statsFailureCount
     }
 
     private fun uploadBatch(
@@ -401,15 +327,14 @@ class SensorUploadWorkerDelegate(
         statsSink: UploadStatsSink,
         currentFailureCounts: MutableMap<Long, Int>,
         diagnosticCursors: MutableMap<Long, String?>,
+        onStatsFailure: () -> Unit,
     ): Boolean {
         return try {
             val studyId = UUID.fromString(server.studyId)
             val participantId = server.participantId
             val deviceId = server.sourceDeviceId
-            val studyApi = UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
-            val restrictedStudyApi = RestrictedUploadApiFactory.get(
-                server.url, server.mobileSigningSecretOverride,
-            )
+            val studyApi = studyApiFor(server)
+            val restrictedStudyApi = restrictedApiFor(server)
             // Study payload-encryption setting (HIPAA-2028 W2). When e2ee is on, each batch
             // is sealed and posted to the encrypted endpoint; otherwise the existing
             // plaintext /android/sensors upload is used, unchanged.
@@ -464,9 +389,15 @@ class SensorUploadWorkerDelegate(
             )
 
             val today = LocalDate.now().toString()
-            val statsResult = statsSink.recordSensorUploaded(server.id, today, samples.size)
+            val statsResult = statsSink.recordSensorUploaded(
+                UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId,
+                    participantId = server.participantId, deviceId = server.sourceDeviceId,
+                    enrollmentEpoch = "${server.id}:${server.createdAt}"),
+                samples.size,
+            )
             if (statsResult is ModuleResult.Failed) {
                 Log.e(TAG, "[${server.name}] Failed to record sensor upload stats", statsResult.error)
+                onStatsFailure()
             }
             true
         } catch (e: Exception) {
@@ -493,7 +424,7 @@ class SensorUploadWorkerDelegate(
             currentFailureCounts[server.id] = updatedFailureCount
             val today = LocalDate.now().toString()
             try {
-                chronicleDb.uploadStatsDao().insertDay(UploadStatsEntity(serverId = server.id, date = today))
+                chronicleDb.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
                 chronicleDb.uploadStatsDao().incrementSensorFailureCount(server.id, today, 1)
             } catch (statsError: Exception) {
                 Log.e(TAG, "[${server.name}] Failed to record sensor upload failure stats", statsError)
@@ -517,69 +448,4 @@ class SensorUploadWorkerDelegate(
         }
     }
 
-    companion object {
-        fun cleanupStaleData(
-            dao: SensorSampleDao,
-            skipAgeTtl: Boolean = false,
-            maxSampleCount: Int = SENSOR_RETENTION_CAP_SAMPLES,
-            maxDeadLetterCount: Int = MAX_DEAD_LETTER_COUNT,
-            deleteChunkSize: Int = SENSOR_CLEANUP_DELETE_CHUNK_SIZE,
-            reportDrop: (String) -> Unit = { message -> Log.e(TAG, message) },
-            diagnostics: LocalUploadDiagnosticsStore? = null,
-        ): SensorCleanupResult {
-            require(maxSampleCount >= 0) { "maxSampleCount must be non-negative" }
-            require(maxDeadLetterCount >= 0) { "maxDeadLetterCount must be non-negative" }
-            require(deleteChunkSize > 0) { "deleteChunkSize must be positive" }
-            // skipAgeTtl: a destination is paused or fail-closed, so its pending PHI is retained
-            // for retry. The absolute count cap still applies as an explicit hard DoS bound.
-            val deletedByAge = if (!skipAgeTtl) {
-                val cutoff = OffsetDateTime.now().minusDays(SAMPLE_TTL_DAYS).toString()
-                deleteAllAvailableInSqlChunks(deleteChunkSize) { limit ->
-                    dao.deleteOldestBefore(cutoff, limit)
-                }.also { dropped ->
-                    if (dropped > 0) {
-                        reportDrop(
-                            "RETENTION DROP: permanently removed $dropped sensor sample(s) " +
-                                "older than the configured ${SAMPLE_TTL_DAYS}-day limit; " +
-                                "delivery is not guaranteed beyond that limit",
-                        )
-                        recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_AGE_EXPIRED, dropped)
-                    }
-                }
-            } else 0
-
-            val count = dao.count()
-            val droppedByCapacity = if (count > maxSampleCount) {
-                val dropped = deleteInSqlChunks(
-                    maximumRows = count - maxSampleCount,
-                    chunkSize = deleteChunkSize,
-                    deleteChunk = dao::deleteOldest,
-                )
-                reportDrop(
-                    "FORCED CAPACITY DROP: permanently removed $dropped oldest sensor " +
-                        "sample(s) to enforce the configured $maxSampleCount-row DoS bound; " +
-                        "this can include data held for a paused destination",
-                )
-                recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_CAPACITY_DROPPED, dropped)
-                dropped
-            } else 0
-
-            val deadLetterCount = dao.countDeadLetters()
-            val droppedDeadLetters = if (deadLetterCount > maxDeadLetterCount) {
-                val dropped = deleteInSqlChunks(
-                    maximumRows = deadLetterCount - maxDeadLetterCount,
-                    chunkSize = deleteChunkSize,
-                    deleteChunk = dao::deleteOldestDeadLetters,
-                )
-                reportDrop(
-                    "FORCED DEAD-LETTER DROP: permanently removed $dropped quarantined sensor " +
-                        "sample(s) to enforce the configured $maxDeadLetterCount-row DoS bound",
-                )
-                recordSensorDiagnostic(diagnostics, LocalOperationalIssue.SENSOR_DEAD_LETTER_DROPPED, dropped)
-                dropped
-            } else 0
-
-            return SensorCleanupResult(deletedByAge, droppedByCapacity, droppedDeadLetters)
-        }
-    }
 }

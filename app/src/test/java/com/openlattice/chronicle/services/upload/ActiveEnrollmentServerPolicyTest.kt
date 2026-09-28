@@ -193,17 +193,13 @@ class ActiveEnrollmentServerPolicyTest {
         }
 
         listOf(
-            "src/main/java/com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt" to
-                "deleteOlderThan(cutoff)",
-            "src/main/java/com/openlattice/chronicle/collection/device/ExpansionUploadWorker.kt" to
-                "purgeAll(anyFailClosed)",
-        ).forEach { (relative, purgeMarker) ->
+            "src/main/java/com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt",
+            "src/main/java/com/openlattice/chronicle/collection/device/ExpansionUploadWorker.kt",
+        ).forEach { relative ->
             val source = File(relative).readText()
-            val missingDestinationGate = source.indexOf("if (server == null)")
-            val purge = source.indexOf(purgeMarker)
             assertTrue(
-                "$relative may purge retained samples before validating the destination",
-                missingDestinationGate >= 0 && purge > missingDestinationGate,
+                "$relative purges undelivered samples by age",
+                !source.contains("deleteOlderThan(cutoff)") && !source.contains("purgeAll(anyFailClosed)"),
             )
         }
     }

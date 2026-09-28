@@ -41,7 +41,7 @@ class UploadWithdrawalBoundaryContractTest {
         val source = appSource("services/withdrawal/ParticipantWithdrawalManager.kt")
         val clearAcks = source.indexOf("CollectionAckRetryQueue.of(appContext).clearForWithdrawal()")
         val clearDatabase = source.indexOf("db.clearAllTables()")
-        val clearIdentity = source.indexOf("enrollmentSettings.clearEnrollment()")
+        val clearIdentity = source.indexOf("enrollmentSettings.clearEnrollment(eraseLocalData = true)")
 
         assertTrue("withdrawal does not clear pending consent reports", clearAcks >= 0)
         assertTrue("pending reports must clear before enrollment database rows", clearDatabase > clearAcks)
@@ -77,21 +77,39 @@ class UploadWithdrawalBoundaryContractTest {
     }
 
     @Test
-    fun reenrollmentSwitchesIdentityAndClearsOldDiagnosticsInsideTheStopBoundary() {
+    fun reenrollmentSwitchesIdentityAndKeepsOldDiagnosticsScopedInsideTheStopBoundary() {
         val recovery = appSource("EnrollmentRecoveryManager.kt")
         val stop = recovery.indexOf("ResearchPersistenceGate.stop {")
         val activate = recovery.indexOf("dao.activateIssuedEnrollment", startIndex = stop)
         val clearAcks = recovery.indexOf("clearForWithdrawal()", startIndex = activate)
-        val clearDiagnostics = recovery.indexOf("LocalUploadDiagnosticsStore.of(context).clear()", startIndex = clearAcks)
-        val completeIdentity = recovery.indexOf("WithdrawalStateStore(context).completeReenrollment", startIndex = clearDiagnostics)
+        val completeIdentity = recovery.indexOf("WithdrawalStateStore(context).completeReenrollment", startIndex = clearAcks)
         val stopEnd = recovery.indexOf("\n        }", startIndex = completeIdentity)
 
         assertTrue(stop >= 0)
         assertTrue(activate > stop)
         assertTrue(clearAcks > activate)
-        assertTrue(clearDiagnostics > clearAcks)
-        assertTrue(completeIdentity > clearDiagnostics)
+        assertFalse(recovery.contains("LocalUploadDiagnosticsStore.of(context).clear()"))
+        assertTrue(completeIdentity > clearAcks)
         assertTrue(stopEnd > completeIdentity)
+    }
+
+    @Test
+    fun distributionBoundaryReplaysJournalAndCountsCorruptFilesBeforeErasure() {
+        val boundary = appSource("services/release/MinimalPlayBoundaryWorker.kt")
+        val replay = boundary.indexOf("replayDirectBootJournalForErasure(applicationContext, db)")
+        val purge = boundary.indexOf("purgeRestrictedPlayRows(db)")
+        val countCorrupt = boundary.indexOf("inventory.corruptIncidentIds.forEach")
+        val erase = boundary.indexOf("clearDirectBootSensorBuffer(applicationContext)")
+        assertTrue(replay >= 0 && replay < purge)
+        assertTrue(countCorrupt > purge && countCorrupt < erase)
+    }
+
+    @Test
+    fun persistenceGateCountsDirectWriteFailuresAndPropagatesSinkFailures() {
+        val gate = appSource("collection/state/ResearchPersistenceGate.kt")
+        assertTrue(gate.contains("LocalOperationalIssue.LOCAL_WRITE_FAILED"))
+        assertTrue(gate.contains("records,"))
+        assertTrue(gate.contains("persistGuarded(appContext, null, persist)"))
     }
 
     private fun appSource(relative: String): String {

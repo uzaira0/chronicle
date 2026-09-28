@@ -11,6 +11,15 @@ import org.junit.Test
 
 class UploadQueueSingleFlightTest {
     @Test
+    fun `combined and standalone battery drains use the same owner`() {
+        val combined = appSource("com/openlattice/chronicle/services/upload/CombinedUploadWorker.kt")
+        val standalone = appSource("com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt")
+        assertTrue(standalone.contains("tryAcquire(BATTERY_UPLOAD_WORK_NAME)"))
+        assertTrue(combined.contains("tryAcquire(BATTERY_UPLOAD_WORK_NAME)"))
+        assertTrue(combined.contains("release(BATTERY_UPLOAD_WORK_NAME)"))
+    }
+
+    @Test
     fun `every independently scheduled uploader fails closed outside active enrollment`() {
         listOf(
             "com/openlattice/chronicle/services/upload/UploadWorker.kt",

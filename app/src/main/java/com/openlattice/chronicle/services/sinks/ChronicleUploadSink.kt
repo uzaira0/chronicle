@@ -31,11 +31,15 @@ class ChronicleUploadSink(
      * than uploading PHI in plaintext, so the batch is retained and retried.
      */
     private val encryptionRequired: Boolean = false,
+    private val onShortWrite: (Int) -> Unit,
 ) : DataSink {
     override fun submit(data: List<ChronicleSample>): Map<String, Boolean> {
+        // The encrypted route acknowledges envelopes (one per batch), not events.
+        var sealed = false
         val written = try {
             when (PayloadSealer.routing(encryptionSetting, encryptionRequired)) {
                 PayloadSealer.EncryptionRouting.ENCRYPT -> {
+                    sealed = true
                     // Seal the EXACT bytes the plaintext path would post: ChronicleData(data)
                     // Serialize with the same boundary used by the plaintext Retrofit path.
                     val plaintext = JsonSerializer.serializeToBytes(ChronicleData(data))
@@ -74,6 +78,13 @@ class ChronicleUploadSink(
             LocalTelemetry.logEvent(TelemetryEvents.SUBMIT_FAILURE, null)
             Log.i(javaClass.name, "Exception when uploading data", e)
             throw e
+        }
+        if (!sealed && written < data.size) {
+            try {
+                onShortWrite(data.size - written)
+            } catch (error: Exception) {
+                Log.e(javaClass.name, "Server accepted usage batch but short-write diagnostic failed", error)
+            }
         }
         return mapOf(
             ChronicleUploadSink::class.java.name to (written > 0)

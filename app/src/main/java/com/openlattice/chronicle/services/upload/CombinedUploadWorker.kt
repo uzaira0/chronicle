@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.work.*
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.battery.BatteryUploadWorkerDelegate
+import com.openlattice.chronicle.collection.battery.BATTERY_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.collection.battery.collectBatterySample
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
@@ -18,7 +19,6 @@ import com.openlattice.chronicle.preferences.SensorSettings
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.ServerMigrationHelper
 import com.openlattice.chronicle.telemetry.LocalTelemetry
-import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 
@@ -112,21 +112,27 @@ private fun runCombinedUploadOwned(context: Context, runAttemptCount: Int): List
     }
 
     val runBatteryUpload: () -> Int = {
-        try {
-            collectBatterySample(context)
-            BatteryUploadWorkerDelegate(context, chronicleDb).execute()
-        } catch (e: Exception) {
-            Log.e(COMBINED_UPLOAD_WORKER_TAG, "Battery upload failed", e)
-            LocalTelemetry.recordException(e)
-            UPLOAD_DELEGATE_THREW
+        if (!UploadQueueSingleFlight.tryAcquire(BATTERY_UPLOAD_WORK_NAME)) {
+            // Not a failure: the holder drains these rows, and counting it would retry and
+            // eventually fail the periodic combined upload.
+            Log.i(COMBINED_UPLOAD_WORKER_TAG, "Battery upload deferred because its queue is already being drained")
+            0
+        } else {
+            try {
+                collectBatterySample(context)
+                BatteryUploadWorkerDelegate(context, chronicleDb).execute()
+            } catch (e: Exception) {
+                Log.e(COMBINED_UPLOAD_WORKER_TAG, "Battery upload failed", e)
+                LocalTelemetry.recordException(e)
+                UPLOAD_DELEGATE_THREW
+            } finally {
+                UploadQueueSingleFlight.release(BATTERY_UPLOAD_WORK_NAME)
+            }
         }
     }
 
-    // ----- Cleanup old stats (keep 30 days). Best-effort; a failure never changes the result.
-    val cleanupStats: () -> Unit = {
-        val cutoff = LocalDate.now().minusDays(30).toString()
-        chronicleDb.uploadStatsDao().deleteOlderThan(cutoff)
-    }
+    // Local success and failure history follows study retention, including offline periods.
+    val cleanupStats: () -> Unit = {}
 
     // Phase 8B migration switch: both paths produce the IDENTICAL ListenableWorker.Result
     // for identical delegate outcomes. The orchestrator path is the same decision logic
