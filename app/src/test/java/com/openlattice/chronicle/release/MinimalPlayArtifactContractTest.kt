@@ -211,7 +211,7 @@ class MinimalPlayArtifactContractTest {
             "study participant or someone else",
             "When an upload fails",
             "active participant/device enrollment",
-            "retained by the server for no more than 30 days",
+            "retained through the study\\'s data-retention period",
             "API key",
             "uzairalam998@gmail.com",
             "https://www.bcm.edu/about-us/our-campus/compliance",
@@ -385,18 +385,18 @@ class MinimalPlayArtifactContractTest {
         )
         val retention = uploadTelemetry["retention"] as Map<*, *>
         assertEquals(
-            "live_snapshot_plus_pending_issue_aggregates_for_at_most_30_days",
+            "study_retention_or_explicit_erasure",
             retention["local"],
         )
         assertEquals(
-            "earlier_of_30_days_from_last_occurrence_or_first_server_receipt",
+            "study_retention_or_explicit_erasure",
             retention["server"],
         )
         val upload = uploadTelemetry["upload"] as Map<*, *>
         assertEquals("upload_diagnostics", upload["family"])
         assertEquals("device_api_key_and_optional_request_signature", upload["authentication"])
         assertEquals(
-            "encrypted_local_queue_until_full_server_acknowledgment_or_30_day_expiration",
+            "immutable_batches_with_retained_history_and_upgrade_replay",
             upload["retry"],
         )
     }
@@ -412,7 +412,7 @@ class MinimalPlayArtifactContractTest {
         assertTrue(uploader.contains("exactActiveEnrollmentServer(context, db) ?: return 0"))
         assertTrue(uploader.contains("server.mobileSigningSecretOverride"))
         assertTrue(uploader.contains("server.apiKey"))
-        assertTrue(uploader.contains("store.acknowledge(submitted)"))
+        assertTrue(uploader.contains("store.acknowledge(submitted.intersect(acknowledged))"))
         assertTrue(uploader.contains("must not create a recursive diagnostic loop"))
         assertTrue(api.contains("UPLOAD_DIAGNOSTICS_PATH = \"/upload-diagnostics\""))
         assertTrue(api.contains("fun uploadAndroidUploadDiagnostics("))
@@ -431,7 +431,7 @@ class MinimalPlayArtifactContractTest {
     }
 
     @Test
-    fun uploadIssueHistoryIsBoundedRedactedAndExplicitlyMappedToTheWireDto() {
+    fun uploadIssueHistoryIsRetainedRedactedAndExplicitlyMappedToTheWireDto() {
         val storeSource = File("src/main/java/com/openlattice/chronicle/services/upload/LocalUploadDiagnosticsStore.kt").readText()
         val bucketBody = storeSource
             .substringAfter("data class LocalUploadIssueBucket(")
@@ -443,12 +443,13 @@ class MinimalPlayArtifactContractTest {
         assertEquals(
             setOf(
                 "day", "moduleFamily", "issue", "count", "id", "firstOccurredAt",
-                "lastOccurredAt", "httpStatus", "errorType",
+                "lastOccurredAt", "httpStatus", "errorType", "deliveryState", "sealedForUpload",
             ),
             fields,
         )
-        assertTrue(storeSource.contains("RETENTION_DAYS = 30L"))
-        assertTrue(storeSource.contains("MAX_LOCAL_BUCKETS = 500"))
+        assertFalse(storeSource.contains("RETENTION_DAYS = 30L"))
+        assertFalse(storeSource.contains("MAX_LOCAL_BUCKETS = 500"))
+        assertTrue(storeSource.contains("MAX_UPLOAD_BATCH = 500"))
         assertFalse(storeSource.contains("errorMessage"))
         assertFalse(storeSource.contains("serverOrigin"))
         assertTrue(storeSource.contains("fun toWireEvents("))

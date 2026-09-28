@@ -32,6 +32,35 @@ class ChronicleDbMigrationTest {
     )
 
     @Test
+    fun migrate28To29AddsRetainedDiagnosticsAndQuarantine() {
+        helper.createDatabase(TEST_DB, 28).apply {
+            insertConfiguredServer(this)
+            execSQL("INSERT INTO upload_stats (serverId, date, usageEventsUploaded, sensorSamplesUploaded, batterySamplesUploaded, usageUploadFailures, sensorUploadFailures, batteryUploadFailures) VALUES (1, '2026-01-01', 2, 0, 0, 1, 0, 0)")
+            close()
+        }
+        helper.runMigrationsAndValidate(TEST_DB, 29, true, MIGRATION_28_29).use { db ->
+            db.query("SELECT COUNT(*) FROM upload_diagnostics").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+            db.query("SELECT COUNT(*) FROM local_data_quarantine").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+            db.query("PRAGMA foreign_key_list(upload_stats)").use { cursor ->
+                assertEquals(0, cursor.count)
+            }
+            db.query("SELECT studyId, participantId, deviceId, usageEventsUploaded FROM upload_stats").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("11111111-1111-1111-1111-111111111111", cursor.getString(0))
+                assertEquals("participant-a", cursor.getString(1))
+                assertEquals("device-a", cursor.getString(2))
+                assertEquals(2, cursor.getInt(3))
+            }
+        }
+    }
+
+    @Test
     fun migrate9To10AddsBatterySamplesTable() {
         // Create the v9 database (no battery_samples table) and close it.
         helper.createDatabase(TEST_DB, 9).close()

@@ -13,6 +13,9 @@ import androidx.work.WorkManager
 import com.google.android.material.button.MaterialButton
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.STUDY_ID
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.storage.LocalStoreRecoveryManager
@@ -85,6 +88,10 @@ class LocalStoreRecoveryActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) {
                     // Do not copy or remove the store while a worker could still be writing it.
                     WorkManager.getInstance(applicationContext).cancelAllWork().result.get()
+                    val prefs = EncryptedPrefsHelper.getEncryptedPrefs(applicationContext)
+                    val owner = prefs.getString(STUDY_ID, null)?.let { study ->
+                        prefs.getString(PARTICIPANT_ID, null)?.let { participant -> study to participant }
+                    }
                     LocalStoreRecoveryManager.preserveAndReset(
                         applicationContext,
                         reason,
@@ -92,6 +99,7 @@ class LocalStoreRecoveryActivity : AppCompatActivity() {
                             preserveEncryptedRecoveryBundle = true,
                             understandsReenrollmentRequired = true,
                         ),
+                        enrollmentOwner = owner,
                     )
                     EnrollmentSettings.clearForLocalStoreRecovery(applicationContext)
                     WithdrawalStateStore(applicationContext).resetForReenrollment()

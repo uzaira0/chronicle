@@ -7,13 +7,14 @@ import android.os.Build
 import android.util.Log
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.UUID
 
 private const val PROCESS_EXIT_TAG = "ProcessExitDiagnostics"
 private const val PREFS = "chronicle_process_exit_watermark"
 private const val KEY_WATERMARK = "last_reported_exit_ms"
 
 /** Only the reason and time of a past exit; message, stack, and trace are never read. */
-internal data class ProcessExit(val reason: Int, val timestampMillis: Long)
+internal data class ProcessExit(val reason: Int, val timestampMillis: Long, val pid: Int = 0)
 
 /**
  * Counts crash, native-crash, and ANR exits newer than [watermarkMillis] as redacted
@@ -36,7 +37,11 @@ internal fun recordProcessExits(
                 ApplicationExitInfo.REASON_ANR -> LocalOperationalIssue.APP_ANR
                 else -> return@forEach
             }
-            store.recordOperational(
+            val id = UUID.nameUUIDFromBytes(
+                "process-exit:${exit.pid}:${exit.timestampMillis}:${exit.reason}".toByteArray(Charsets.UTF_8),
+            ).toString()
+            store.recordOperationalOnce(
+                id,
                 LocalUploadModuleFamily.APP_RUNTIME,
                 issue,
                 occurredAt = Instant.ofEpochMilli(exit.timestampMillis).atOffset(ZoneOffset.UTC),
@@ -52,7 +57,7 @@ fun recordRecentProcessExits(context: Context) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val activityManager = context.getSystemService(ActivityManager::class.java) ?: return
         val exits = activityManager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
-            .map { ProcessExit(it.reason, it.timestamp) }
+            .map { ProcessExit(it.reason, it.timestamp, it.pid) }
         val previous = prefs.getLong(KEY_WATERMARK, 0L)
         val next = recordProcessExits(LocalUploadDiagnosticsStore.of(context), exits, previous)
         if (next != previous) prefs.edit().putLong(KEY_WATERMARK, next).apply()

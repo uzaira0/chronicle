@@ -37,11 +37,11 @@ class ProcessExitDiagnosticsTest {
 
         assertEquals(now - 500, watermark)
         val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
-        val byIssue = store.pending(today).associate { it.issue to it }
+        val byIssue = store.pending(today).groupBy { it.issue }
         assertEquals(setOf("APP_CRASH", "APP_CRASH_NATIVE", "APP_ANR"), byIssue.keys)
-        assertEquals(2, byIssue.getValue("APP_CRASH").count)
-        assertEquals(1, byIssue.getValue("APP_ANR").count)
-        byIssue.values.forEach { bucket ->
+        assertEquals(2, byIssue.getValue("APP_CRASH").sumOf { it.count })
+        assertEquals(1, byIssue.getValue("APP_ANR").sumOf { it.count })
+        byIssue.values.flatten().forEach { bucket ->
             assertEquals("APP_RUNTIME", bucket.moduleFamily)
             assertNull(bucket.errorType)
             assertNull(bucket.httpStatus)
@@ -49,7 +49,7 @@ class ProcessExitDiagnosticsTest {
 
         // A second pass with the advanced watermark adds nothing.
         recordProcessExits(store, exits, watermark)
-        assertEquals(2, store.pending(today).first { it.issue == "APP_CRASH" }.count)
+        assertEquals(2, store.pending(today).filter { it.issue == "APP_CRASH" }.sumOf { it.count })
     }
 
     @Test
@@ -63,5 +63,16 @@ class ProcessExitDiagnosticsTest {
         val store = LocalUploadDiagnosticsStore(MemoryPersistence())
         assertEquals(42L, recordProcessExits(store, emptyList(), 42L))
         assertTrue(store.pending(LocalDate.now()).isEmpty())
+    }
+
+    @Test
+    fun crashBetweenDiagnosticAndWatermarkDoesNotCountTheSameExitTwice() {
+        val store = LocalUploadDiagnosticsStore(MemoryPersistence())
+        val exit = ProcessExit(ApplicationExitInfo.REASON_CRASH, now)
+
+        recordProcessExits(store, listOf(exit), watermarkMillis = 0)
+        recordProcessExits(store, listOf(exit), watermarkMillis = 0)
+
+        assertEquals(1, store.pending(LocalDate.now()).single().count)
     }
 }

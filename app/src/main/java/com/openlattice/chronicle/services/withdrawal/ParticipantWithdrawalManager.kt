@@ -32,6 +32,7 @@ import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.LocalStoreRecoveryManager
 import java.util.UUID
 
 public enum class WithdrawalState {
@@ -52,6 +53,13 @@ public class WithdrawalStateStore internal constructor(
         WithdrawalState.valueOf(prefs.getString(KEY_STATE, WithdrawalState.NONE.name).orEmpty())
     } catch (error: RuntimeException) {
         Log.e(TAG, "Invalid participant withdrawal state; requiring study support", error)
+        WithdrawalState.NEEDS_SUPPORT
+    }
+
+    /** Used by persistence writers so a prefs read error remains retryable. */
+    public fun stateOrThrow(): WithdrawalState = try {
+        WithdrawalState.valueOf(prefs.getString(KEY_STATE, WithdrawalState.NONE.name).orEmpty())
+    } catch (error: IllegalArgumentException) {
         WithdrawalState.NEEDS_SUPPORT
     }
 
@@ -341,7 +349,15 @@ public class ParticipantWithdrawalWorker(
             }
             CollectionAckRetryQueue.of(appContext).clearForWithdrawal()
             db.clearAllTables()
-            enrollmentSettings.clearEnrollment()
+            val recoveryScopes = servers.map { it.studyId to it.participantId }.toMutableSet()
+            if (studyId != com.openlattice.chronicle.preferences.INVALID_STUDY_ID &&
+                enrollmentSettings.getParticipantId().isNotBlank()) {
+                recoveryScopes += studyId.toString() to enrollmentSettings.getParticipantId()
+            }
+            recoveryScopes.forEach { (study, participant) ->
+                LocalStoreRecoveryManager.eraseForEnrollment(appContext, study, participant)
+            }
+            enrollmentSettings.clearEnrollment(eraseLocalData = true)
             stateStore.setState(
                 if (needsSupport || stateStore.serverDeletionNeedsSupport()) {
                     WithdrawalState.NEEDS_SUPPORT

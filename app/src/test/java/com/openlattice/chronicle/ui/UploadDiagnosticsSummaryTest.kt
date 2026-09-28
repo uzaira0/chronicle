@@ -61,7 +61,7 @@ class UploadDiagnosticsSummaryTest {
         ).readText()
         val source = repository + screen
 
-        assertTrue(repository.contains("getRecentStats(server.id, 7)"))
+        assertTrue(repository.contains("getRecentStats(server.id, \"${'$'}{server.id}:${'$'}{server.createdAt}\", 7)"))
         assertTrue(repository.contains("usageFailedAttempts = server.usageUploadFailureCount"))
         assertTrue(screen.contains("renderUploadHistory"))
         listOf(

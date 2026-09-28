@@ -17,44 +17,61 @@ internal class UploadDiagnosticsUploader(
         val server = exactActiveEnrollmentServer(context, db) ?: return 0
         val store = LocalUploadDiagnosticsStore.of(context)
         val pending = store.pending()
-        if (pending.isEmpty()) return 0
-
-        val events = store.toWireEvents(pending)
-        if (events.isEmpty()) {
-            store.acknowledge(pending.mapTo(linkedSetOf()) { it.id })
-            return 0
-        }
-
-        return try {
-            val studyId = UUID.fromString(server.studyId)
-            val acknowledged = UploadWorker.getChronicleStudyApi(
-                server.url,
-                server.mobileSigningSecretOverride,
-            ).uploadAndroidUploadDiagnostics(
-                studyId,
-                server.participantId,
-                server.sourceDeviceId,
-                server.apiKey,
-                events,
-            ).toSet()
-            val submitted = events.mapTo(linkedSetOf()) { it.id }
-            if (!submitted.all(acknowledged::contains)) {
-                Log.w(UPLOAD_DIAGNOSTICS_TAG, "Server did not acknowledge every upload diagnostic")
-                1
-            } else {
-                store.acknowledge(submitted)
-                0
+        val parked = store.parked()
+        val deliveredReplay = store.deliveredReplay()
+        if (pending.isEmpty() && parked.isEmpty() && deliveredReplay.isEmpty()) return 0
+        var failures = 0
+        for (batch in diagnosticsUploadBatches(pending, parked, deliveredReplay)) {
+            val events = store.toWireEvents(batch)
+            if (events.size != batch.size) {
+                // Preserve the raw bucket and take it out of the active upload window.
+                val submittedIds = events.mapTo(hashSetOf()) { it.id }
+                store.quarantineMalformed(batch.mapTo(hashSetOf()) { it.id } - submittedIds)
             }
-        } catch (error: Exception) {
-            if ((error as? retrofit2.HttpException)?.code() == 400) {
-                // A server older than V104 rejects the whole batch over one newer code. Shed only
-                // those buckets so the older upload-failure buckets go through on the next run.
-                store.dropUnsupportedByLegacyServer(events.mapTo(linkedSetOf()) { it.id })
+            if (events.isEmpty()) continue
+            try {
+                val studyId = UUID.fromString(server.studyId)
+                val acknowledged = UploadWorker.getChronicleStudyApi(
+                    server.url,
+                    server.mobileSigningSecretOverride,
+                ).uploadAndroidUploadDiagnostics(
+                    studyId,
+                    server.participantId,
+                    server.sourceDeviceId,
+                    server.apiKey,
+                    events,
+                ).toSet()
+                val submitted = events.mapTo(linkedSetOf()) { it.id }
+                if (batch === deliveredReplay) {
+                    store.acknowledgeDeliveredReplay(submitted, acknowledged)
+                } else {
+                    store.acknowledge(submitted.intersect(acknowledged))
+                }
+                if (!submitted.all(acknowledged::contains)) {
+                    Log.w(UPLOAD_DIAGNOSTICS_TAG, "Server did not acknowledge every upload diagnostic")
+                    failures++
+                }
+            } catch (error: Exception) {
+                if (uploadHttpStatus(error) == 400) {
+                    // Park unsupported codes, retaining their exact IDs and counts. They are
+                    // probed again on every cycle so a server upgrade can accept them.
+                    store.parkUnsupportedByLegacyServer(events.mapTo(linkedSetOf()) { it.id })
+                }
+                // Intentionally do not call LocalUploadDiagnosticsStore.recordFailure here: a
+                // diagnostic-delivery failure must not create a recursive diagnostic loop.
+                Log.w(UPLOAD_DIAGNOSTICS_TAG, "Upload diagnostics remain queued for retry", error)
+                failures++
             }
-            // Intentionally do not call LocalUploadDiagnosticsStore.recordFailure here: a
-            // diagnostic-delivery failure must not create a recursive diagnostic loop.
-            Log.w(UPLOAD_DIAGNOSTICS_TAG, "Upload diagnostics remain queued for retry", error)
-            1
         }
+        return if (failures == 0) 0 else 1
     }
 }
+
+internal fun diagnosticsUploadBatches(
+    pending: List<LocalUploadIssueBucket>,
+    parked: List<LocalUploadIssueBucket>,
+    deliveredReplay: List<LocalUploadIssueBucket>,
+): List<List<LocalUploadIssueBucket>> =
+    listOf(pending).filter(List<LocalUploadIssueBucket>::isNotEmpty) +
+        parked.groupBy(::serverTier).toSortedMap().values.filter(List<LocalUploadIssueBucket>::isNotEmpty) +
+        listOf(deliveredReplay).filter(List<LocalUploadIssueBucket>::isNotEmpty)

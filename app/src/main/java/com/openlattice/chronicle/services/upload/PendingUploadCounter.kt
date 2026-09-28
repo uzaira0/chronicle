@@ -4,6 +4,7 @@ import android.content.Context
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.collection.DistributionCollectionContributions
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.UploadServerEntity
 import java.time.LocalDate
 
 data class PendingUploadCounts(
@@ -83,22 +84,32 @@ object PendingUploadCounter {
         )
 
     fun dashboardSnapshot(context: Context, date: LocalDate = LocalDate.now()): UploadDashboardSnapshot =
-        dashboardSnapshot(ChronicleDb.getInstance(context.applicationContext), date)
+        ChronicleDb.getInstance(context.applicationContext).let { db ->
+            dashboardSnapshot(db, exactActiveEnrollmentServer(context, db), date)
+        }
 
     fun dashboardSnapshot(db: ChronicleDb, date: LocalDate = LocalDate.now()): UploadDashboardSnapshot =
-        UploadDashboardSnapshot(
+        dashboardSnapshot(db, db.uploadServerDao().getConfiguredServer(), date)
+
+    private fun dashboardSnapshot(db: ChronicleDb, server: UploadServerEntity?, date: LocalDate): UploadDashboardSnapshot {
+        val serverId = server?.id ?: -1L
+        val epoch = server?.let { "${it.id}:${it.createdAt}" }.orEmpty()
+        val day = date.toString()
+        val stats = db.uploadStatsDao()
+        return UploadDashboardSnapshot(
             pending = snapshot(db),
             succeededToday = UploadSuccessCounts(
-                usageAndLifecycle = db.uploadStatsDao().usageUploadedOn(date.toString()),
-                sensorSamples = db.uploadStatsDao().sensorUploadedOn(date.toString()),
-                batterySamples = db.uploadStatsDao().batteryUploadedOn(date.toString()),
+                usageAndLifecycle = stats.usageUploadedOn(day, serverId, epoch),
+                sensorSamples = stats.sensorUploadedOn(day, serverId, epoch),
+                batterySamples = stats.batteryUploadedOn(day, serverId, epoch),
             ),
             failedToday = UploadFailureCounts(
-                usageAttempts = db.uploadStatsDao().usageFailuresOn(date.toString()),
-                sensorAttempts = db.uploadStatsDao().sensorFailuresOn(date.toString()),
-                batteryAttempts = db.uploadStatsDao().batteryFailuresOn(date.toString()),
+                usageAttempts = stats.usageFailuresOn(day, serverId, epoch),
+                sensorAttempts = stats.sensorFailuresOn(day, serverId, epoch),
+                batteryAttempts = stats.batteryFailuresOn(day, serverId, epoch),
             ),
         )
+    }
 }
 
 data class UploadDashboardSnapshot(

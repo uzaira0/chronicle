@@ -101,7 +101,7 @@ object DashboardDataRepository {
         val appContext = context.applicationContext
         val enrollment = EnrollmentSettings(appContext)
         val db = ChronicleDb.getInstance(appContext)
-        val uploadDashboard = PendingUploadCounter.dashboardSnapshot(db, LocalDate.now())
+        val uploadDashboard = PendingUploadCounter.dashboardSnapshot(appContext, LocalDate.now())
         val servers = listOfNotNull(db.uploadServerDao().getConfiguredServer())
         val latestServerUpload = latestUploadSuccessTime(
             servers.flatMap { server ->
@@ -145,7 +145,7 @@ object DashboardDataRepository {
                     sensorFailedAttempts = server.sensorUploadFailureCount,
                     batteryItemsUploaded = server.batteryUploadSuccessCount,
                     batteryFailedAttempts = server.batteryUploadFailureCount,
-                    history = db.uploadStatsDao().getRecentStats(server.id, 7).map { stat ->
+                    history = db.uploadStatsDao().getRecentStats(server.id, "${server.id}:${server.createdAt}", 7).map { stat ->
                         formatDailyUploadStats(
                             stat,
                             includeRestricted = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS,

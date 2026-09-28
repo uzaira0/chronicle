@@ -43,10 +43,10 @@
       "id": "upload_telemetry",
       "fields": ["usageQueueDepth", "sensorQueueDepth", "uploadStatsRowCount", "enabledServerCount", "disabledServerCount", "serversWithUsageError", "serversWithSensorError", "usagePartialFailureCount", "sensorPartialFailureCount", "periodicWork", "immediateWork", "destinationIssueDay", "destinationIssueModuleFamily", "destinationIssueCode", "destinationIssueCount", "destinationIssueFirstOccurredAt", "destinationIssueLastOccurredAt", "destinationHttpStatus", "destinationErrorType"],
       "permissions": [],
-      "retention": {"local": "live_snapshot_plus_pending_issue_aggregates_for_at_most_30_days", "server": "earlier_of_30_days_from_last_occurrence_or_first_server_receipt"},
+      "retention": {"local": "study_retention_or_explicit_erasure", "server": "study_retention_or_explicit_erasure"},
       "destinations": ["local_app_diagnostics_view", "exact_enrolled_study_server"],
-      "upload": {"family": "upload_diagnostics", "authentication": "device_api_key_and_optional_request_signature", "retry": "encrypted_local_queue_until_full_server_acknowledgment_or_30_day_expiration"},
-      "deletion": {"disable": "preserve_bounded_local_history", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+      "upload": {"family": "upload_diagnostics", "authentication": "device_api_key_and_optional_request_signature", "retry": "immutable_batches_with_retained_history_and_upgrade_replay"},
+      "deletion": {"disable": "preserve_scoped_local_history_until_study_retention_or_explicit_erasure", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
     },
     {
       "id": "battery_telemetry",

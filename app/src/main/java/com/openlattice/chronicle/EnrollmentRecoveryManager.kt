@@ -255,14 +255,15 @@ internal object EnrollmentRecoveryManager {
             ?: return EnrollmentRecoveryResult.RETRY_REQUIRED
         val ownerNonce = requireNotNull(row.reservationNonce)
         ResearchPersistenceGate.stop {
+            // Resolve the legacy preference while the previous enrollment identity is still
+            // available. Ambiguous ownership is quarantined by the importer.
+            LocalUploadDiagnosticsStore.of(context)
             check(dao.activateIssuedEnrollment(row.id, ownerNonce) == 1) {
                 "Issued enrollment ownership changed before activation"
             }
-            // Install a new identity only after every previously admitted write/request has
-            // finished. Old acknowledgment retries and local diagnostics are cleared in the same
-            // stop boundary, so neither can cross into the new enrollment.
+            // Install a new identity after admitted writes finish. Diagnostic rows retain
+            // their original enrollment scope and cannot cross into the new enrollment.
             CollectionAckRetryQueue.of(context).clearForWithdrawal()
-            LocalUploadDiagnosticsStore.of(context).clear()
             WithdrawalStateStore(context).completeReenrollment(
                 recovery.manifest.studyId,
                 recovery.manifest.participantId,
