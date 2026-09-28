@@ -97,7 +97,9 @@
 
 # Gson round-trips NotificationDetails through PendingIntent extras; an alarm set by one build
 # and delivered after an update must still parse, so field names cannot depend on the build.
--keepclassmembers class com.openlattice.chronicle.services.notifications.NotificationDetails { <fields>; }
+-keep class com.openlattice.chronicle.services.notifications.NotificationDetails { <fields>; }
+# Gson reads enum constants by field name; an obfuscated constant set by one build fails in the next.
+-keep enum com.openlattice.chronicle.constants.NotificationType { *; }
 
 # App-owned DTOs persisted or transported through reflective Moshi adapters.
 -keep class com.openlattice.chronicle.models.ExtractedUsageEvent { *; }

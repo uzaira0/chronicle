@@ -7,7 +7,7 @@
 # Kotlin adapter. If R8 renames it (and drops its kotlin.Metadata), the JSON keys become "a".."j"
 # and the server cannot bind them. A class absent from the mapping (e.g. restricted collectors in
 # the play flavor) is fine; a class present under another name is not. NotificationDetails is
-# round-tripped through PendingIntent extras by Gson, so its field names must also survive.
+# round-tripped through PendingIntent extras by Gson, so its field names and NotificationType constants must also survive.
 set -euo pipefail
 
 input="${1:?usage: $0 <release.aab | mapping.txt>}"
@@ -16,7 +16,10 @@ api_files=(
   "$repo_root/app/src/main/java/com/openlattice/chronicle/api/ChronicleStudyApi.kt"
   "$repo_root/app/src/googleServices/java/com/openlattice/chronicle/api/RestrictedChronicleStudyApi.kt"
 )
-gson_classes=(com.openlattice.chronicle.services.notifications.NotificationDetails)
+gson_classes=(
+  com.openlattice.chronicle.services.notifications.NotificationDetails
+  com.openlattice.chronicle.constants.NotificationType
+)
 
 mkdir -p "$repo_root/build"
 work="$(mktemp -d "$repo_root/build/verify-wire-dto.XXXXXX")"
