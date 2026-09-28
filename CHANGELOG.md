@@ -10,6 +10,9 @@
 
 Full notes per release are in the monorepo `CHANGELOG.md`.
 
+- versionCode 63, `2026.09.28-internal.open.1` (release 2026.9.28): diagnostics kept until the
+  server stores them; low storage pauses collection instead of evicting usage rows; malformed rows
+  quarantined one by one; research Delete Server withdraws and waits for the server before erasing.
 - versionCode 62, `2026.09.27-internal.open.1` (release 2026.9.27): open-source licenses screen;
   discarded sensor and usage data counted and reported; low-storage eviction of the oldest queued
   usage rows; clock-skew re-sign; 8 MiB response limit.
