@@ -16,6 +16,7 @@ import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.constants.NotificationType
 import com.openlattice.chronicle.security.MobileApiSigningInterceptor
+import com.openlattice.chronicle.security.ResponseSizeLimitInterceptor
 import com.openlattice.chronicle.services.notifications.CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.UNLOCK_MONITORING_CHANNEL_ID
@@ -265,6 +266,10 @@ object Utils {
                         .build()
                 )
             }
+            // Any host can be enrolled from a QR code, so a hostile or broken server must not
+            // be able to exhaust memory with one response. The largest real response (study
+            // settings) is a few KiB.
+            .addNetworkInterceptor(ResponseSizeLimitInterceptor())
         // Every supported public endpoint uses Android's system trust store. Research builds
         // may restrict the hostname above, but no tenant certificate or infrastructure name is
         // embedded in the distributed client.
