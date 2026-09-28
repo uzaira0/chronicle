@@ -83,6 +83,11 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".LicensesActivity"
+            android:exported="false"
+            android:label="@string/settings_open_source_licenses"
+            android:parentActivityName=".MainActivity" />
+        <activity
             android:name=".ServerEnrollmentActivity"
             android:label="@string/title_server_settings"
             android:parentActivityName=".MainActivity" />

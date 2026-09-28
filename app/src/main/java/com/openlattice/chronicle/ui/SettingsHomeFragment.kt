@@ -20,6 +20,7 @@ import com.google.android.material.switchmaterial.SwitchMaterial
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.LocalStoreRecoveryActivity
+import com.openlattice.chronicle.LicensesActivity
 import com.openlattice.chronicle.ServerEnrollmentActivity
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.core.ModuleResult
@@ -157,6 +158,9 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         }
         view.findViewById<MaterialButton>(R.id.addServerSettingsButton).setOnClickListener {
             startActivity(Intent(requireContext(), ServerEnrollmentActivity::class.java))
+        }
+        view.findViewById<MaterialButton>(R.id.openSourceLicensesButton).setOnClickListener {
+            startActivity(Intent(requireContext(), LicensesActivity::class.java))
         }
         view.findViewById<MaterialButton>(R.id.privacyPolicyButton).setOnClickListener {
             ExternalLinks.openHttps(requireContext(), getString(R.string.platform_privacy_policy_url))

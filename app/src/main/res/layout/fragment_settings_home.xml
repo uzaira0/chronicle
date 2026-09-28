@@ -154,5 +154,12 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/settings_bcm_compliance" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/openSourceLicensesButton"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_open_source_licenses" />
     </LinearLayout>
 </ScrollView>

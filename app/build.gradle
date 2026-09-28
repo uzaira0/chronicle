@@ -6,6 +6,8 @@ plugins {
     id 'com.android.application'
     id 'io.github.takahirom.roborazzi' version '1.75.0'
     id 'com.github.jk1.dependency-license-report' version '3.1.2'
+    // In-app open-source notices: generates R.raw.aboutlibraries per variant (LicensesActivity).
+    id 'com.mikepenz.aboutlibraries.plugin.android' version '14.2.1'
 }
 
 apply plugin: 'kotlin-parcelize'
@@ -580,6 +582,7 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.13.2'
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.android.material:material:1.14.0'
+    implementation 'com.mikepenz:aboutlibraries-core:14.2.1'
     implementation 'com.squareup.retrofit2:retrofit:3.0.0'
     implementation 'com.squareup.retrofit2:converter-moshi:3.0.0'
     implementation 'com.squareup.moshi:moshi-kotlin:1.15.2'
@@ -776,6 +779,11 @@ tasks.register('generateRuntimeSbom') {
     }
     tasks.matching { it.name == "bundle${capitalized}Release" }.configureEach { finalizedBy(sbomTask) }
 }
+
+// sqlcipher-android's POM declares no license; app/aboutlibraries supplies its BSD-3-Clause text
+// so the in-app notices (LicensesActivity) reproduce it as the license requires.
+// Property form: a Groovy `collect { }` block binds to Groovy's own collect(Closure).
+aboutLibraries.collect.configPath = file('aboutlibraries')
 
 // License scan of the shipped runtime classpath against the same allowlist as server and web.
 // `./gradlew :app:checkLicense` fails on any dependency whose license is not on the list.
