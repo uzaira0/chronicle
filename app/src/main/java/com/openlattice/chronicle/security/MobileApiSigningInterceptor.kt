@@ -9,6 +9,7 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
+import kotlin.math.abs
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -29,7 +30,21 @@ class MobileApiSigningInterceptor(
             }
         } ?: ByteArray(0)
 
-        val timestamp = Instant.now().epochSecond.toString()
+        val response = chain.proceed(signed(request, bodyBytes))
+        if (response.code != 401) return response
+        // The server rejects a timestamp outside its window with 401. A device clock that far
+        // off would fail every upload, so sign against the server's clock from its Date header
+        // and retry once. Recomputed on every 401, so a later clock fix corrects itself.
+        val serverTime = response.headers.getDate("Date")?.toInstant() ?: return response
+        val offset = serverTime.epochSecond - Instant.now().epochSecond
+        if (abs(offset) <= CLOCK_SKEW_TOLERANCE_SECONDS) return response
+        clockOffsetSeconds = offset
+        response.close()
+        return chain.proceed(signed(request, bodyBytes))
+    }
+
+    private fun signed(request: Request, bodyBytes: ByteArray): Request {
+        val timestamp = (Instant.now().epochSecond + clockOffsetSeconds).toString()
         val nonce = UUID.randomUUID().toString()
         val signature = sign(
             method = request.method,
@@ -39,14 +54,11 @@ class MobileApiSigningInterceptor(
             bodyBytes = bodyBytes,
             secret = signingSecret
         )
-
-        val signedRequest = request
+        return request
             .newBuilder()
             .headersWithSignature(timestamp, nonce, signature)
             .withReplayableBody(request, bodyBytes)
             .build()
-
-        return chain.proceed(signedRequest)
     }
 
     private fun Request.Builder.headersWithSignature(
@@ -69,6 +81,13 @@ class MobileApiSigningInterceptor(
         const val SIGNATURE_HEADER = "X-Chronicle-Signature"
         const val TIMESTAMP_HEADER = "X-Chronicle-Timestamp"
         const val NONCE_HEADER = "X-Chronicle-Nonce"
+
+        // Below the server's 30 s future allowance; its past allowance is 5 min.
+        private const val CLOCK_SKEW_TOLERANCE_SECONDS = 25L
+
+        /** Server time minus device time, learned from a rejected request; shared by all clients. */
+        @Volatile
+        internal var clockOffsetSeconds = 0L
 
         fun sign(
             method: String,

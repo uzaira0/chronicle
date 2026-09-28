@@ -11,6 +11,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 class MobileApiSigningInterceptorTest {
 
@@ -280,6 +281,44 @@ class MobileApiSigningInterceptorTest {
         assertTrue("second nonce must be present", !secondNonce.isNullOrBlank())
         assertTrue("each request must get a fresh nonce", firstNonce != secondNonce)
         assertTrue("fresh nonce must change the HMAC", firstSignature != secondSignature)
+    }
+
+    @Test
+    fun rejectedSkewedTimestampRetriesOnceOnServerClock() {
+        val serverTime = java.time.Instant.now().plusSeconds(600)
+        val serverDate = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+            .format(serverTime.atOffset(java.time.ZoneOffset.UTC))
+        val observed = mutableListOf<Request>()
+        val client = OkHttpClient.Builder()
+            .addInterceptor(MobileApiSigningInterceptor("server-override-secret"))
+            .addInterceptor(Interceptor { chain ->
+                observed += chain.request()
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(if (observed.size == 1) 401 else 200)
+                    .message("")
+                    .header("Date", serverDate)
+                    .body("{}".toResponseBody())
+                    .build()
+            })
+            .build()
+        try {
+            val response = client.newCall(
+                Request.Builder()
+                    .url("https://chronicle.example/chronicle/v4/mobile/enrollments/current")
+                    .get()
+                    .build()
+            ).execute()
+            response.close()
+
+            assertEquals(200, response.code)
+            assertEquals(2, observed.size)
+            val retried = observed[1].header(MobileApiSigningInterceptor.TIMESTAMP_HEADER)!!.toLong()
+            assertTrue("retry must sign on the server clock", abs(retried - serverTime.epochSecond) <= 5)
+        } finally {
+            MobileApiSigningInterceptor.clockOffsetSeconds = 0
+        }
     }
 
     private fun signedClient(
