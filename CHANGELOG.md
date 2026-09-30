@@ -10,6 +10,13 @@
 
 Full notes per release are in the monorepo `CHANGELOG.md`.
 
+- versionCode 66, `2026.10.01-internal.open.1` (release 2026.10.1): minimum Android version raised from 6.0 to 8.0
+  (API 26). A build that supports Android 6 carries its own copy of `java.time`, which the app's JSON reader cannot
+  handle: from versionCode 55 on, enrollment from a link crashed the app on every device. Upload diagnostics are sent again (their
+  dates could not be encoded). Battery samples upload again (release builds renamed the classes behind their
+  charging state, health and plug type fields). Returning from a permission prompt no longer opens a second copy of
+  the battery or background dialog. The exact-alarm settings page opens once instead of on every launch.
+  versionCode 65 was not uploaded to Play.
 - versionCode 65, `2026.09.30-internal.open.1` (release 2026.9.30): after enrollment the app opens Data Sharing when an
   accepted module still needs Android access (Usage Access), and Overview says so; questionnaire reminders are delivered
   again, including when the alarm starts the app; no false enrollment screen after the app is killed; rotating the phone
