@@ -24,11 +24,11 @@ import org.robolectric.Shadows.shadowOf
 /**
  * Robolectric has no AndroidKeyStore and no SQLCipher native library. Pre-fill the two cached
  * singletons with plain SharedPreferences and an in-memory Room database so real screens start.
- * An enrolled device is the Chile study: its eight modules enabled and accepted, and the
+ * An enrolled device is an eight-module study: its modules enabled and accepted, and the
  * participant's device-user identification switched on, so every participant control renders.
  */
 object TestStores {
-    private val CHILE_MODULES = listOf(
+    private val EIGHT_MODULES = listOf(
         CollectionModuleId.USAGE_EVENTS,
         CollectionModuleId.IN_APP_ACTIVITY_CLASS,
         CollectionModuleId.DEVICE_LIFECYCLE,
@@ -39,7 +39,11 @@ object TestStores {
         CollectionModuleId.DEVICE_SETTINGS,
     )
 
-    fun install(context: Context, enrolled: Boolean) {
+    fun install(
+        context: Context,
+        enrolled: Boolean,
+        manifestOverrides: Map<CollectionModuleId, CollectionModuleSetting> = emptyMap(),
+    ) {
         val prefs = context.getSharedPreferences("layout_test_prefs", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
         setStatic(EncryptedPrefsHelper::class.java, "instance", EncryptedPrefsHelper, prefs)
@@ -51,7 +55,7 @@ object TestStores {
 
         // A participant who allowed notifications, so identification is active, not paused.
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        val preview = chilePreview()
+        val preview = eightModulePreview(manifestOverrides)
         val manifest = preview.manifest
         prefs.edit()
             .putString(STUDY_ID, manifest.studyId.toString())
@@ -72,7 +76,7 @@ object TestStores {
             ),
         )
         db.collectionModuleStateDao().upsertAll(
-            CHILE_MODULES.map {
+            EIGHT_MODULES.map {
                 CollectionModuleStateEntity(
                     moduleId = it.id,
                     serverEnabled = true,
@@ -87,15 +91,17 @@ object TestStores {
         )
     }
 
-    /** The shared unit-test enrollment fixture with the Chile modules switched on. */
-    private fun chilePreview(): EnrollmentPreviewResponse {
+    /** The shared unit-test enrollment fixture with the eight modules switched on. */
+    private fun eightModulePreview(
+        overrides: Map<CollectionModuleId, CollectionModuleSetting>,
+    ): EnrollmentPreviewResponse {
         val json = TestStores::class.java.getResource("/enrollment-preview.json")!!.readText()
         val parsed = ChronicleJson.moshi.adapter(EnrollmentPreviewResponse::class.java).fromJson(json)!!
         return parsed.copy(
             manifest = parsed.manifest.copy(
                 collectionSettings = parsed.manifest.collectionSettings.copy(
                     modules = parsed.manifest.collectionSettings.modules +
-                        CHILE_MODULES.associateWith { CollectionModuleSetting(enabled = true) },
+                        EIGHT_MODULES.associateWith { CollectionModuleSetting(enabled = true) } + overrides,
                 ),
             ),
         )

@@ -122,7 +122,7 @@ class ScreenLayoutTest(
             .putExtra("study_disclosure_body", List(6) { context.getString(R.string.enrollment_done) }.joinToString("\n\n"))
             .putExtra("study_privacy_url", "https://chronicle.example.org/privacy")
             .putExtra("study_consent_url", "https://chronicle.example.org/consent")
-        Screen.CONSENT -> CollectionOrientationActivity.intent(context, CHILE_PLAN)
+        Screen.CONSENT -> CollectionOrientationActivity.intent(context, EIGHT_MODULE_PLAN)
         Screen.USAGE_PERMISSION -> Intent(context, PermissionActivity::class.java)
         Screen.NOTIFICATION_PERMISSION -> Intent(context, NotificationPermissionActivity::class.java)
         Screen.USER_IDENTIFICATION -> Intent(context, UserIdentificationActivity::class.java)
@@ -171,7 +171,7 @@ class ScreenLayoutTest(
     }
 
     companion object {
-        private val CHILE_PLAN = ConsentPlan(
+        private val EIGHT_MODULE_PLAN = ConsentPlan(
             required = listOf(
                 CollectionModuleId.USAGE_EVENTS,
                 CollectionModuleId.DEVICE_LIFECYCLE,
@@ -186,7 +186,7 @@ class ScreenLayoutTest(
             ),
         )
 
-        /** en = source text; es = Chile; en-rXA = ~40% longer accented pseudo; ar-rXB = RTL pseudo. */
+        /** en = source text; es = Spanish; en-rXA = ~40% longer accented pseudo; ar-rXB = RTL pseudo. */
         private val LOCALES = listOf("en", "es", "en-rXA", "ar-rXB-ldrtl")
 
         /** Reference screenshots: every screen, but not every combination. */
