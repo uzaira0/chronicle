@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails when R8 renamed a class that Moshi or Gson serializes by reflection.
+# Fails when R8 renamed a class or field that Moshi or Gson serializes by reflection.
 #
 # Usage: scripts/verify-wire-dto-names.sh <release.aab | mapping.txt>
 #
@@ -20,6 +20,25 @@ gson_classes=(
   com.openlattice.chronicle.services.notifications.NotificationDetails
   com.openlattice.chronicle.constants.NotificationType
 )
+persisted_classes=(
+  'com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer$Batch'
+  'com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Owner'
+  'com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Event'
+  'com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$State'
+  com.openlattice.chronicle.services.upload.LocalUploadIssueBucket
+  com.openlattice.chronicle.preferences.InteractionPolicySnapshot
+  com.openlattice.chronicle.collection.InteractionPolicy
+  com.openlattice.chronicle.collection.state.PendingCollectionAckRecord
+  com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry
+  com.openlattice.chronicle.study.StudyEncryptionSetting
+  com.openlattice.chronicle.api.MobileEnrollmentManifest
+  com.openlattice.chronicle.models.ExtractedUsageEvent
+  com.openlattice.chronicle.models.ExtractedActivities
+  com.openlattice.chronicle.models.ExtractUsageStat
+)
+while IFS= read -r source; do
+  persisted_classes+=("com.openlattice.chronicle.storage.$(basename "$source" .kt)")
+done < <(rg --files "$repo_root/collection-base/src/main/java/com/openlattice/chronicle/storage" | rg 'SampleEntry\.kt$')
 
 mkdir -p "$repo_root/build"
 work="$(mktemp -d "$repo_root/build/verify-wire-dto.XXXXXX")"
@@ -49,8 +68,8 @@ done
 (( ${#dtos[@]} > 0 )) || { printf 'ERROR: found no @Body types\n' >&2; exit 1; }
 
 failures=0
-for cls in "${dtos[@]}" "${gson_classes[@]}"; do
-  line="$(rg -F -m1 -e "$cls -> " "$mapping" | rg '^[^ ]' || true)"
+for cls in "${dtos[@]}" "${gson_classes[@]}" "${persisted_classes[@]}"; do
+  line="$(awk -v cls="$cls -> " 'index($0, cls) == 1 { print; exit }' "$mapping")"
   [[ -z "$line" ]] && continue # shrunk out of this flavor
   mapped="${line#* -> }"
   mapped="${mapped%:}"
@@ -59,15 +78,15 @@ for cls in "${dtos[@]}" "${gson_classes[@]}"; do
     failures=$((failures + 1))
   fi
 done
-for cls in "${gson_classes[@]}"; do
+for cls in "${dtos[@]}" "${gson_classes[@]}" "${persisted_classes[@]}"; do
   # Field lines follow the class line and are indented: "    type name -> obfuscated".
   renamed="$(awk -v cls="$cls -> " '
       index($0, cls) == 1 { inside = 1; next }
-      /^[^ ]/ { inside = 0 }
+      /^[^ #]/ { inside = 0 }
       inside && $0 !~ /\(/ && $0 ~ / -> / { split($0, p, " -> "); n = split(p[1], a, " "); if (a[n] != p[2]) print a[n] " -> " p[2] }
     ' "$mapping")"
   if [[ -n "$renamed" ]]; then
-    printf 'ERROR: Gson field names renamed in %s:\n%s\n' "$cls" "$renamed" >&2
+    printf 'ERROR: reflective JSON field names renamed in %s:\n%s\n' "$cls" "$renamed" >&2
     failures=$((failures + 1))
   fi
 done
@@ -75,4 +94,5 @@ done
 if (( failures > 0 )); then
   exit 1
 fi
-printf 'OK: %d reflective wire classes keep their names in %s\n' "$(( ${#dtos[@]} + ${#gson_classes[@]} ))" "$input"
+printf 'OK: %d reflective wire/persisted classes keep class and field names in %s\n' \
+  "$(( ${#dtos[@]} + ${#gson_classes[@]} + ${#persisted_classes[@]} ))" "$input"

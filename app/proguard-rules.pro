@@ -97,7 +97,7 @@
 
 # Gson round-trips NotificationDetails through PendingIntent extras; an alarm set by one build
 # and delivered after an update must still parse, so field names cannot depend on the build.
--keep class com.openlattice.chronicle.services.notifications.NotificationDetails { <fields>; }
+-keep class com.openlattice.chronicle.services.notifications.NotificationDetails { <fields>; <init>(...); }
 # Gson reads enum constants by field name; an obfuscated constant set by one build fails in the next.
 -keep enum com.openlattice.chronicle.constants.NotificationType { *; }
 
@@ -107,6 +107,20 @@
 -keep class com.openlattice.chronicle.models.ExtractUsageStat { *; }
 -keep class com.openlattice.chronicle.collection.state.PendingCollectionAckRecord { *; }
 -keep class com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry { *; }
+
+# Durable reflective JSON needs stable fields, constructors and the Kotlin metadata attributes above.
+-if class com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer$Batch
+-keep class com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer$Batch { *; }
+-if class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Owner
+-keep class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Owner { *; }
+-if class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Event
+-keep class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Event { *; }
+-if class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$State
+-keep class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$State { *; }
+-keep class com.openlattice.chronicle.services.upload.LocalUploadIssueBucket { *; }
+-keep class com.openlattice.chronicle.preferences.InteractionPolicySnapshot { *; }
+-if class com.openlattice.chronicle.storage.*SampleEntry
+-keep class com.openlattice.chronicle.storage.<1>SampleEntry { *; }
 
 # ── Apache Olingo ────────────────────────────────────────────────────────────
 # FullQualifiedName is adapted explicitly and is also used by Retrofit request
