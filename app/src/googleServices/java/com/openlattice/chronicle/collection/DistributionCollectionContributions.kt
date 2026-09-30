@@ -50,19 +50,20 @@ internal object DistributionCollectionContributions {
         context: Context,
         schedule: ExpansionPullSchedule?,
         nowMs: Long,
-    ) {
-        pullExpansionModule(CollectionModuleId.APP_NETWORK_USAGE, schedule, nowMs) {
+    ): Boolean {
+        val network = pullExpansionModule(CollectionModuleId.APP_NETWORK_USAGE, schedule, nowMs) {
             AppNetworkUsageModuleHolder.get(context).sample()
         }
-        if (BuildConfig.HAS_HEALTH_CONNECT) {
+        val health = if (BuildConfig.HAS_HEALTH_CONNECT) {
             pullExpansionModule(CollectionModuleId.HEALTH_CONNECT, schedule, nowMs) {
                 HealthMetricModuleHolder.get(context).sample()
             }
-        }
+        } else true
         if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
             runCatching { ActivityRecognitionIntegration.ensureRegistration(context) }
                 .onFailure { Log.w(TAG, "Sleep/activity registration refresh failed", it) }
         }
+        return network && health
     }
 
     fun uploadAdditionalStreams(

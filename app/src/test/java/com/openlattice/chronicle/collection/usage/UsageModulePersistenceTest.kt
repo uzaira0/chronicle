@@ -176,4 +176,22 @@ class UsageModulePersistenceTest {
         assertEquals(18_000L, store.storedTimestamp)
         assertEquals(2, store.commitCount)
     }
+
+    @Test
+    fun temporaryRefusalRetainsAcceptedWindowWithoutAdvancingCheckpoint() {
+        val queue = FakeStorageQueue()
+        val sink = UsageEventSink(
+            queue, NoOpCollectionLog,
+            persistenceGuard = com.openlattice.chronicle.collection.state.CollectionPersistenceGuard { false },
+        )
+        val store = FakeUsagePollCheckpointStore(storedTimestamp = 1_000L)
+
+        UsageModulePersistence.persist(
+            listOf(entry(100, 1)), 9_000L, sink,
+            store::commitPollTimestamp, FakeTransactionRunner()::run, NoOpCollectionLog,
+        )
+
+        assertEquals(0, queue.getSize())
+        assertEquals(1_000L, store.storedTimestamp)
+    }
 }

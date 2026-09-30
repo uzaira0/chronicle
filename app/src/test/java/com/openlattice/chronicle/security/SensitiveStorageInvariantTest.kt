@@ -237,6 +237,9 @@ class SensitiveStorageInvariantTest {
         )
         assertTrue(source.contains("EncryptedSharedPreferences.create"))
         assertTrue(source.contains("refusing plaintext fallback"))
-        assertTrue(source.contains("throw IllegalStateException(\"Secure preference storage is unavailable\", e)"))
+        assertTrue(source.contains("throw SecurePreferencesUnavailableException(e)"))
+        val failure = read(buildRoot(),
+            "collection-contracts/src/main/java/com/openlattice/chronicle/preferences/SecurePreferencesUnavailableException.kt")
+        assertTrue(failure.contains("IllegalStateException(\"Secure preference storage is unavailable\", cause)"))
     }
 }

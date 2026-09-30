@@ -78,11 +78,11 @@ class AudioCaptureController(private val context: Context) {
         try {
             val deviceCb = object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-                    capture(AudioEventType.ROUTE_CHANGE, routeConnected = true)
+                    enqueueCapture(AudioEventType.ROUTE_CHANGE, routeConnected = true)
                 }
 
                 override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-                    capture(AudioEventType.ROUTE_CHANGE, routeConnected = false)
+                    enqueueCapture(AudioEventType.ROUTE_CHANGE, routeConnected = false)
                 }
             }
             am.registerAudioDeviceCallback(deviceCb, h)
@@ -90,13 +90,13 @@ class AudioCaptureController(private val context: Context) {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 playbackRegistration = Api26PlaybackRegistration.register(am, h) {
-                    capture(AudioEventType.PLAYBACK_CHANGE)
+                    enqueueCapture(AudioEventType.PLAYBACK_CHANGE)
                 }
             }
 
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context?, intent: Intent?) {
-                    capture(AudioEventType.BECOMING_NOISY)
+                    enqueueCapture(AudioEventType.BECOMING_NOISY)
                 }
             }
             val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
@@ -110,7 +110,7 @@ class AudioCaptureController(private val context: Context) {
             becomingNoisyReceiver = receiver
 
             val listener = MediaSessionManager.OnActiveSessionsChangedListener {
-                capture(AudioEventType.MEDIA_SESSION_CHANGE)
+                enqueueCapture(AudioEventType.MEDIA_SESSION_CHANGE)
             }
             runCatching {
                 mediaSessionManager.addOnActiveSessionsChangedListener(listener, listenerComponent, h)
@@ -174,13 +174,30 @@ class AudioCaptureController(private val context: Context) {
         Log.i(TAG, "Audio capture unregistered")
     }
 
+    private val captureExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+        Thread(task, "audio-persistence").apply { isDaemon = true }
+    }
+
+    private fun enqueueCapture(event: AudioEventType, routeConnected: Boolean? = null) {
+        val origins = setOf(CollectionModuleId.AUDIO_ACTIVITY, CollectionModuleId.AUDIO_CONTENT)
+            .associateWith { ResearchPersistenceGate.captureObservation(context, it) }
+        if (origins.values.none { it.isCurrent() }) return
+        captureExecutor.execute {
+            runCatching { ResearchPersistenceGate.withReadLease {
+                capture(event, routeConnected, origins.filterValues { it.validate() }.keys)
+            } }
+                .onFailure { Log.w(TAG, "Audio callback persistence unavailable", it) }
+        }
+    }
+
     /** Reads the current device-audio state and writes one [AudioActivitySampleEntry] for [event]. */
     fun snapshot(event: AudioEventType = AudioEventType.SNAPSHOT) = capture(event)
 
-    private fun capture(event: AudioEventType, routeConnected: Boolean? = null) {
+    private fun capture(event: AudioEventType, routeConnected: Boolean? = null, acceptedOrigins: Set<CollectionModuleId>? = null) {
         runCatching {
             ResearchPersistenceGate.persistIfActive(context) {
                 val modules = audioModulesToCapture(CollectionLoopStore.of(context)::collects)
+                    .filter { acceptedOrigins == null || it in acceptedOrigins }.toSet()
                 if (modules.isEmpty()) return@persistIfActive
 
                 val am = audioManager

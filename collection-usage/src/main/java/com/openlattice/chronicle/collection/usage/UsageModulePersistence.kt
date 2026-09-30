@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.usage
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.sink.UsageEventSink
+import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
 import com.openlattice.chronicle.storage.QueueEntry
 
 private const val TAG = "UsageModulePersistence"
@@ -43,15 +44,27 @@ public object UsageModulePersistence {
         commitCheckpoint: (Long) -> Unit,
         transaction: (() -> Unit) -> Unit,
         log: CollectionLog = CollectionLog.LOGCAT,
-    ) {
-        transaction {
-            val result = sink.write(entries)
-            if (result is ModuleResult.Failed) {
-                log.error(TAG, "usage queue write failed; rolling back — checkpoint will not advance", result.error)
-                // Surface the failure so the transaction rolls back; never swallow it.
-                throw result.error
+    ): Boolean {
+        val admitted = sink.withAdmission {
+            transaction {
+                val result = sink.writeAdmitted(entries)
+                if (result is ModuleResult.Failed) {
+                    log.error(TAG, "usage queue write failed; rolling back — checkpoint will not advance", result.error)
+                    // Surface the failure so the transaction rolls back; never swallow it.
+                    throw result.error
+                }
+                if (result is ModuleResult.Retry) {
+                    throw IllegalStateException(result.reason)
+                }
+                commitCheckpoint(currentPollTimestamp)
             }
-            commitCheckpoint(currentPollTimestamp)
+        }
+        return when (admitted) {
+            CollectionPersistenceResult.PERSISTED -> true
+            // A temporary closure retains this window. Explicit erasure rotates its consent epoch.
+            CollectionPersistenceResult.REFUSED -> false
+            CollectionPersistenceResult.STORAGE_UNAVAILABLE ->
+                throw IllegalStateException("local storage temporarily unavailable")
         }
     }
 }

@@ -3,6 +3,7 @@ package com.openlattice.chronicle.services.upload
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.collection.AndroidUploadDiagnosticEvent
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
@@ -14,6 +15,8 @@ import com.openlattice.chronicle.storage.DiagnosticImportCheckpointEntity
 import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
 import com.openlattice.chronicle.storage.UploadDiagnosticEntity
 import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.services.withdrawal.WithdrawalState
+import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -94,6 +97,7 @@ enum class LocalOperationalIssue {
 fun countAbandonedGateBatch(result: com.openlattice.chronicle.collection.core.ModuleResult, records: Int,
                             record: (Int) -> Unit) {
     if ((result is com.openlattice.chronicle.collection.core.ModuleResult.Skipped ||
+        result is com.openlattice.chronicle.collection.core.ModuleResult.Retry ||
         result is com.openlattice.chronicle.collection.core.ModuleResult.Failed) && records > 0) record(records)
 }
 
@@ -193,7 +197,7 @@ class LocalUploadDiagnosticsStore(private val persistence: LocalUploadDiagnostic
         moduleFamily: LocalUploadModuleFamily,
         issue: LocalOperationalIssue,
         occurredAt: OffsetDateTime,
-    ) = synchronized(mutationLock) {
+    ) = withMutationLease {
         val day = occurredAt.atZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDate().toString()
         if (persistence is RoomUploadDiagnosticsPersistence) {
             persistence.recordOnce(id, moduleFamily.name, issue.name, day, occurredAt.toString())
@@ -214,11 +218,11 @@ class LocalUploadDiagnosticsStore(private val persistence: LocalUploadDiagnostic
         httpStatus: Int? = null,
         errorType: String? = null,
         count: Int = 1,
-    ) = synchronized(mutationLock) {
+    ) = withMutationLease {
         if (persistence is RoomUploadDiagnosticsPersistence) {
             persistence.record(moduleFamily.name, issueCode, day.toString(), occurredAt.toString(),
                 httpStatus, errorType, count)
-            return@synchronized
+            return@withMutationLease
         }
         var remaining = count.toLong()
         val loaded = persistence.load().toMutableList()
@@ -339,6 +343,9 @@ class LocalUploadDiagnosticsStore(private val persistence: LocalUploadDiagnostic
             }.onFailure { Log.w(DIAGNOSTICS_TAG, "Malformed upload diagnostic remains in local history ${bucket.id}", it) }.getOrNull()
         }
 
+    private fun <T> withMutationLease(action: () -> T): T =
+        ResearchPersistenceGate.withReadLease { synchronized(mutationLock, action) }
+
     private fun LocalUploadIssueBucket.stableKey() = stableKey(day, moduleFamily, issue, httpStatus, errorType)
     private fun stableKey(day: String, family: String, issue: String, status: Int?, error: String?) =
         "$day|$family|$issue|$status|$error"
@@ -370,11 +377,15 @@ internal fun uploadHttpStatus(error: Exception): Int? = when (error) {
 }
 
 private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDiagnosticsPersistence {
+    private val context = context.applicationContext
     private val prefs: SharedPreferences = EncryptedPrefsHelper.getEncryptedPrefs(context)
     private val db = ChronicleDb.getInstance(context)
     private var replaySelection: DeliveredReplaySelection? = null
+    private val expectedServer: UploadServerEntity? = runBlocking(Dispatchers.IO) {
+        db.uploadServerDao().getConfiguredServer()
+    }
     private val owner: Owner? = runBlocking(Dispatchers.IO) {
-        val server = db.uploadServerDao().getConfiguredServer()
+        val server = expectedServer
         val study = prefs.getString(STUDY_ID, null)
         val participant = prefs.getString(PARTICIPANT_ID, null)
         if (server != null && server.studyId == study && server.participantId == participant &&
@@ -386,7 +397,11 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
         } else null
     }
 
-    init { importLegacy() }
+    init {
+        ResearchPersistenceGate.withReadLease {
+            if (WithdrawalStateStore(context).stateOrThrow() == WithdrawalState.NONE) importLegacy()
+        }
+    }
 
     override fun load(): List<LocalUploadIssueBucket> = onIo {
         val scope = owner ?: return@onIo emptyList()
@@ -401,42 +416,42 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
     }
 
     fun record(family: String, issue: String, day: String, occurredAt: String,
-               status: Int?, errorType: String?, count: Int) = onIo {
+               status: Int?, errorType: String?, count: Int) = writeIfCurrentOwner {
         val scope = owner
         if (scope == null) {
             save(listOf(LocalUploadIssueBucket(day, family, issue, count,
                 firstOccurredAt = occurredAt, lastOccurredAt = occurredAt,
                 httpStatus = status, errorType = errorType)))
-            return@onIo
-        }
-        db.runInTransaction {
-            var remaining = count.toLong()
-            while (remaining > 0) {
-                val old = db.uploadDiagnosticDao().findOpen(scope.study, scope.participant,
-                    scope.device, scope.epoch, day, family, issue, status, errorType)
-                val addition = minOf(remaining, Int.MAX_VALUE.toLong() - (old?.count ?: 0)).toInt()
-                val instant = OffsetDateTime.parse(occurredAt)
-                db.uploadDiagnosticDao().upsert(UploadDiagnosticEntity(
-                    id = old?.id ?: UUID.randomUUID().toString(),
-                    studyId = scope.study, participantId = scope.participant,
-                    deviceId = scope.device, enrollmentEpoch = scope.epoch,
-                    day = day, moduleFamily = family, issueCode = issue,
-                    count = (old?.count ?: 0) + addition,
-                    firstOccurredAt = old?.firstOccurredAt?.takeIf {
-                        runCatching { OffsetDateTime.parse(it).isBefore(instant) }.getOrDefault(false)
-                    } ?: occurredAt,
-                    lastOccurredAt = old?.lastOccurredAt?.takeIf {
-                        runCatching { OffsetDateTime.parse(it).isAfter(instant) }.getOrDefault(false)
-                    } ?: occurredAt,
-                    httpStatus = status, errorType = errorType,
-                ))
-                remaining -= addition
+        } else {
+            db.runInTransaction {
+                var remaining = count.toLong()
+                while (remaining > 0) {
+                    val old = db.uploadDiagnosticDao().findOpen(scope.study, scope.participant,
+                        scope.device, scope.epoch, day, family, issue, status, errorType)
+                    val addition = minOf(remaining, Int.MAX_VALUE.toLong() - (old?.count ?: 0)).toInt()
+                    val instant = OffsetDateTime.parse(occurredAt)
+                    db.uploadDiagnosticDao().upsert(UploadDiagnosticEntity(
+                        id = old?.id ?: UUID.randomUUID().toString(),
+                        studyId = scope.study, participantId = scope.participant,
+                        deviceId = scope.device, enrollmentEpoch = scope.epoch,
+                        day = day, moduleFamily = family, issueCode = issue,
+                        count = (old?.count ?: 0) + addition,
+                        firstOccurredAt = old?.firstOccurredAt?.takeIf {
+                            runCatching { OffsetDateTime.parse(it).isBefore(instant) }.getOrDefault(false)
+                        } ?: occurredAt,
+                        lastOccurredAt = old?.lastOccurredAt?.takeIf {
+                            runCatching { OffsetDateTime.parse(it).isAfter(instant) }.getOrDefault(false)
+                        } ?: occurredAt,
+                        httpStatus = status, errorType = errorType,
+                    ))
+                    remaining -= addition
+                }
             }
         }
     }
 
-    fun recordOnce(id: String, family: String, issue: String, day: String, occurredAt: String) = onIo {
-        val scope = owner ?: return@onIo
+    fun recordOnce(id: String, family: String, issue: String, day: String, occurredAt: String) = writeIfCurrentOwner {
+        val scope = owner ?: return@writeIfCurrentOwner
         db.uploadDiagnosticDao().insertIfAbsent(UploadDiagnosticEntity(
             id = id, studyId = scope.study, participantId = scope.participant,
             deviceId = scope.device, enrollmentEpoch = scope.epoch,
@@ -444,6 +459,25 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
             firstOccurredAt = occurredAt, lastOccurredAt = occurredAt,
             httpStatus = null, errorType = null,
         ))
+    }
+
+    private fun writeIfCurrentOwner(action: () -> Unit) {
+        // Acquire on the caller so an existing lease can re-enter ahead of a queued stop.
+        ResearchPersistenceGate.withReadLease {
+            onIo {
+                if (WithdrawalStateStore(context).stateOrThrow() != WithdrawalState.NONE ||
+                    owner?.study != prefs.getString(STUDY_ID, null) ||
+                    owner?.participant != prefs.getString(PARTICIPANT_ID, null)) return@onIo
+                val current = db.uploadServerDao().getConfiguredServer()
+                val expected = expectedServer
+                if (expected == null) {
+                    if (current != null) return@onIo
+                } else if (current == null || current.id != expected.id || current.createdAt != expected.createdAt ||
+                    current.studyId != expected.studyId || current.participantId != expected.participantId ||
+                    current.sourceDeviceId != expected.sourceDeviceId) return@onIo
+                action()
+            }
+        }
     }
 
     fun pending(): List<LocalUploadIssueBucket> = onIo {

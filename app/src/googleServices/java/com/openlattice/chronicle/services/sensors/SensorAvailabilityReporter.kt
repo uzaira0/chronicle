@@ -37,7 +37,13 @@ object SensorAvailabilityReporter {
         serverUrl: String,
         mobileSigningSecretOverride: String? = null
     ): Boolean {
+        val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+        val expected = gate.captureOwner(context)?.takeIf {
+            it.studyId == studyId.toString() && it.participantId == participantId && it.sourceDeviceId == deviceId &&
+                it.url == serverUrl && it.apiKey == apiKey && it.mobileSigningSecretOverride == mobileSigningSecretOverride
+        } ?: return false
         return try {
+            gate.runIfExpectedOwner(context, expected) {
             val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
             val available = mutableSetOf<AndroidSensorType>()
             val unavailable = mutableSetOf<AndroidSensorType>()
@@ -93,6 +99,7 @@ object SensorAvailabilityReporter {
                 "Reported sensor availability: requested=$requestedSensors, available=$available, unavailable=$unavailable (result=$result)"
             )
             true
+            } ?: false
         } catch (e: Exception) {
             Log.w(TAG, "Failed to report sensor availability", e)
             false

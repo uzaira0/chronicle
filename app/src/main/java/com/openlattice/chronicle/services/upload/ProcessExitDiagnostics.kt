@@ -25,9 +25,10 @@ internal fun recordProcessExits(
     store: LocalUploadDiagnosticsStore,
     exits: List<ProcessExit>,
     watermarkMillis: Long,
+    admissionFloor: Long = Long.MIN_VALUE,
 ): Long {
     var watermark = watermarkMillis
-    exits.filter { it.timestampMillis > watermarkMillis }
+    exits.filter { it.timestampMillis > watermarkMillis && it.timestampMillis >= admissionFloor }
         .sortedBy { it.timestampMillis }
         .forEach { exit ->
             watermark = maxOf(watermark, exit.timestampMillis)
@@ -54,13 +55,21 @@ internal fun recordProcessExits(
 fun recordRecentProcessExits(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
     try {
+        val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+        val owner = gate.captureOwner(context) ?: return
+        gate.runIfExpectedOwner(context, owner) {
+        val scope = gate.observationScope(context, com.openlattice.chronicle.collection.CollectionModuleId.UPLOAD_TELEMETRY)
+            ?: return@runIfExpectedOwner false
+        val floor = maxOf(scope.second, owner.enrollmentIssuedAtEpochMillis ?: 0, java.time.OffsetDateTime.parse(owner.createdAt).toInstant().toEpochMilli())
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val activityManager = context.getSystemService(ActivityManager::class.java) ?: return
+        val activityManager = context.getSystemService(ActivityManager::class.java) ?: return@runIfExpectedOwner false
         val exits = activityManager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
             .map { ProcessExit(it.reason, it.timestamp, it.pid) }
-        val previous = prefs.getLong(KEY_WATERMARK, 0L)
-        val next = recordProcessExits(LocalUploadDiagnosticsStore.of(context), exits, previous)
-        if (next != previous) prefs.edit().putLong(KEY_WATERMARK, next).apply()
+        val previous = prefs.getLong("$KEY_WATERMARK:${scope.first}", 0L)
+        val next = recordProcessExits(LocalUploadDiagnosticsStore.of(context), exits, previous, floor)
+        if (next != previous) check(prefs.edit().putLong("$KEY_WATERMARK:${scope.first}", next).commit())
+        true
+        }
     } catch (e: Exception) {
         Log.w(PROCESS_EXIT_TAG, "Could not record recent process exits", e)
     }

@@ -92,6 +92,9 @@ class LocalStoreRecoveryActivity : AppCompatActivity() {
                     val owner = prefs.getString(STUDY_ID, null)?.let { study ->
                         prefs.getString(PARTICIPANT_ID, null)?.let { participant -> study to participant }
                     }
+                    com.openlattice.chronicle.collection.state.ResearchPersistenceGate.stop {
+                    com.openlattice.chronicle.collection.state.CollectionLoopCoordinator(applicationContext)
+                        .prepareRecoveryErasures(owner)
                     LocalStoreRecoveryManager.preserveAndReset(
                         applicationContext,
                         reason,
@@ -100,9 +103,15 @@ class LocalStoreRecoveryActivity : AppCompatActivity() {
                             understandsReenrollmentRequired = true,
                         ),
                         enrollmentOwner = owner,
+                        legacyDiagnostics = prefs.getString("local_upload_issue_history", null),
+                        legacyDiagnosticsVerified = true,
                     )
+                    com.openlattice.chronicle.collection.state.CollectionLoopCoordinator(applicationContext)
+                        .reconcileVerifiedRecoveryErasures(owner)
                     EnrollmentSettings.clearForLocalStoreRecovery(applicationContext)
                     WithdrawalStateStore(applicationContext).resetForReenrollment()
+                    com.openlattice.chronicle.collection.state.ResearchPersistenceGate.resetAfterLocalStoreRecovery()
+                    }
                 }
             }
             progress.visibility = View.GONE

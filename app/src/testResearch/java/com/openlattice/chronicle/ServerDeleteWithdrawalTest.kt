@@ -16,7 +16,13 @@ import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
 import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.withdrawal.WithdrawalState
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.UploadDiagnosticsUploader
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
+import com.openlattice.chronicle.storage.UploadDiagnosticEntity
 import com.openlattice.chronicle.storage.UploadServerEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -29,6 +35,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowDialog
 import java.util.concurrent.Executor
+import java.time.OffsetDateTime
 
 /** Research "Delete Server" withdraws; it never drops the credential before the server confirms. */
 @RunWith(RobolectricTestRunner::class)
@@ -82,6 +89,20 @@ class ServerDeleteWithdrawalTest {
 
     @Test fun confirmingStartsWithdrawalAndKeepsTheCredentialUntilTheServerAcknowledges() {
         val id = enroll(apiKey = "key-1")
+        val capturedStore = LocalUploadDiagnosticsStore.of(context)
+        db.uploadDiagnosticDao().upsert(UploadDiagnosticEntity(
+            id = "before", studyId = studyId, participantId = "p1", deviceId = "d1",
+            enrollmentEpoch = "$id:${db.uploadServerDao().getById(id)!!.createdAt}",
+            day = "2026-09-28", moduleFamily = "APP_RUNTIME",
+            issueCode = "APP_CRASH", count = 1, firstOccurredAt = "2026-09-28T00:00:00Z",
+            lastOccurredAt = "2026-09-28T00:00:00Z", httpStatus = null, errorType = null,
+        ))
+        db.localDataQuarantineDao().insert(LocalDataQuarantineEntity(
+            id = "quarantined", sourceTable = "audio_content", sourceId = "bad",
+            studyId = studyId, participantId = "p1", deviceId = "d1",
+            rawData = "sample".toByteArray(), reason = "SAMPLE_QUARANTINED",
+            createdAt = "2026-09-28T00:00:00Z",
+        ))
 
         clickDelete(id)
         (ShadowDialog.getLatestDialog() as AlertDialog).getButton(DialogInterface.BUTTON_POSITIVE).performClick()
@@ -89,6 +110,19 @@ class ServerDeleteWithdrawalTest {
 
         assertEquals(WithdrawalState.PENDING, WithdrawalStateStore(context).state())
         assertEquals("key-1", db.uploadServerDao().getById(id)?.apiKey)
+        assertNotNull(db.uploadDiagnosticDao().get("before"))
+        assertNotNull(db.localDataQuarantineDao().get("audio_content", "bad"))
+        capturedStore.recordOperationalOnce("late", LocalUploadModuleFamily.APP_RUNTIME,
+            LocalOperationalIssue.APP_CRASH, OffsetDateTime.parse("2026-09-28T01:00:00Z"))
+        assertNull(db.uploadDiagnosticDao().get("late"))
+        assertEquals(0, UploadDiagnosticsUploader(context, db).execute())
+
+        // The withdrawal worker performs these steps only after server acknowledgment.
+        LocalUploadDiagnosticsStore.of(context).clear()
+        db.clearAllTables()
+        WithdrawalStateStore(context).setState(WithdrawalState.COMPLETE)
+        assertNull(db.uploadDiagnosticDao().get("before"))
+        assertNull(db.localDataQuarantineDao().get("audio_content", "bad"))
     }
 
     private fun setStatic(owner: Class<*>, field: String, receiver: Any?, value: Any) {

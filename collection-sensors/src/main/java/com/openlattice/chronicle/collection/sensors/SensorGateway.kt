@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection.sensors
 
 import android.content.Context
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -57,6 +58,12 @@ public interface SensorGateway {
             values: FloatArray,
             timestamp: OffsetDateTime,
         )
+
+        public fun onCapturedSample(sensorType: AndroidSensorType, values: FloatArray, accuracy: Int?,
+                                    timestamp: OffsetDateTime, origin: CollectionPersistenceGuard) {
+            if (accuracy == null) onTrigger(sensorType, values, timestamp)
+            else onSample(sensorType, values, accuracy, timestamp)
+        }
 
         /**
          * Reports that a persistent one-shot registration could not be restored after its
@@ -117,6 +124,8 @@ public interface SensorGateway {
      * Unregisters everything — continuous listeners, persistent listeners and trigger
      * sensors. Called on full stop (service destroy / critical battery shutdown).
      */
+    public fun unregisterPersistentSensor(sensorType: AndroidSensorType) {}
+
     public fun unregisterAll()
 }
 
@@ -133,13 +142,14 @@ public interface SensorGateway {
 public class AndroidSensorGateway(
     context: Context,
     private val listener: SensorGateway.SampleListener,
+    private val captureAdmission: (AndroidSensorType) -> CollectionPersistenceGuard = { CollectionPersistenceGuard.ALLOW },
 ) : SensorGateway {
 
     private val appContext = context.applicationContext
     private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
     /** Builds a [SensorEventListener] that forwards each event to the sink as a sample. */
-    private fun sampleListener(throttleContinuous: Boolean) = object : SensorEventListener {
+    private fun sampleListener(throttleContinuous: Boolean, origin: CollectionPersistenceGuard) = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
             val sensorType = SensorTypeMapping.fromAndroidType(event.sensor.type) ?: return
             if (throttleContinuous) {
@@ -147,11 +157,13 @@ public class AndroidSensorGateway(
                 if (shouldDropContinuous(sensorType, event.timestamp)) return
                 continuousRetainedSamples.merge(sensorType, 1L, Long::plus)
             }
-            listener.onSample(
+            if (!origin.isCurrent()) return
+            listener.onCapturedSample(
                 sensorType,
                 event.values.copyOf(),
                 event.accuracy,
                 wallClockTimestamp(event.timestamp),
+                origin,
             )
         }
 
@@ -162,8 +174,8 @@ public class AndroidSensorGateway(
     // sensors at the end of each active phase while the persistent (on-change) sensors stay
     // armed — `unregisterListener(listener)` removes a listener from *all* its sensors, so a
     // shared listener could not be torn down selectively.
-    private val continuousListener = sampleListener(throttleContinuous = true)
-    private val persistentListener = sampleListener(throttleContinuous = false)
+    private val continuousListeners = ConcurrentHashMap<AndroidSensorType, SensorEventListener>()
+    private val persistentListeners = ConcurrentHashMap<AndroidSensorType, SensorEventListener>()
 
     private val triggerLock = Any()
     private val triggerListeners = mutableMapOf<Sensor, TriggerEventListener>()
@@ -201,8 +213,11 @@ public class AndroidSensorGateway(
         continuousStartedNanos[sensorType] = SystemClock.elapsedRealtimeNanos()
         continuousRawCallbacks[sensorType] = 0L
         continuousRetainedSamples[sensorType] = 0L
+        val origin = captureAdmission(sensorType)
+        if (!origin.isCurrent()) return false
+        val registeredListener = sampleListener(throttleContinuous = true, origin)
         if (!sensorManager.registerListener(
-                continuousListener,
+                registeredListener,
                 sensor,
                 samplingPeriodUs,
                 effectiveReportLatencyUs,
@@ -211,6 +226,7 @@ public class AndroidSensorGateway(
             clearContinuousMetrics(sensorType)
             return false
         }
+        continuousListeners.put(sensorType, registeredListener)?.let(sensorManager::unregisterListener)
         return true
     }
 
@@ -231,9 +247,13 @@ public class AndroidSensorGateway(
     private fun registerOnChangeSensor(sensorType: AndroidSensorType): Boolean {
         val androidType = SensorTypeMapping.toAndroidType(sensorType)
         val sensor = sensorManager.getDefaultSensor(androidType) ?: return false
-        if (!sensorManager.registerListener(persistentListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)) {
+        val origin = captureAdmission(sensorType)
+        if (!origin.isCurrent()) return false
+        val registeredListener = sampleListener(throttleContinuous = false, origin)
+        if (!sensorManager.registerListener(registeredListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)) {
             return false
         }
+        persistentListeners.put(sensorType, registeredListener)?.let(sensorManager::unregisterListener)
         return true
     }
 
@@ -241,24 +261,21 @@ public class AndroidSensorGateway(
     private fun registerTriggerSensor(sensorType: AndroidSensorType): Boolean {
         val androidType = SensorTypeMapping.toAndroidType(sensorType)
         val sensor = sensorManager.getDefaultSensor(androidType) ?: return false
+        val origin = captureAdmission(sensorType)
+        if (!origin.isCurrent()) return false
         lateinit var triggerListener: TriggerEventListener
         triggerListener = object : TriggerEventListener() {
             override fun onTrigger(event: TriggerEvent) {
-                listener.onTrigger(sensorType, event.values.copyOf(), wallClockTimestamp(event.timestamp))
-                // Serialize ownership with unregisterAll: either this listener is still owned
-                // and re-arms, or teardown has removed ownership and it must stay stopped.
-                val rearmFailed = synchronized(triggerLock) {
-                    if (triggerListeners[sensor] !== this) {
-                        false
-                    } else if (sensorManager.requestTriggerSensor(this, sensor)) {
-                        false
-                    } else {
-                        triggerListeners.remove(sensor)
-                        true
-                    }
+                // Android consumed this one-shot registration before invoking us. Relinquish
+                // ownership even when admission changed; retry/rearm happens on the scheduler.
+                val owned = synchronized(triggerLock) {
+                    (triggerListeners[sensor] === this).also { if (it) triggerListeners.remove(sensor) }
                 }
-                if (rearmFailed) {
-                    Log.w(TAG, "Failed to re-arm trigger sensor ${sensorType.name}")
+                if (!owned) return
+                try {
+                    if (origin.isCurrent()) listener.onCapturedSample(sensorType, event.values.copyOf(), null,
+                        wallClockTimestamp(event.timestamp), origin)
+                } finally {
                     listener.onPersistentRegistrationLost(sensorType)
                 }
             }
@@ -275,7 +292,8 @@ public class AndroidSensorGateway(
 
     override fun unregisterContinuous() {
         continuousSamplingPeriodsNanos.keys.toList().forEach(::logRealizedRate)
-        sensorManager.unregisterListener(continuousListener)
+        continuousListeners.values.forEach(sensorManager::unregisterListener)
+        continuousListeners.clear()
         continuousSamplingPeriodsNanos.clear()
         continuousNextDeadlineNanos.clear()
         continuousStartedNanos.clear()
@@ -288,15 +306,24 @@ public class AndroidSensorGateway(
         val sensor = sensorManager.getDefaultSensor(androidType)
         // The two-arg overload removes continuousListener from this sensor only, leaving its
         // registration for every other continuous sensor intact.
-        if (sensor != null) sensorManager.unregisterListener(continuousListener, sensor)
+        continuousListeners.remove(sensorType)?.let { sensorManager.unregisterListener(it, sensor) }
         logRealizedRate(sensorType)
         clearContinuousMetrics(sensorType)
     }
 
+    override fun unregisterPersistentSensor(sensorType: AndroidSensorType) {
+        persistentListeners.remove(sensorType)?.let(sensorManager::unregisterListener)
+        val sensor = sensorManager.getDefaultSensor(SensorTypeMapping.toAndroidType(sensorType)) ?: return
+        val trigger = synchronized(triggerLock) { triggerListeners.remove(sensor) }
+        if (trigger != null) sensorManager.cancelTriggerSensor(trigger, sensor)
+    }
+
     override fun unregisterAll() {
         continuousSamplingPeriodsNanos.keys.toList().forEach(::logRealizedRate)
-        sensorManager.unregisterListener(continuousListener)
-        sensorManager.unregisterListener(persistentListener)
+        continuousListeners.values.forEach(sensorManager::unregisterListener)
+        continuousListeners.clear()
+        persistentListeners.values.forEach(sensorManager::unregisterListener)
+        persistentListeners.clear()
         val triggersToCancel = synchronized(triggerLock) {
             triggerListeners.entries.map { it.key to it.value }.also { triggerListeners.clear() }
         }

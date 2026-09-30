@@ -1,7 +1,6 @@
 package com.openlattice.chronicle
 
-import android.content.Intent
-import android.net.Uri
+import com.openlattice.chronicle.utils.ExternalLinks
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
@@ -48,12 +47,7 @@ public class HealthConnectRationaleActivity : AppCompatActivity() {
         content.addView(Button(this).apply {
             text = getString(R.string.open_public_privacy_policy)
             setOnClickListener {
-                startActivity(
-                    Intent(
-                        Intent.ACTION_VIEW,
-                        Uri.parse(getString(R.string.platform_privacy_policy_url)),
-                    ),
-                )
+                ExternalLinks.openHttps(this@HealthConnectRationaleActivity, getString(R.string.platform_privacy_policy_url))
             }
         })
         setContentView(ScrollView(this).apply { addView(content) })

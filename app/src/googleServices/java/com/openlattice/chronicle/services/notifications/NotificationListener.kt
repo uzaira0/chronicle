@@ -23,23 +23,33 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
-class NotificationListener : NotificationListenerService() {
+class NotificationListener : NotificationListenerService(), com.openlattice.chronicle.collection.state.ResearchErasureFence.Companion.Observer {
+
+
+    override fun eraseResearchObservations() {
+        ioExecutor.shutdownNow()
+        ioExecutor = Executors.newSingleThreadExecutor()
+    }
 
     // Hosts the mic-free app-audio capture; alive only while notification access is granted.
     private val audioController by lazy { AudioCaptureController(applicationContext) }
 
     // Notification-activity Room writes must stay off the main thread (onNotification* run on it).
-    private val ioExecutor = Executors.newSingleThreadExecutor()
+    private var ioExecutor = Executors.newSingleThreadExecutor()
+
+    init {
+        com.openlattice.chronicle.collection.state.ResearchErasureFence.registerObserver(this, setOf(CollectionModuleId.NOTIFICATION_ACTIVITY))
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        runCatching { audioController.register() }
-            .onFailure { Log.w(javaClass.name, "Failed to start audio capture", it) }
+        executeIo("audio registration") { runCatching { audioController.register() }
+            .onFailure { Log.w(javaClass.name, "Failed to start audio capture", it) } }
     }
 
     override fun onListenerDisconnected() {
-        runCatching { audioController.unregister() }
-            .onFailure { Log.w(javaClass.name, "Failed to stop audio capture", it) }
+        executeIo("audio teardown") { runCatching { audioController.unregister() }
+            .onFailure { Log.w(javaClass.name, "Failed to stop audio capture", it) } }
         super.onListenerDisconnected()
     }
 
@@ -59,6 +69,10 @@ class NotificationListener : NotificationListenerService() {
      * the notification's title, text, or any free-form payload. Gated; persists off the main thread.
      */
     private fun recordNotificationActivity(sbn: StatusBarNotification, eventType: NotificationEventType) {
+        val origin = ResearchPersistenceGate.captureObservation(applicationContext, CollectionModuleId.NOTIFICATION_ACTIVITY)
+        if (!origin.isCurrent()) return
+        val expectedOwner = ResearchPersistenceGate.captureOwner(applicationContext)
+        val observedAt = OffsetDateTime.now(ZoneOffset.UTC).toString()
         val pkg = sbn.packageName ?: return
         val category = sbn.notification?.category
         val ongoing = sbn.isOngoing
@@ -74,10 +88,9 @@ class NotificationListener : NotificationListenerService() {
         }
         executeIo("notification-activity capture") {
             runCatching {
-                val expectedOwner = ResearchPersistenceGate.captureOwner(applicationContext)
                 val entry = NotificationActivitySampleEntry(
                     id = UUID.randomUUID().toString(),
-                    timestamp = OffsetDateTime.now(ZoneOffset.UTC).toString(),
+                    timestamp = observedAt,
                     timezone = ZoneId.systemDefault().id,
                     eventType = eventType.name,
                     packageName = pkg,
@@ -85,6 +98,7 @@ class NotificationListener : NotificationListenerService() {
                     ongoing = ongoing,
                     importance = importance,
                 )
+                origin.persist {
                 ResearchPersistenceGate.persistIfCollecting(
                     applicationContext,
                     CollectionModuleId.NOTIFICATION_ACTIVITY,
@@ -99,6 +113,7 @@ class NotificationListener : NotificationListenerService() {
                     ChronicleDb.getInstance(applicationContext)
                         .notificationActivitySampleDao()
                         .insertAll(listOf(entry))
+                }
                 }
             }.onFailure { Log.w(javaClass.name, "Notification-activity capture failed", it) }
         }
@@ -116,6 +131,7 @@ class NotificationListener : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        com.openlattice.chronicle.collection.state.ResearchErasureFence.unregisterObserver(this)
         runCatching { audioController.unregister() }
             .onFailure { Log.w(javaClass.name, "Failed to stop audio capture during destroy", it) }
         ioExecutor.shutdown()

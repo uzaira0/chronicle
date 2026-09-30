@@ -104,7 +104,7 @@ class InteractionPolicySettings(context: Context) {
         try {
             val existing = prefs.getString(INTERACTION_POLICY_SNAPSHOT_KEY, null)
             if (existing == encoded) {
-                cachedSnapshot.set(snapshot.takeIf { it.enabled })
+                publishSnapshot(snapshot.takeIf { it.enabled })
                 return@synchronized true
             }
 
@@ -152,11 +152,15 @@ class InteractionPolicySettings(context: Context) {
             Log.e(TAG, "Invalid interaction-policy snapshot; collection remains closed", error)
             null
         }
-        cachedSnapshot.set(
+        publishSnapshot(
             snapshot?.takeIf {
                 it.activePolicyFor(currentStudyId = currentStudyId, enrolled = enrolled) != null
             },
         )
+    }
+
+    private fun publishSnapshot(snapshot: InteractionPolicySnapshot?) {
+        if (cachedSnapshot.get() != snapshot) cachedSnapshot.set(snapshot)
     }
 
     companion object {

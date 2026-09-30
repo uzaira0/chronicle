@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.sink
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
 import com.openlattice.chronicle.storage.SensorSampleDao
 import com.openlattice.chronicle.storage.SensorSampleEntry
 
@@ -44,20 +45,27 @@ public open class SensorSampleSink(
      * @return [ModuleResult.Ok] (count = attempted) on success, including `items = 0`
      *   for an empty list; [ModuleResult.Failed] if the underlying insert throws.
      */
-    public open override fun write(samples: List<SensorSampleEntry>): ModuleResult {
+    public open override fun write(samples: List<SensorSampleEntry>): ModuleResult = persistSamples(samples) { true }
+
+    public override fun writeCurrent(samples: List<SensorSampleEntry>, isCurrent: (SensorSampleEntry) -> Boolean): ModuleResult =
+        persistSamples(samples, isCurrent)
+
+    private fun persistSamples(samples: List<SensorSampleEntry>, isCurrent: (SensorSampleEntry) -> Boolean): ModuleResult {
         if (samples.isEmpty()) {
             return ModuleResult.Ok(items = 0)
         }
         return try {
             var persistedCount = 0
-            val admitted = persistenceGuard.persist {
-                val allowed = samples.filter(sampleAllowedAtPersistence)
+            val admitted = persistenceGuard.persistResult {
+                val allowed = samples.filter { isCurrent(it) && sampleAllowedAtPersistence(it) }
                 if (allowed.isNotEmpty()) {
                     sensorSampleDao.insertAll(allowed)
                     persistedCount = allowed.size
                 }
             }
-            if (!admitted || persistedCount == 0) {
+            if (admitted == CollectionPersistenceResult.STORAGE_UNAVAILABLE) {
+                ModuleResult.Retry("local storage temporarily unavailable")
+            } else if (admitted == CollectionPersistenceResult.REFUSED || persistedCount == 0) {
                 ModuleResult.Skipped("active enrollment or sensor persistence gate closed")
             } else {
                 ModuleResult.Ok(items = persistedCount)

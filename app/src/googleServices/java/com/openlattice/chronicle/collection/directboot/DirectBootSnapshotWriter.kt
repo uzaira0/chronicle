@@ -23,6 +23,7 @@ object DirectBootSnapshotWriter {
 
     fun refresh(context: Context) {
         try {
+            com.openlattice.chronicle.collection.state.ResearchPersistenceGate.runIfActive(context) {
             val sensorSettings = SensorSettings(context)
             val collectable = sensorSettings.getConfiguredSensors()
                 .filter { sensor ->
@@ -38,11 +39,16 @@ object DirectBootSnapshotWriter {
             // Make sure the buffer key exists before the first locked boot needs it.
             KeystoreDirectBootRecordCipher.ensureKey()
             DirectBootDiagnosticsJournal(context).bind(context)
-            if (!DirectBootSensorSnapshot(context).write(collectable)) {
+            if (!DirectBootSensorSnapshot(context).write(collectable, collectable.keys.mapNotNull { sensor ->
+                com.openlattice.chronicle.collection.state.ResearchPersistenceGate.observationScope(context,
+                    SensorCollectionModules.moduleFor(sensor))?.first?.let { sensor to it }
+            }.toMap())) {
                 Log.e(TAG, "Direct-boot snapshot commit failed")
-                return
+                return@runIfActive false
             }
             Log.i(TAG, "Direct-boot snapshot updated: ${collectable.size} collectable sensor(s)")
+            true
+            }
         } catch (e: Exception) {
             // Snapshot maintenance must never take down the sensor service; a stale/absent
             // snapshot only means the next locked boot fails closed (no pre-unlock collection).

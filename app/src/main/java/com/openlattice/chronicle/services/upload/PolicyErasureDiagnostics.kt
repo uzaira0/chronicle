@@ -6,6 +6,20 @@ import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
 
+/** Quarantine writers use upload-stream labels for several Room tables. */
+internal fun quarantineSourcesForTable(table: String): List<String> = listOf(table) + when (table) {
+    "audio_activity_samples" -> listOf("audio_activity")
+    "audio_content_samples" -> listOf("audio_content")
+    "notification_activity_samples" -> listOf("notification_activity")
+    "sleep_samples" -> listOf("sleep")
+    "activity_recognition_samples" -> listOf("activity_recognition")
+    "health_metric_samples" -> listOf("health_connect")
+    "app_network_usage_samples" -> listOf("app_network_usage")
+    "connectivity_state_samples" -> listOf("connectivity_state")
+    "device_settings_samples" -> listOf("device_settings")
+    else -> emptyList()
+}
+
 /** Call inside the same Room transaction as the policy-authorized deletion. */
 internal fun recordPolicyErasureInTransaction(
     db: ChronicleDb,

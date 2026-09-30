@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection
 
 import android.content.Context
+import android.os.Build
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
@@ -8,9 +9,11 @@ import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.activity.ActivityRecognitionIntegration
 import com.openlattice.chronicle.collection.directboot.DirectBootDrainWorker
+import com.openlattice.chronicle.collection.directboot.DIRECT_BOOT_BUFFER_LOCK
 import com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal
 import com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer
 import com.openlattice.chronicle.collection.directboot.DirectBootProcessInit
+import com.openlattice.chronicle.collection.directboot.DirectBootStorageAdmission
 import com.openlattice.chronicle.collection.device.HealthConnectPermissions
 import com.openlattice.chronicle.collection.interaction.InteractionAccessibilityOnboarding
 import com.openlattice.chronicle.collection.sensors.SensorUploadMigration
@@ -38,24 +41,60 @@ internal object DistributionRestrictedRuntime {
 
     fun drainDirectBootSamples(context: Context) = DirectBootDrainWorker.enqueue(context)
 
-    fun eraseDirectBootSensorSamples(context: Context, sensorType: String) {
-        val db = ChronicleDb.getInstance(context)
-        val server = com.openlattice.chronicle.services.upload.exactActiveEnrollmentServer(context, db)
-            ?: return
-        val owner = DirectBootDiagnosticsJournal.Owner(
-            server.studyId, server.participantId, server.sourceDeviceId,
-            "${server.id}:${server.createdAt}",
-        )
-        val journal = DirectBootDiagnosticsJournal(context)
-        journal.bind(context)
-        val erased = DirectBootSampleBuffer(context).eraseSensorType(
-            sensorType, DirectBootSampleBuffer.ownerKey(owner),
-        )
-        if (erased > 0) {
-            journal.record("MODULE_POLICY_ERASED", erased)
-            DirectBootDrainWorker.enqueue(context)
+    private fun erasurePrefs(context: Context) =
+        (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) context.createDeviceProtectedStorageContext() else context)
+            .getSharedPreferences("direct_boot_pending_sensor_erasures", Context.MODE_PRIVATE)
+
+    fun pendingDirectBootSensorErasures(context: Context): Set<String> =
+        synchronized(DIRECT_BOOT_BUFFER_LOCK) {
+            erasurePrefs(context).getStringSet("sensor_types", emptySet()).orEmpty().toSet()
+        }
+
+    fun markDirectBootSensorErasures(context: Context, sensorTypes: Set<String>) {
+        if (sensorTypes.isEmpty()) return
+        synchronized(DIRECT_BOOT_BUFFER_LOCK) {
+            check(erasurePrefs(context).edit().putStringSet("sensor_types",
+                pendingDirectBootSensorErasures(context) + sensorTypes).commit()) {
+                "Unable to persist direct-boot sensor erasure intent"
+            }
         }
     }
+
+    fun eraseDirectBootStorageAdmission(context: Context) = DirectBootStorageAdmission.clear(context)
+
+    fun eraseDirectBootSensorSamples(
+        context: Context,
+        sensorType: String,
+        buffer: DirectBootSampleBuffer = DirectBootSampleBuffer(context),
+        journal: DirectBootDiagnosticsJournal = DirectBootDiagnosticsJournal(context),
+        enqueueDrain: (Context) -> Unit = DirectBootDrainWorker::enqueue,
+    ) {
+        eraseDirectBootStorageAdmission(context)
+        val owner = DirectBootDiagnosticsJournal.configuredOwner(context)
+        journal.quarantineCorruptJournal()
+        journal.recordQuarantinedIncidents(context)
+        val erased = buffer.eraseSensorType(
+            sensorType, owner?.let { DirectBootSampleBuffer.ownerKey(it) },
+            // One journal event per file rewrite (a per-sample event rewrites the journal per sample). The
+            // id comes from the erased ids, so a rewrite retried after a crash is not counted twice.
+            beforeErase = { ids ->
+                if (ids.isNotEmpty()) journal.record("MODULE_POLICY_ERASED", ids.size, "module-policy-erased:" +
+                    java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(ids.sorted().joinToString(",").toByteArray()).joinToString("") { "%02x".format(it) })
+            },
+        )
+        synchronized(DIRECT_BOOT_BUFFER_LOCK) {
+            check(erasurePrefs(context).edit().putStringSet("sensor_types",
+                pendingDirectBootSensorErasures(context) - sensorType).commit()) {
+                "Unable to complete direct-boot sensor erasure intent"
+            }
+        }
+        if (erased > 0) enqueueDrain(context)
+    }
+
+    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) { com.openlattice.chronicle.collection.activity.SleepActivityCaptureController.eraseRegistration(context, module) }
+
+    fun eraseHealthSource(context: Context) { com.openlattice.chronicle.collection.device.AndroidHealthMetricSource.clearCheckpoint(context) }
 
     fun uploadSensors(context: Context, db: ChronicleDb): Int {
         val worker = SensorUploadWorkerDelegate(context, db)

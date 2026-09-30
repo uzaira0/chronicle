@@ -19,8 +19,10 @@ import androidx.core.content.ContextCompat
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorType
+import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.core.CollectionLog
+import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.directboot.DirectBootDrainWorker
 import com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal
 import com.openlattice.chronicle.collection.directboot.DirectBootStorageAdmission
@@ -40,17 +42,19 @@ import com.openlattice.chronicle.collection.sensors.SensorSettingsRuntimeSetting
 import com.openlattice.chronicle.collection.sink.SensorSampleWriter
 import com.openlattice.chronicle.collection.sink.SensorSampleSink
 import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
+import com.openlattice.chronicle.preferences.SensorSettings
 import com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver
 import com.openlattice.chronicle.services.lifecycle.DeviceLifecycleEventRecorder
 import com.openlattice.chronicle.services.lifecycle.deviceLifecycleIntentFilter
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.SensorSampleEntry
 import com.openlattice.chronicle.services.upload.LocalOperationalIssue
-import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 import java.time.OffsetDateTime
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 private val TAG = HardwareSensorService::class.java.simpleName
@@ -67,7 +71,7 @@ private val TAG = HardwareSensorService::class.java.simpleName
  *  - the foreground notification + channel;
  *  - the `batteryReceiver` (`ACTION_BATTERY_CHANGED`) and `lifecycleReceiver` registration;
  *  - the `onTrimMemory` low-memory lifecycle event;
- *  - the bounded main-thread destroy-flush.
+ *  - asynchronous service-destroy flush.
  *
  * Everything the controller owns it owns through seams: [SensorGateway] (SensorManager /
  * BatteryManager / PowerManager), [SensorSampleSink] (the sanctioned `sensor_samples`
@@ -119,15 +123,38 @@ class HardwareSensorService : Service() {
     private var unlockReceiver: BroadcastReceiver? = null
     private var lifecycleReceiverRegistered = false
 
-    // Runs the one-shot startup collection-gate read off the main thread (the gate reads
-    // Room, which forbids main-thread access). Single-thread: there is exactly one gate
-    // read per service creation.
-    private val startupExecutor = Executors.newSingleThreadExecutor()
+    // Serialize startup and retry transient storage faults locally, without a network constraint.
+    private val startupExecutor = ScheduledThreadPoolExecutor(1).apply {
+        setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
+    }
+    private val lossExecutor = Executors.newSingleThreadExecutor()
 
     // Set in onDestroy so the async startup gate read does not start the controller after
     // the service has been torn down (the gate read widens the start-after-destroy window).
     @Volatile
     private var destroyed = false
+    private fun executeStartup(attempt: Int = 0, action: () -> Unit) {
+        try {
+            startupExecutor.execute {
+                if (destroyed) return@execute
+                try {
+                    action()
+                } catch (error: Exception) {
+                    Log.e(TAG, "Sensor storage/runtime initialization unavailable; retrying locally", error)
+                    if (!destroyed) {
+                        val delay = (250L shl attempt.coerceAtMost(7)).coerceAtMost(30_000L)
+                        try {
+                            startupExecutor.schedule({ executeStartup(attempt + 1, action) }, delay, TimeUnit.MILLISECONDS)
+                        } catch (stopped: RejectedExecutionException) {
+                            Log.i(TAG, "Service destroyed before startup retry was scheduled", stopped)
+                        }
+                    }
+                }
+            }
+        } catch (error: RejectedExecutionException) {
+            Log.i(TAG, "Service startup executor already stopped", error)
+        }
+    }
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -135,12 +162,46 @@ class HardwareSensorService : Service() {
             val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
             if (level >= 0 && scale > 0) {
                 val pct = (level * 100) / scale
-                controller.onBatteryLevel(pct)
+                if (::controller.isInitialized) controller.onBatteryLevel(pct)
             }
         }
     }
 
     companion object {
+        internal fun directBootSink(context: Context, buffer: DirectBootSampleBuffer): SensorSampleWriter =
+            object : SensorSampleWriter {
+                override fun write(samples: List<SensorSampleEntry>): ModuleResult = writeCurrent(samples) { true }
+
+                override fun writeCurrent(samples: List<SensorSampleEntry>, isCurrent: (SensorSampleEntry) -> Boolean): ModuleResult = try {
+                    ResearchPersistenceGate.withReadLease {
+                        val unlocked = Build.VERSION.SDK_INT < Build.VERSION_CODES.N ||
+                            context.getSystemService(UserManager::class.java)?.isUserUnlocked == true
+                        val accepted = if (unlocked) {
+                            if (!ResearchPersistenceGate.isActiveEnrollment(context)) emptySet()
+                            else SensorSettings(context).getConfiguredSensors().filterTo(hashSetOf()) {
+                                CollectionLoopStore.of(context).collects(SensorCollectionModules.moduleFor(it))
+                            }
+                        } else DirectBootSensorSnapshot(context).collectableSensors()
+                        val allowed = samples.filter {
+                            isCurrent(it) && runCatching { AndroidSensorType.valueOf(it.sensorType) }.getOrNull() in accepted
+                        }
+                        if (allowed.isEmpty()) {
+                            val erased = unlocked && samples.all { entry ->
+                                val sensor = runCatching { AndroidSensorType.valueOf(entry.sensorType) }.getOrNull()
+                                sensor != null && (sensor.name in DistributionRestrictedRuntime.pendingDirectBootSensorErasures(context) ||
+                                    CollectionLoopStore.of(context).loadAll()[SensorCollectionModules.moduleFor(sensor)]?.let { state ->
+                                        state.decision == com.openlattice.chronicle.collection.state.ParticipantDecision.DECLINED ||
+                                            state.lastDisposition == com.openlattice.chronicle.collection.CollectionDataDisposition.DISCARD_AND_STOP
+                                    } == true)
+                            }
+                            if (erased) ModuleResult.Ok(0) else ModuleResult.Skipped("direct-boot sensor policy closed")
+                        } else buffer.append(allowed)
+                    }
+                } catch (error: Exception) {
+                    ModuleResult.Failed(error, redactedMessage = "direct-boot append policy unavailable")
+                }
+            }
+
         fun startService(context: Context) {
             tryStartService(context)
         }
@@ -171,12 +232,6 @@ class HardwareSensorService : Service() {
         super.onCreate()
         directBootMode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
             getSystemService(UserManager::class.java)?.isUserUnlocked == false
-        controller = if (directBootMode) {
-            buildDirectBootController(applicationContext)
-        } else {
-            buildController(applicationContext)
-        }
-
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         if (directBootMode) {
             // The lifecycle receiver records through Room (credential-encrypted) — deferred
@@ -195,11 +250,13 @@ class HardwareSensorService : Service() {
         // "collecting" notification is left showing. The sample-persistence gate inside the
         // controller already prevents an un-acknowledged sample from being written; this
         // additionally stops the idle foreground service so it isn't running for nothing.
-        // Fail-closed: a gate read error returns false (CollectionGate), so the service stops.
+        // A gate read error does not stop the service: executeStartup retries until the read succeeds.
         startForegroundNotification()
         if (directBootMode) {
-            startupExecutor.execute {
-                if (destroyed) return@execute
+            executeStartup {
+                if (!directBootMode) return@executeStartup
+                controller = buildDirectBootController(applicationContext)
+                if (destroyed) return@executeStartup
                 val snapshot = DirectBootSensorSnapshot(applicationContext)
                 if (snapshot.isUsableFor(DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS)) {
                     try {
@@ -221,7 +278,9 @@ class HardwareSensorService : Service() {
             }
             return
         }
-        startupExecutor.execute {
+        executeStartup {
+            ResearchPersistenceGate.initialize(applicationContext)
+            if (!::controller.isInitialized) controller = buildController(applicationContext)
             // Normal mode owns direct-boot maintenance: replay any pre-unlock buffer into the
             // Room queue, and rewrite the device-protected snapshot from the live gate state
             // (this start is re-issued on every consent toggle / settings sync).
@@ -237,7 +296,7 @@ class HardwareSensorService : Service() {
                 // the primary guard; the catch is the backstop for the residual TOCTOU.
                 if (destroyed) {
                     Log.i(TAG, "Service destroyed before startup gate read completed; not starting controller")
-                    return@execute
+                    return@executeStartup
                 }
                 try {
                     controller.start()
@@ -306,16 +365,23 @@ class HardwareSensorService : Service() {
         // were skipped for its lifetime — re-run them (idempotent; main thread here).
         DirectBootProcessInit.reinitializeAfterUnlock(applicationContext)
         registerLifecycleReceiver()
-        startupExecutor.execute {
-            if (destroyed) return@execute
-            // A failed final append leaves samples in the old controller. It is replaced
-            // below, so count any retained samples as shutdown loss before abandoning it.
-            controller.stop(isServiceDestroy = true)
+        executeStartup {
+            if (destroyed) return@executeStartup
+            // Rebind accepted DE RAM to its original enrollment/epoch before replacement.
+            // The normal controller owns retries through temporary closure or write failure.
+            ResearchPersistenceGate.initialize(applicationContext)
+            if (::controller.isInitialized) controller.stop(isServiceDestroy = true, retainedOrigin = { entry ->
+                val type = AndroidSensorType.valueOf(entry.sensorType)
+                ResearchPersistenceGate.guardForRetainedRegistration(applicationContext, SensorCollectionModules.moduleFor(type),
+                    directBootConsentStamps[type]).takeIf { directBootConsentStamps[type] != null }
+                    ?: ResearchPersistenceGate.guardForLegacyRetainedRegistration(applicationContext, SensorCollectionModules.moduleFor(type),
+                        directBootLegacyOwner, directBootWrittenAt)
+            })
             DirectBootDrainWorker.enqueue(applicationContext)
             DirectBootSnapshotWriter.refresh(applicationContext)
             controller = buildController(applicationContext)
             if (anySensorCollects(applicationContext)) {
-                if (destroyed) return@execute
+                if (destroyed) return@executeStartup
                 try {
                     controller.start()
                 } catch (e: RejectedExecutionException) {
@@ -336,6 +402,7 @@ class HardwareSensorService : Service() {
      */
     private fun buildController(appContext: Context): SensorRuntimeController {
         val db = ChronicleDb.getInstance(appContext)
+        val expectedOwner = ResearchPersistenceGate.captureOwner(appContext)
         lateinit var built: SensorRuntimeController
         val gateway = AndroidSensorGateway(
             appContext,
@@ -357,44 +424,48 @@ class HardwareSensorService : Service() {
                     built.recordSample(sensorType, values, null, timestamp)
                 }
 
+                override fun onCapturedSample(sensorType: AndroidSensorType, values: FloatArray, accuracy: Int?,
+                                              timestamp: OffsetDateTime, origin: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard) {
+                    built.recordSample(sensorType, values, accuracy, timestamp, origin)
+                }
+
                 override fun onPersistentRegistrationLost(sensorType: AndroidSensorType) {
                     built.onPersistentRegistrationLost(sensorType)
                 }
             },
+            captureAdmission = { ResearchPersistenceGate.captureObservation(appContext, SensorCollectionModules.moduleFor(it)) },
         )
         built = SensorRuntimeController(
             gateway = gateway,
             settings = SensorSettingsRuntimeSettings(appContext),
+            retainOnStop = true,
+            sampleLease = { ResearchPersistenceGate.withReadLease(it) },
+            observationAdmission = { ResearchPersistenceGate.captureObservation(appContext, SensorCollectionModules.moduleFor(it)) },
             sink = SensorSampleSink(
                 db.sensorSampleDao(),
                 persistenceGuard = ResearchPersistenceGate.guard(appContext),
-                sampleAllowedAtPersistence = { sample ->
-                    runCatching { AndroidSensorType.valueOf(sample.sensorType) }
-                        .getOrNull()
-                        ?.let { sensorType ->
-                            CollectionLoopStore.of(appContext).collects(
-                                SensorCollectionModules.moduleFor(sensorType),
-                            )
-                        } == true
-                },
             ),
             scheduler = ExecutorSensorRuntimeScheduler(),
             // Per-sensor collection gate (design §7, per-sensor consent redesign): even if a
             // legacy path started this service, no sample for a given sensor is persisted until
             // that sensor's module is server-enabled AND acknowledged on-device. Fail-closed.
             collectionGate = { sensorType ->
-                CollectionLoopStore.of(appContext).collects(SensorCollectionModules.moduleFor(sensorType))
+                ResearchPersistenceGate.collectsNow(appContext, SensorCollectionModules.moduleFor(sensorType))
             },
-            collectionAdmission = { StorageAdmission.allowed(appContext) },
+            collectionAdmission = { !destroyed && StorageAdmission.cachedAllowed(appContext) },
+            prepareCollection = { !destroyed && StorageAdmission.allowed(appContext) },
             reportLoss = { code, count ->
-                runCatching {
-                    ResearchPersistenceGate.runIfActive(appContext) {
-                        LocalUploadDiagnosticsStore.of(appContext).recordOperational(
-                            LocalUploadModuleFamily.SENSOR, LocalOperationalIssue.valueOf(code), count,
+                Log.w(TAG, "$count sensor sample(s) affected: $code")
+                try {
+                    lossExecutor.execute {
+                        com.openlattice.chronicle.services.upload.recordForExpectedOwner(
+                            appContext, expectedOwner, LocalUploadModuleFamily.SENSOR,
+                            LocalOperationalIssue.valueOf(code), count,
                         )
-                        true
                     }
-                }.onFailure { Log.e(TAG, "Unable to record sensor loss", it) }
+                } catch (error: RejectedExecutionException) {
+                    Log.e(TAG, "Sensor loss reporter stopped before $count record(s) could be reported", error)
+                }
             },
         )
         return built
@@ -404,12 +475,21 @@ class HardwareSensorService : Service() {
      * Builds the controller for the direct-boot window: same gateway/scheduler, but settings
      * and the per-sensor gate come from the device-protected [DirectBootSensorSnapshot]
      * (written from live gate reads while unlocked) and samples land in the encrypted
-     * [DirectBootSampleBuffer] instead of the credential-encrypted Room queue. Nothing here
+     * [DirectBootSampleBuffer] instead of the credential-encrypted Room queue. While locked, nothing here
      * may touch [ChronicleDb], `SensorSettings`, or [CollectionGate].
      */
+    private var directBootConsentStamps: Map<AndroidSensorType, String?> = emptyMap()
+    private var directBootLegacyOwner: String? = null
+    private var directBootWrittenAt: Long? = null
+
     private fun buildDirectBootController(appContext: Context): SensorRuntimeController {
         val snapshot = DirectBootSensorSnapshot(appContext)
         val collectable = snapshot.collectableSensors()
+        directBootConsentStamps = collectable.associateWith(snapshot::consentStamp)
+        directBootWrittenAt = snapshot.writtenAt()
+        directBootLegacyOwner = DirectBootDiagnosticsJournal(appContext).currentOwner()?.let {
+            "${it.epoch}:${it.study}:${it.participant}:${it.device}"
+        }
         val buffer = DirectBootSampleBuffer(appContext)
         lateinit var built: SensorRuntimeController
         val gateway = AndroidSensorGateway(
@@ -440,12 +520,13 @@ class HardwareSensorService : Service() {
         built = SensorRuntimeController(
             gateway = gateway,
             settings = DirectBootRuntimeSettings(snapshot),
-            sink = SensorSampleWriter { samples -> buffer.append(samples) },
+            sink = directBootSink(appContext, buffer),
             scheduler = ExecutorSensorRuntimeScheduler(),
             // The snapshot set already has the consent gate applied (it is written from live
             // gate reads in unlocked mode), and gate state cannot change while still locked.
             collectionGate = { sensorType -> sensorType in collectable },
-            collectionAdmission = { DirectBootStorageAdmission.allowed(appContext, buffer) },
+            collectionAdmission = { DirectBootStorageAdmission.cachedAllowed() },
+            prepareCollection = { DirectBootStorageAdmission.allowed(appContext, buffer) },
             reportLoss = { code, count ->
                 runCatching { DirectBootDiagnosticsJournal(appContext).record(code, count) }
                     .onFailure { Log.e(TAG, "Unable to journal direct-boot sensor loss", it) }
@@ -456,8 +537,13 @@ class HardwareSensorService : Service() {
     }
 
     /** Whether any per-sensor module is currently collectable (server-enabled AND acknowledged). */
+    // Unlike CollectionGate.collects, a read failure throws so executeStartup retries instead of
+    // treating a transient storage error as "no sensor enabled" and stopping the service.
     private fun anySensorCollects(context: Context): Boolean =
-        SensorCollectionModules.sensorModuleIds.any { CollectionGate.collects(context, it) }
+        SensorCollectionModules.sensorModuleIds.any {
+            com.openlattice.chronicle.collection.state.CollectionLoopStore.of(context).collects(it) &&
+                com.openlattice.chronicle.collection.state.StorageAdmission.allowed(context)
+        }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "Hardware sensor service started")
@@ -470,10 +556,10 @@ class HardwareSensorService : Service() {
         // Direct-boot mode skips this: consent/settings cannot change while still locked, and
         // the snapshot rewrite reads credential-encrypted state.
         if (!directBootMode && ::controller.isInitialized && controller.isStarted) {
-            controller.reconcile()
-            DirectBootDrainWorker.enqueue(applicationContext)
-            startupExecutor.execute {
-                if (!destroyed) DirectBootSnapshotWriter.refresh(applicationContext)
+            executeStartup {
+                controller.reconcile()
+                DirectBootDrainWorker.enqueue(applicationContext)
+                DirectBootSnapshotWriter.refresh(applicationContext)
             }
         }
         return START_STICKY
@@ -484,7 +570,6 @@ class HardwareSensorService : Service() {
         // Signal the async startup gate read (if still pending) not to start the controller
         // after teardown, then stop accepting new startup tasks.
         destroyed = true
-        startupExecutor.shutdown()
         try {
             unregisterReceiver(batteryReceiver)
         } catch (e: IllegalArgumentException) {
@@ -504,23 +589,21 @@ class HardwareSensorService : Service() {
         }
         unlockReceiver = null
 
-        // The controller's stop() drains the buffer through the sink. onDestroy runs on
-        // the main thread, where Room forbids DB access, so the flush is done on a
-        // short-lived executor with a bounded wait — exactly the legacy behaviour. A
-        // timeout or exception is surfaced into the controller's diagnostics so a
-        // destroy-flush failure is never silently swallowed (refactor plan §9.1 guardrail 3).
-        val flushExecutor = Executors.newSingleThreadExecutor()
-        val future = flushExecutor.submit {
-            controller.stop(isServiceDestroy = true)
+        // MAIN returns immediately even if a persistence writer is queued behind an upload.
+        // Queue behind construction/handover so even a late-built controller is stopped.
+        startupExecutor.execute {
+            try {
+                if (::controller.isInitialized) controller.stop(isServiceDestroy = true)
+            } catch (error: Exception) {
+                Log.e(TAG, "Service-destroy flush failed", error)
+                if (::controller.isInitialized) {
+                    controller.recordDestroyFlushFailure("destroy-flush failed: ${error.javaClass.simpleName}")
+                }
+            } finally {
+                lossExecutor.shutdown()
+            }
         }
-        try {
-            future.get(5, TimeUnit.SECONDS)
-        } catch (e: Exception) {
-            val message = "destroy-flush timed out or failed: ${e.javaClass.simpleName}"
-            Log.e(TAG, message, e)
-            controller.recordDestroyFlushFailure(message)
-        }
-        flushExecutor.shutdown()
+        startupExecutor.shutdown()
 
         super.onDestroy()
     }
@@ -529,10 +612,9 @@ class HardwareSensorService : Service() {
         super.onTrimMemory(level)
         // The recorder writes through Room (credential-encrypted) — unreachable while locked.
         if (directBootMode) return
-        DeviceLifecycleEventRecorder.recordAsync(
-            applicationContext,
-            DeviceLifecycleEventRecorder.lowMemoryEvent(level),
-        )
+        DeviceLifecycleEventRecorder.recordObserved(applicationContext) {
+            listOf(DeviceLifecycleEventRecorder.lowMemoryEvent(level))
+        }
     }
 
     private fun startForegroundNotification() {

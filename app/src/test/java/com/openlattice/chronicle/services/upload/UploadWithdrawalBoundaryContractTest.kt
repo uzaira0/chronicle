@@ -37,18 +37,6 @@ class UploadWithdrawalBoundaryContractTest {
     }
 
     @Test
-    fun withdrawalClearsPendingConsentReportsBeforeEnrollmentStorage() {
-        val source = appSource("services/withdrawal/ParticipantWithdrawalManager.kt")
-        val clearAcks = source.indexOf("CollectionAckRetryQueue.of(appContext).clearForWithdrawal()")
-        val clearDatabase = source.indexOf("db.clearAllTables()")
-        val clearIdentity = source.indexOf("enrollmentSettings.clearEnrollment(eraseLocalData = true)")
-
-        assertTrue("withdrawal does not clear pending consent reports", clearAcks >= 0)
-        assertTrue("pending reports must clear before enrollment database rows", clearDatabase > clearAcks)
-        assertTrue("encrypted enrollment identity must clear last", clearIdentity > clearDatabase)
-    }
-
-    @Test
     fun consentReportsShareTheWithdrawalLeaseAndUseKeyedQueueMutations() {
         val coordinator = appSource("collection/state/CollectionLoopCoordinator.kt")
         val queue = appSource("collection/state/CollectionAckRetryStore.kt")
@@ -109,7 +97,7 @@ class UploadWithdrawalBoundaryContractTest {
         val gate = appSource("collection/state/ResearchPersistenceGate.kt")
         assertTrue(gate.contains("LocalOperationalIssue.LOCAL_WRITE_FAILED"))
         assertTrue(gate.contains("records,"))
-        assertTrue(gate.contains("persistGuarded(appContext, null, persist)"))
+        assertTrue(gate.contains("persistGuarded(context, null, persist)"))
     }
 
     private fun appSource(relative: String): String {

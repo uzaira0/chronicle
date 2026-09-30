@@ -12,6 +12,7 @@ import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.collection.sink.HealthMetricSampleSink
 import com.openlattice.chronicle.storage.HealthMetricSampleEntry
 import java.nio.charset.StandardCharsets
@@ -66,6 +67,7 @@ public class HealthMetricCollectionModule(
     private fun runSample(now: Long): ModuleResult {
         if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
 
+        val observation = sink.captureAdmission()
         val readings: List<HealthMetricReading> = try {
             source.read()
         } catch (e: Exception) {
@@ -73,7 +75,9 @@ public class HealthMetricCollectionModule(
             return ModuleResult.Failed(e, redactedMessage = "health metric source read failed: ${e.javaClass.simpleName}")
         }
         if (readings.isEmpty()) {
-            return acknowledgeSourceRead(items = 0)
+            val result = writeSourceObservation(observation) { acknowledgeSourceRead(items = 0) }
+            if (result !is ModuleResult.Ok) rejectSourceRead()
+            return result
         }
 
         val tsString = OffsetDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneOffset.UTC).toString()
@@ -98,15 +102,16 @@ public class HealthMetricCollectionModule(
             return ModuleResult.Failed(e, redactedMessage = "health metric mapping failed: ${e.javaClass.simpleName}")
         }
 
-        return when (val writeResult = sink.write(entries)) {
+        val result = writeSourceObservation(observation) {
+            when (val written = sink.write(entries)) {
+                is ModuleResult.Ok -> acknowledgeSourceRead(entries.size)
+                else -> written
+            }
+        }
+        return when (val writeResult = result) {
             is ModuleResult.Ok -> {
-                when (val acknowledged = acknowledgeSourceRead(entries.size)) {
-                    is ModuleResult.Ok -> {
-                        log.info(TAG, "Persisted ${entries.size} health metric record(s)")
-                        acknowledged
-                    }
-                    else -> acknowledged
-                }
+                log.info(TAG, "Persisted ${entries.size} health metric record(s)")
+                writeResult
             }
             is ModuleResult.Failed -> {
                 rejectSourceRead()
@@ -118,6 +123,16 @@ public class HealthMetricCollectionModule(
                 writeResult
             }
         }
+    }
+
+    private fun writeSourceObservation(
+        observation: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard,
+        write: () -> ModuleResult,
+    ): ModuleResult = try {
+        observation.writeObservation(write)
+    } catch (e: Exception) {
+        log.error(TAG, "Health-metric storage admission failed", e)
+        ModuleResult.Failed(e, redactedMessage = "health metric admission failed: ${e.javaClass.simpleName}")
     }
 
     private fun acknowledgeSourceRead(items: Int): ModuleResult = try {

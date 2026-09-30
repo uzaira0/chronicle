@@ -27,6 +27,31 @@ import java.util.concurrent.Executors
 class ServerEnrollmentActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
 
+    private fun postIfCurrent(action: () -> Unit) {
+        runOnUiThread { if (!isFinishing && !isDestroyed) action() }
+    }
+
+    override fun onDestroy() {
+        executor.shutdown()
+        super.onDestroy()
+    }
+
+    private fun readServer(id: Long): com.openlattice.chronicle.storage.UploadServerEntity? =
+        ChronicleDb.getInstance(applicationContext).uploadServerDao().getById(id)
+
+    private fun reportStorageFailure(error: Exception) {
+        android.util.Log.e("ServerEnrollmentActivity", "Server storage unavailable", error)
+        postIfCurrent {
+            if (error is com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException) {
+                startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
+                finish()
+            } else {
+                statusText.setText(R.string.server_delete_failed)
+                statusText.visibility = View.VISIBLE
+            }
+        }
+    }
+
     private lateinit var nameText: TextInputEditText
     private lateinit var urlText: TextInputEditText
     private lateinit var studyIdText: TextInputEditText
@@ -96,9 +121,12 @@ class ServerEnrollmentActivity : AppCompatActivity() {
 
     private fun loadServer(id: Long) {
         executor.execute {
-            val server = ChronicleDb.getInstance(applicationContext).uploadServerDao().getById(id)
+            val server = try { readServer(id) } catch (error: Exception) {
+                reportStorageFailure(error)
+                return@execute
+            }
             if (server != null) {
-                runOnUiThread {
+                postIfCurrent {
                     nameText.setText(server.name)
                     urlText.setText(server.url)
                     studyIdText.setText(server.studyId)
@@ -135,12 +163,12 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                             stat.batteryUploadFailures,
                         )
                     }
-                    runOnUiThread {
+                    postIfCurrent {
                         statsContainer.visibility = View.VISIBLE
                         statsText.text = getString(R.string.server_upload_history, lines)
                     }
                 } else {
-                    runOnUiThread {
+                    postIfCurrent {
                         statsContainer.visibility = View.VISIBLE
                         statsText.text = getString(R.string.server_upload_history, getString(R.string.server_no_uploads_recorded))
                     }
@@ -186,8 +214,8 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                 val mobileSigningSecretOverride = enteredSigningOverride
                     ?: existingServer?.mobileSigningSecretOverride
                 if (editServerId > 0 && !enabled) {
-                    val rowsUpdated = serverDao.setEnabled(editServerId, false)
-                    runOnUiThread {
+                    val rowsUpdated = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.setServerEnabled(applicationContext, editServerId, false)
+                    postIfCurrent {
                         progressBar.visibility = View.INVISIBLE
                         if (rowsUpdated == 0) {
                             saveBtn.isEnabled = true
@@ -202,7 +230,7 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                     return@execute
                 }
                 if (editServerId <= 0 && serverDao.count() >= MAX_SERVERS) {
-                    runOnUiThread {
+                    postIfCurrent {
                         progressBar.visibility = View.INVISIBLE
                         saveBtn.isEnabled = true
                         statusText.text = getString(R.string.server_already_configured)
@@ -217,7 +245,7 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                         existingServer.studyId != studyId ||
                         existingServer.participantId != participantId)
                 ) {
-                    runOnUiThread {
+                    postIfCurrent {
                         progressBar.visibility = View.INVISIBLE
                         saveBtn.isEnabled = true
                         statusText.text = getString(R.string.server_identity_locked)
@@ -230,18 +258,20 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                 // ID. Upload endpoints expect the same ID while app data is intact.
                 val studyApi = UploadWorker.getChronicleStudyApi(url, mobileSigningSecretOverride)
                 val deviceInstanceId = DeviceInstanceIdentity.getOrCreate(applicationContext)
-                val reservation = serverDao.reserveSingleEnrollment(
-                    UploadServerEntity(
-                        name = name,
-                        url = url,
-                        studyId = studyId,
-                        participantId = participantId,
-                        sourceDeviceId = deviceInstanceId,
-                        mobileSigningSecretOverride = mobileSigningSecretOverride,
-                        enabled = false,
-                        createdAt = existingServer?.createdAt ?: OffsetDateTime.now().toString(),
-                    ),
-                )
+                val reservation = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
+                    serverDao.reserveSingleEnrollment(
+                        UploadServerEntity(
+                            name = name,
+                            url = url,
+                            studyId = studyId,
+                            participantId = participantId,
+                            sourceDeviceId = deviceInstanceId,
+                            mobileSigningSecretOverride = mobileSigningSecretOverride,
+                            enabled = false,
+                            createdAt = existingServer?.createdAt ?: OffsetDateTime.now().toString(),
+                        ),
+                    )
+                }
                 reservationToRelease = reservation
                 val response = studyApi.enroll(
                     UUID.fromString(studyId), participantId, deviceInstanceId, getDevice(deviceInstanceId)
@@ -253,20 +283,22 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                 else
                     com.openlattice.chronicle.storage.AUTH_MODE_DEVICE_ID
 
-                serverDao.finalizeSingleEnrollment(
-                    reservation = reservation,
-                    requestedUrl = url,
-                    requestedStudyId = studyId,
-                    requestedParticipantId = participantId,
-                    name = name,
-                    sourceDeviceId = sourceDeviceId,
-                    authMode = authMode,
-                    apiKey = issuedApiKey,
-                    mobileSigningSecretOverride = mobileSigningSecretOverride,
-                )
+                com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
+                    serverDao.finalizeSingleEnrollment(
+                        reservation = reservation,
+                        requestedUrl = url,
+                        requestedStudyId = studyId,
+                        requestedParticipantId = participantId,
+                        name = name,
+                        sourceDeviceId = sourceDeviceId,
+                        authMode = authMode,
+                        apiKey = issuedApiKey,
+                        mobileSigningSecretOverride = mobileSigningSecretOverride,
+                    )
+                }
                 reservationToRelease = null
 
-                runOnUiThread {
+                postIfCurrent {
                     progressBar.visibility = View.INVISIBLE
                     statusText.text = getString(if (enabled) R.string.server_saved else R.string.server_saved_paused)
                     statusText.visibility = View.VISIBLE
@@ -275,13 +307,13 @@ class ServerEnrollmentActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 reservationToRelease?.let { reservation ->
                     runCatching {
-                        ChronicleDb.getInstance(applicationContext)
-                            .uploadServerDao()
-                            .releaseEnrollmentReservation(reservation)
+                        com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
+                            ChronicleDb.getInstance(applicationContext).uploadServerDao().releaseEnrollmentReservation(reservation)
+                        }
                     }
                 }
                 Log.e("ServerEnrollment", "Failed to save server", e)
-                runOnUiThread {
+                postIfCurrent {
                     progressBar.visibility = View.INVISIBLE
                     saveBtn.isEnabled = true
                     statusText.text = getString(R.string.server_connect_failed, e.message)
@@ -313,7 +345,7 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                 getString(R.string.server_health_offline_error, e.message ?: e.javaClass.simpleName)
             }
 
-            runOnUiThread {
+            postIfCurrent {
                 progressBar.visibility = View.INVISIBLE
                 healthBtn.isEnabled = true
                 statusText.text = result
@@ -332,8 +364,11 @@ class ServerEnrollmentActivity : AppCompatActivity() {
         if (editServerId <= 0) return
 
         executor.execute {
-            val server = ChronicleDb.getInstance(applicationContext).uploadServerDao().getById(editServerId)
-            runOnUiThread {
+            val server = try { readServer(editServerId) } catch (error: Exception) {
+                reportStorageFailure(error)
+                return@execute
+            }
+            postIfCurrent {
                 when {
                     server == null -> finish()
                     server.apiKey.isNullOrBlank() -> Toast.makeText(
@@ -354,7 +389,7 @@ class ServerEnrollmentActivity : AppCompatActivity() {
         deleteBtn.isEnabled = false
         executor.execute {
             val started = ParticipantWithdrawalManager.begin(applicationContext)
-            runOnUiThread {
+            postIfCurrent {
                 if (started) {
                     finish()
                 } else {

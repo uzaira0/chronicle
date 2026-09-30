@@ -14,6 +14,7 @@ import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.sink.SensorSampleWriter
 import com.openlattice.chronicle.collection.sink.SensorSampleSink
 import com.openlattice.chronicle.collection.state.CollectionGate
+import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.SensorSampleEntry
@@ -56,27 +57,17 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker
             Log.e(TAG, "Direct-boot journal quarantine recording will retry after sample drain", error)
         }
         val buffer = DirectBootSampleBuffer(applicationContext)
-        if (buffer.isEmpty()) {
-            return try {
-                journal.replay(applicationContext)
-                Result.success()
-            } catch (error: Exception) {
-                Log.e(TAG, "Direct-boot corruption incident replay failed", error)
-                Result.retry()
-            }
-        }
-
         val db = ChronicleDb.getInstance(applicationContext)
-        val server = exactActiveEnrollmentServer(applicationContext, db) ?: return Result.retry()
-        val expectedOwner = ownerKey(server)
+        val server = exactActiveEnrollmentServer(applicationContext, db)
+        val expectedOwner = server?.let(::ownerKey)
         // Barrier before buffer lock, the same order as ResearchPersistenceGate.stop{} erasures;
         // taking the buffer lock first and the barrier inside persist deadlocked a sensor discard.
-        val result = ResearchPersistenceGate.withReadLease { buffer.drain(expectedOwner) { samples ->
+        val result = drainBuffer(applicationContext, buffer, expectedOwner, server?.createdAt) { samples ->
             persistGated(samples, sinkFor = { sensorType ->
                 SensorSampleSink(
                     db.sensorSampleDao(),
                     persistenceGuard = ResearchPersistenceGate.guardForExpectedOwner(
-                        applicationContext, expectedOwner,
+                        applicationContext, requireNotNull(expectedOwner),
                         ownerNow = {
                             if (!CollectionGate.collects(applicationContext, SensorCollectionModules.moduleFor(sensorType))) null
                             else exactActiveEnrollmentServer(applicationContext, db)?.let(::ownerKey)
@@ -84,7 +75,7 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker
                     ),
                 )
             })
-        } }
+        }
         try {
             DirectBootDiagnosticsJournal(applicationContext).replay(applicationContext)
         } catch (error: Exception) {
@@ -108,6 +99,25 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker
     }
 
     companion object {
+        internal fun drainBuffer(
+            context: Context,
+            buffer: DirectBootSampleBuffer,
+            expectedOwner: String?,
+            enrollmentCreatedAt: String?,
+            persist: (List<SensorSampleEntry>) -> DirectBootSampleBuffer.DrainTransfer,
+        ): DirectBootSampleBuffer.DrainResult = ResearchPersistenceGate.withReadLease {
+            try {
+                DistributionRestrictedRuntime.pendingDirectBootSensorErasures(context).forEach { sensorType ->
+                    DistributionRestrictedRuntime.eraseDirectBootSensorSamples(context, sensorType, buffer, enqueueDrain = {})
+                }
+            } catch (error: Exception) {
+                Log.e(TAG, "Pending direct-boot sensor erasure will retry before transfer", error)
+                return@withReadLease DirectBootSampleBuffer.DrainResult(0, 0, failed = true)
+            }
+            if (expectedOwner == null) DirectBootSampleBuffer.DrainResult(0, 0, failed = !buffer.isEmpty())
+            else buffer.drain(expectedOwner, enrollmentCreatedAt, persist)
+        }
+
         fun enqueue(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_WORK_NAME,
@@ -128,8 +138,13 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker
             log: CollectionLog = CollectionLog.LOGCAT,
         ): DirectBootSampleBuffer.DrainTransfer {
             val transferred = linkedSetOf<String>()
+            val discarded = linkedSetOf<String>()
             for ((typeName, group) in samples.groupBy { it.sensorType }) {
-                val type = runCatching { AndroidSensorType.valueOf(typeName) }.getOrNull() ?: continue
+                val type = runCatching { AndroidSensorType.valueOf(typeName) }.getOrNull()
+                if (type == null) {
+                    discarded += group.map { it.id }
+                    continue
+                }
                 when (val result = sinkFor(type).write(group)) {
                     is ModuleResult.Ok -> {
                         // Production sinks accept a whole group or none. A partial result cannot
@@ -137,10 +152,10 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker
                         if (result.items == group.size) transferred += group.map { it.id }
                     }
                     is ModuleResult.Skipped -> log.info(TAG, "Retaining ${group.size} buffered sample(s) for a later drain")
-                    else -> return DirectBootSampleBuffer.DrainTransfer(transferred, failed = true)
+                    else -> return DirectBootSampleBuffer.DrainTransfer(transferred, failed = true, discardedIds = discarded)
                 }
             }
-            return DirectBootSampleBuffer.DrainTransfer(transferred)
+            return DirectBootSampleBuffer.DrainTransfer(transferred, discardedIds = discarded)
         }
     }
 }

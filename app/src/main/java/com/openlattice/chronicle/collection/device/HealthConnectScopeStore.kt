@@ -16,7 +16,7 @@ public class HealthConnectScopeStore private constructor(context: Context) {
             }
 
     public fun replace(recordTypes: Set<HealthConnectRecordType>) {
-        check(
+        com.openlattice.chronicle.storage.checkLocalStoreWrite(
             prefs.edit()
                 .putStringSet(KEY_RECORD_TYPES, recordTypes.mapTo(LinkedHashSet()) { it.id })
                 .commit(),
@@ -24,7 +24,7 @@ public class HealthConnectScopeStore private constructor(context: Context) {
     }
 
     public fun clear() {
-        check(prefs.edit().remove(KEY_RECORD_TYPES).commit()) {
+        com.openlattice.chronicle.storage.checkLocalStoreWrite(prefs.edit().remove(KEY_RECORD_TYPES).commit()) {
             "Failed to clear the Health Connect study scope"
         }
     }

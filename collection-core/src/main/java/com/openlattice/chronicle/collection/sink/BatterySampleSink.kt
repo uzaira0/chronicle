@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.sink
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
 import com.openlattice.chronicle.storage.BatterySampleDao
 import com.openlattice.chronicle.storage.BatterySampleEntry
 
@@ -37,6 +38,9 @@ public open class BatterySampleSink(
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
 ) : CollectionSink {
 
+    /** Bind a pull or callback batch before reading its payload. */
+    public fun captureAdmission(): CollectionPersistenceGuard = persistenceGuard.capture()
+
     /**
      * Inserts [samples] into `battery_samples`. Duplicate ids are de-duplicated by the
      * DAO's `OnConflictStrategy.IGNORE` and are not treated as a failure.
@@ -49,10 +53,12 @@ public open class BatterySampleSink(
             return ModuleResult.Ok(items = 0)
         }
         return try {
-            if (persistenceGuard.persist { batterySampleDao.insertAll(samples) }) {
-                ModuleResult.Ok(items = samples.size)
-            } else {
-                ModuleResult.Skipped("active enrollment persistence gate closed")
+            when (persistenceGuard.persistResult { batterySampleDao.insertAll(samples) }) {
+                CollectionPersistenceResult.PERSISTED -> ModuleResult.Ok(items = samples.size)
+                CollectionPersistenceResult.REFUSED ->
+                    ModuleResult.Skipped("active enrollment persistence gate closed")
+                CollectionPersistenceResult.STORAGE_UNAVAILABLE ->
+                    ModuleResult.Retry("local storage temporarily unavailable")
             }
         } catch (e: Exception) {
             log.error(TAG, "Failed to persist ${samples.size} battery sample(s) to battery_samples", e)

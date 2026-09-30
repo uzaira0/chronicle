@@ -8,6 +8,26 @@ import org.junit.Test
 
 class HealthMetricReadCoordinatorTest {
     @Test
+    fun consentFloorPreventsBackfillAndRetiredAcknowledgementCannotAdvanceCursor() {
+        val checkpoint = FakeCheckpoint(2_000)
+        var scope = "enrollment-A:1" to 3_000L
+        val coordinator = HealthMetricReadCoordinator(checkpoint, consentScope = { scope })
+        coordinator.read<String>(5_000) { start, _ ->
+            assertEquals(3_000L, start)
+            listOf("accepted-A")
+        }
+        scope = "enrollment-B:2" to 7_000L
+        coordinator.acknowledge()
+        assertEquals(2_000L, checkpoint.value)
+        coordinator.read<String>(9_000) { start, _ ->
+            assertEquals(7_000L, start)
+            listOf("accepted-B")
+        }
+        coordinator.acknowledge()
+        assertEquals(9_000L, checkpoint.value)
+    }
+
+    @Test
     fun successfulWindowAdvancesCheckpointAfterRead() {
         val checkpoint = FakeCheckpoint()
         val coordinator = HealthMetricReadCoordinator(checkpoint, defaultBackfillMillis = 1_000)

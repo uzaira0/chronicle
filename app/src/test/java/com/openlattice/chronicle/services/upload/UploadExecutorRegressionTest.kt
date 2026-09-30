@@ -36,7 +36,7 @@ class UploadExecutorRegressionTest {
             .set(EncryptedPrefsHelper, context.getSharedPreferences("executor-test", Context.MODE_PRIVATE))
         db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
         val id = db.uploadServerDao().insert(UploadServerEntity(
-            name = "test", url = "https://example.invalid", studyId = "11111111-1111-1111-1111-111111111111",
+            name = "test", url = "https://localhost", studyId = "11111111-1111-1111-1111-111111111111",
             participantId = "p1", sourceDeviceId = "d1", createdAt = "2026-09-01T00:00:00Z",
         ))
         server = db.uploadServerDao().getById(id)!!
@@ -112,5 +112,21 @@ class UploadExecutorRegressionTest {
                 onMalformed = { _, _ -> error("quarantine failed") },
             )
         }
+    }
+
+    @Test
+    fun malformedModernItemDoesNotHideValidModernSibling() {
+        val valid = validEntry(1).data.toString(Charsets.UTF_8).removeSurrounding("[", "]")
+        val malformed = valid.replace(Regex("\"timestamp\":\"[^\"]+\""),
+            "\"timestamp\":\"invalid-timestamp\"")
+        check(malformed != valid)
+        db.queueEntryData().insertEntry(QueueEntry(3_000L, 9L,
+            "[$malformed,$valid]".toByteArray(Charsets.UTF_8)))
+
+        executor().uploadForServer(server)
+
+        assertEquals(listOf(1), usagePosts)
+        assertEquals(1, count("SELECT count(*) FROM local_data_quarantine"))
+        assertEquals(3_000L to 9L, cursor())
     }
 }

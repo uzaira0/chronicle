@@ -43,10 +43,19 @@ public class SleepActivityReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val appContext = context.applicationContext
+        val module = CollectionModuleId.fromIdOrNull(intent.getStringExtra("registration_module") ?: "") ?: return
+        if (module !in setOf(CollectionModuleId.SLEEP, CollectionModuleId.ACTIVITY_RECOGNITION)) return
+        val observedAt = System.currentTimeMillis()
+        val observedElapsed = SystemClock.elapsedRealtimeNanos()
         val pending = goAsync()
         Thread {
             try {
-                handle(appContext, intent)
+                ResearchPersistenceGate.initialize(appContext)
+                val origin = ResearchPersistenceGate.guardForRegistration(appContext, module, intent.getStringExtra("registration_scope"))
+                if (!origin.isCurrent()) return@Thread
+                val owner = ResearchPersistenceGate.captureOwner(appContext)
+                val floor = ResearchPersistenceGate.observationScope(appContext, module)?.second ?: Long.MAX_VALUE
+                handle(appContext, intent, origin, owner, floor, observedAt, observedElapsed)
             } catch (e: Exception) {
                 // The broadcast is not redelivered: whatever it carried is lost.
                 Log.e(TAG, "Sleep/activity receive failed", e)
@@ -56,26 +65,27 @@ public class SleepActivityReceiver : BroadcastReceiver() {
         }.start()
     }
 
-    private fun handle(appContext: Context, intent: Intent) {
+    private fun handle(appContext: Context, intent: Intent,
+                       origin: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard,
+                       owner: com.openlattice.chronicle.storage.UploadServerEntity?, floor: Long,
+                       nowMillis: Long, elapsedNowNanos: Long) {
         val db = ChronicleDb.getInstance(appContext)
-        val owner = ResearchPersistenceGate.captureOwner(appContext)
-        val nowMillis = System.currentTimeMillis()
-        val elapsedNowNanos = SystemClock.elapsedRealtimeNanos()
 
         if (SleepSegmentEvent.hasEvents(intent) || SleepClassifyEvent.hasEvents(intent)) {
             if (CollectionGate.collects(appContext, CollectionModuleId.SLEEP)) {
-                persistSleep(appContext, db, intent, owner)
+                persistSleep(appContext, db, intent, owner, origin, floor)
             }
         }
         if (ActivityTransitionResult.hasResult(intent)) {
             if (CollectionGate.collects(appContext, CollectionModuleId.ACTIVITY_RECOGNITION)) {
-                persistActivity(appContext, db, intent, nowMillis, elapsedNowNanos, owner)
+                persistActivity(appContext, db, intent, nowMillis, elapsedNowNanos, owner, origin, floor)
             }
         }
     }
 
     private fun persistSleep(appContext: Context, db: ChronicleDb, intent: Intent,
-                             owner: com.openlattice.chronicle.storage.UploadServerEntity?) {
+                             owner: com.openlattice.chronicle.storage.UploadServerEntity?,
+                             origin: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard, floor: Long) {
         val rows = mutableListOf<SleepSampleEntry>()
         if (SleepSegmentEvent.hasEvents(intent)) {
             for (e in SleepSegmentEvent.extractEvents(intent)) {
@@ -112,8 +122,8 @@ public class SleepActivityReceiver : BroadcastReceiver() {
         if (rows.isNotEmpty()) {
             val result = SleepSampleSink(
                 db.sleepSampleDao(),
-                persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.SLEEP),
-            ).write(rows)
+                persistenceGuard = origin,
+            ).write(rows.filter { Instant.parse(it.timestamp).toEpochMilli() >= floor })
             recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.SLEEP, result, rows.size)
             logWrite(writeOutcome("sleep sample(s)", rows.size, result))
         }
@@ -126,6 +136,7 @@ public class SleepActivityReceiver : BroadcastReceiver() {
         nowMillis: Long,
         elapsedNowNanos: Long,
         owner: com.openlattice.chronicle.storage.UploadServerEntity?,
+        origin: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard, floor: Long,
     ) {
         val result = ActivityTransitionResult.extractResult(intent) ?: return
         val rows = result.transitionEvents.map { ev ->
@@ -144,8 +155,8 @@ public class SleepActivityReceiver : BroadcastReceiver() {
         if (rows.isNotEmpty()) {
             val result = ActivityRecognitionSampleSink(
                 db.activityRecognitionSampleDao(),
-                persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.ACTIVITY_RECOGNITION),
-            ).write(rows)
+                persistenceGuard = origin,
+            ).write(rows.filter { Instant.parse(it.timestamp).toEpochMilli() >= floor })
             recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.ACTIVITY_RECOGNITION, result, rows.size)
             logWrite(writeOutcome("activity transition(s)", rows.size, result))
         }

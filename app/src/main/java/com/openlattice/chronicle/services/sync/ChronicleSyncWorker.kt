@@ -162,12 +162,13 @@ fun scheduleChronicleSyncWork(context: Context) {
     // contributions — strategy-independent collection + upload, idempotent.
     com.openlattice.chronicle.collection.device.scheduleExpansionCollectionWork(context)
     com.openlattice.chronicle.collection.device.scheduleExpansionUploadWork(context)
-    when (config.strategy) {
+    val scheduled = when (config.strategy) {
         ChronicleSyncStrategy.SPLIT_PERIODIC -> {
             wm.cancelUniqueWork(CHRONICLE_SYNC_WORK_NAME)
             com.openlattice.chronicle.services.upload.scheduleCombinedUploadWork(context)
-            com.openlattice.chronicle.services.usage.scheduleUsageMonitoringWork(context)
+            val operation = com.openlattice.chronicle.services.usage.scheduleUsageMonitoringWork(context)
             Log.i(TAG, "Scheduled strategy=${config.strategy.configValue} as split periodic workers")
+            operation
         }
 
         ChronicleSyncStrategy.COORDINATED_COLLECT_THEN_UPLOAD,
@@ -191,14 +192,25 @@ fun scheduleChronicleSyncWork(context: Context) {
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
 
-            wm.enqueueUniquePeriodicWork(
+            val operation = wm.enqueueUniquePeriodicWork(
                 CHRONICLE_SYNC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request
             )
             Log.i(TAG, "Scheduled strategy=${config.strategy.configValue} interval=${config.intervalMinutes}m batteryNotLow=${config.requiresBatteryNotLow}")
+            operation
         }
     }
+    // Initialization failure is a hint, never a permanent scheduling veto. Verify the enqueue.
+    val verified = scheduled.result
+    verified.addListener({
+        try {
+            verified.get()
+            com.openlattice.chronicle.WorkSchedulingStatus.schedulingSucceeded()
+        } catch (error: Exception) {
+            com.openlattice.chronicle.WorkSchedulingStatus.initializationFailed(error, context.applicationContext)
+        }
+    }, java.util.concurrent.Executor { it.run() })
 }
 
 fun triggerImmediateChronicleSync(context: Context) {

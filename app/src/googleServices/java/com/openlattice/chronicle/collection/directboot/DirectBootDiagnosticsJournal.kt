@@ -2,7 +2,8 @@ package com.openlattice.chronicle.collection.directboot
 
 import android.content.Context
 import com.openlattice.chronicle.serialization.JsonSerializer
-import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServer
+import com.openlattice.chronicle.serialization.ChronicleJson
+import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
 import com.openlattice.chronicle.storage.UploadDiagnosticEntity
@@ -30,21 +31,30 @@ internal class DirectBootDiagnosticsJournal(
     fun currentOwner(): Owner? = synchronized(DIRECT_BOOT_BUFFER_LOCK) { read().owner }
 
     fun bind(context: Context) = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-        val db = ChronicleDb.getInstance(context)
-        val server = exactActiveEnrollmentServer(context, db) ?: return@synchronized
-        val owner = Owner(server.studyId, server.participantId, server.sourceDeviceId, "${server.id}:${server.createdAt}")
+        val owner = configuredOwner(context) ?: return@synchronized
         val state = read()
         if (state.owner != owner) write(state.copy(owner = owner))
     }
 
-    fun record(code: String, count: Int, incidentId: String = UUID.randomUUID().toString()) =
+    companion object {
+        internal fun configuredOwner(context: Context): Owner? {
+            val settings = EnrollmentSettings(context.applicationContext)
+            val server = ChronicleDb.getInstance(context).uploadServerDao().getConfiguredServer() ?: return null
+            if (server.studyId != settings.getStudyId().toString() ||
+                server.participantId != settings.getParticipantId() || server.sourceDeviceId.isBlank()) return null
+            return Owner(server.studyId, server.participantId, server.sourceDeviceId, "${server.id}:${server.createdAt}")
+        }
+    }
+
+    fun record(code: String, count: Int, incidentId: String = UUID.randomUUID().toString(),
+               occurredAt: OffsetDateTime = OffsetDateTime.now()) =
         synchronized(DIRECT_BOOT_BUFFER_LOCK) {
             if (count <= 0) return@synchronized
             val id = uuidId(incidentId)
             val state = read()
             if (state.events.any { uuidId(it.id) == id }) return@synchronized
             write(state.copy(events = state.events + Event(
-                id, code, count, OffsetDateTime.now().toString(), state.owner,
+                id, code, count, occurredAt.toString(), state.owner,
             )))
         }
 
@@ -119,7 +129,8 @@ internal class DirectBootDiagnosticsJournal(
     }
 
     private fun parse(source: File): State {
-        val state = JsonSerializer.fromJson<State>(cipher.decrypt(source.readBytes()).toString(Charsets.UTF_8))
+        val state = ChronicleJson.moshi.adapter(State::class.java).failOnUnknown()
+            .fromJson(cipher.decrypt(source.readBytes()).toString(Charsets.UTF_8))
             ?: error("Corrupt direct-boot diagnostic journal")
         state.events.forEach { event ->
             require(event.id.isNotBlank() && event.code.isNotBlank() && event.count > 0)

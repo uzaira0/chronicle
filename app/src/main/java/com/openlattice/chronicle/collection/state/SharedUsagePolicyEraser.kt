@@ -29,7 +29,7 @@ private val LIFECYCLE_INTERACTIONS = setOf(
     INTERACTION_POWER_SAVE_MODE_ON, INTERACTION_POWER_SAVE_MODE_OFF,
 )
 
-internal enum class SharedUsageDisposition { KEEP, ERASE, REDACT_ACTIVITY_CLASS }
+internal enum class SharedUsageDisposition { KEEP, ERASE, REDACT_ACTIVITY_CLASS, REDACT_USER }
 
 internal fun sharedUsageDisposition(
     moduleId: CollectionModuleId,
@@ -45,6 +45,8 @@ internal fun sharedUsageDisposition(
         CollectionModuleId.IN_APP_ACTIVITY_CLASS ->
             if (!lifecycle && event.activityClass != null) SharedUsageDisposition.REDACT_ACTIVITY_CLASS
             else SharedUsageDisposition.KEEP
+        CollectionModuleId.USER_IDENTIFICATION ->
+            if (event.user.isNotEmpty()) SharedUsageDisposition.REDACT_USER else SharedUsageDisposition.KEEP
         else -> SharedUsageDisposition.KEEP
     }
 }
@@ -70,6 +72,10 @@ internal fun eraseSharedQueueModule(db: ChronicleDb, moduleId: CollectionModuleI
                     when (sharedUsageDisposition(moduleId, event)) {
                         SharedUsageDisposition.KEEP -> kept += event
                         SharedUsageDisposition.ERASE -> erased += event
+                        SharedUsageDisposition.REDACT_USER -> {
+                            erased += event
+                            kept += event.copy(user = "")
+                        }
                         SharedUsageDisposition.REDACT_ACTIVITY_CLASS -> {
                             erased += event
                             kept += event.copy(activityClass = null)
@@ -110,6 +116,32 @@ private fun quarantineAmbiguousSharedRow(db: ChronicleDb, entry: QueueEntry) {
             db, 1L, LocalUploadModuleFamily.USAGE_LIFECYCLE,
             LocalOperationalIssue.SAMPLE_QUARANTINED,
         )
+    }
+}
+
+/** Runs after live queue erasure, in the same transaction, including newly quarantined rows. */
+internal fun eraseSharedQueueModuleQuarantine(db: ChronicleDb, moduleId: CollectionModuleId) {
+    val quarantine = db.localDataQuarantineDao()
+    val rows = quarantine.forSource("dataQueue")
+    rows.forEach { row ->
+        val mapped = runCatching { JsonSerializer.deserializeQueueEntry(row.rawData) }.getOrNull()
+        val events = mapped?.map { it as? ExtractedUsageEvent }
+        if (events == null || events.any { it == null }) {
+            quarantine.delete(row)
+        } else {
+            val kept = events.filterNotNull().mapNotNull { event ->
+                when (sharedUsageDisposition(moduleId, event)) {
+                    SharedUsageDisposition.KEEP -> event
+                    SharedUsageDisposition.ERASE -> null
+                    SharedUsageDisposition.REDACT_ACTIVITY_CLASS -> event.copy(activityClass = null)
+                    SharedUsageDisposition.REDACT_USER -> event.copy(user = "")
+                }
+            }
+            if (kept.isEmpty()) quarantine.delete(row)
+            else if (kept != events) {
+                quarantine.update(row.copy(rawData = JsonSerializer.serializeQueueEntry(ChronicleData(kept))))
+            }
+        }
     }
 }
 

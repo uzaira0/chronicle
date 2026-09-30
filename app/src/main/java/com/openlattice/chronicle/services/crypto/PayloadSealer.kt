@@ -21,6 +21,7 @@ interface SealedEnvelopeStore {
     fun load(stream: String): SealedEnvelopeEntry?
     fun save(stream: String, entry: SealedEnvelopeEntry)
     fun clear()
+    fun erase(types: Set<EncryptedPayloadType>)
 }
 
 data class SealedEnvelopeEntry(val batchDigest: String, val envelope: EncryptedEnvelope)
@@ -32,6 +33,9 @@ class InMemorySealedEnvelopeStore : SealedEnvelopeStore {
         entries[stream] = entry
     }
     override fun clear() = entries.clear()
+    override fun erase(types: Set<EncryptedPayloadType>) {
+        entries.keys.filter { key -> types.any { key.endsWith("|${it.name}") } }.forEach(entries::remove)
+    }
 }
 
 /** Survives process death between a lost response and the WorkManager retry. Holds ciphertext only. */
@@ -49,11 +53,22 @@ class FileSealedEnvelopeStore(private val dir: File) : SealedEnvelopeStore {
         val target = file(stream)
         val temp = File(dir, target.name + ".tmp")
         temp.writeText(JsonSerializer.toJson(entry))
-        check(temp.renameTo(target)) { "Failed to persist sealed envelope" }
+        com.openlattice.chronicle.storage.checkLocalStoreWrite(temp.renameTo(target)) { "Failed to persist sealed envelope" }
     }
 
     override fun clear() = synchronized(this) {
-        dir.listFiles()?.forEach { it.delete() }
+        dir.listFiles()?.forEach { com.openlattice.chronicle.storage.checkLocalStoreWrite(it.delete() || !it.exists()) { "Sealed envelope erasure failed" } }
+        Unit
+    }
+
+    override fun erase(types: Set<EncryptedPayloadType>) = synchronized(this) {
+        dir.listFiles()?.forEach { file ->
+            val entry = runCatching { JsonSerializer.fromJson<SealedEnvelopeEntry>(file.readText()) }.getOrNull()
+            // Unreadable partial files cannot prove they belong to a retained stream.
+            if (entry == null || entry.envelope.payloadType in types) {
+                com.openlattice.chronicle.storage.checkLocalStoreWrite(file.delete() || !file.exists()) { "Sealed envelope erasure failed" }
+            }
+        }
         Unit
     }
 }
@@ -93,6 +108,8 @@ object PayloadSealer {
 
     /** Drops remembered envelopes, e.g. at withdrawal. */
     fun clearSealedEnvelopes() = sealedEnvelopeStore.clear()
+
+    fun eraseSealedEnvelopes(types: Set<EncryptedPayloadType>) = sealedEnvelopeStore.erase(types)
 
     /**
      * True when the study has e2ee turned on and usable public keys: the setting exists, is

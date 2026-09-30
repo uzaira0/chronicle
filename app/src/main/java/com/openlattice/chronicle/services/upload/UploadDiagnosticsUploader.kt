@@ -2,6 +2,7 @@ package com.openlattice.chronicle.services.upload
 
 import android.content.Context
 import android.util.Log
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.storage.ChronicleDb
 import java.util.UUID
 
@@ -13,7 +14,9 @@ internal class UploadDiagnosticsUploader(
     private val db: ChronicleDb,
 ) {
     /** Returns zero on success/no work and one when diagnostics remain pending after this attempt. */
-    fun execute(): Int {
+    fun execute(): Int = ResearchPersistenceGate.runIfActive(context) { executeActive() } ?: 0
+
+    private fun executeActive(): Int {
         val server = exactActiveEnrollmentServer(context, db) ?: return 0
         val store = LocalUploadDiagnosticsStore.of(context)
         val pending = store.pending()

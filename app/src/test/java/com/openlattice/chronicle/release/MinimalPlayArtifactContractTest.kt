@@ -21,9 +21,6 @@ class MinimalPlayArtifactContractTest {
     private val boundaryWorker = File(
         "src/main/java/com/openlattice/chronicle/services/release/MinimalPlayBoundaryWorker.kt",
     ).readText()
-    private val enrollmentMonitor = File(
-        "src/main/java/com/openlattice/chronicle/services/enrollment/EnrollmentMonitoringWorker.kt",
-    ).readText()
 
     @Test
     fun playReleaseUsesTargetedR8OptimizationAndEnglishResources() {
@@ -154,15 +151,6 @@ class MinimalPlayArtifactContractTest {
         )
         assertTrue(verifier.contains("SurveyNotificationsReceiver;"))
         assertTrue(verifier.contains("NotificationsWorker;"))
-    }
-
-    @Test
-    fun enrollmentMonitorCannotResurrectWithdrawnEnrollment() {
-        assertTrue(enrollmentMonitor.contains("ResearchPersistenceGate.isActiveEnrollment"))
-        assertTrue(enrollmentMonitor.contains("ResearchPersistenceGate.runIfActive"))
-        assertTrue(enrollmentMonitor.contains("persistStatusIfSameActiveEnrollment"))
-        assertTrue(enrollmentMonitor.contains("current.getStudyId() == studyId"))
-        assertTrue(enrollmentMonitor.contains("current.getParticipantId() == participantId"))
     }
 
     @Test

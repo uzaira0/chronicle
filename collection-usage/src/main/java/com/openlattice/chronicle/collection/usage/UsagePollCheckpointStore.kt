@@ -45,12 +45,31 @@ public interface UsagePollCheckpointStore {
  */
 public class DaoUsagePollCheckpointStore(
     private val dao: UsagePollCheckpointDao,
+    private val scope: String? = null,
+    private val acceptanceFloor: Long = 0,
+    private val legacyOwnerScope: String? = null,
 ) : UsagePollCheckpointStore {
 
-    override fun readPreviousPollTimestamp(): Long? =
-        dao.getLastPollTimestamp(USAGE_EVENTS_SENSOR_CHECKPOINT)
+    private fun key(): String = scope?.let { "$USAGE_EVENTS_SENSOR_CHECKPOINT:$it" } ?: USAGE_EVENTS_SENSOR_CHECKPOINT
+
+    override fun readPreviousPollTimestamp(): Long? {
+        dao.getLastPollTimestamp(key())?.let { return it.coerceAtLeast(acceptanceFloor) }
+        // Only the verified current enrollment's initial consent epoch can inherit history.
+        if (scope != null && acceptanceFloor == 0L && scope.substringBeforeLast(':') == legacyOwnerScope && scope.substringAfterLast(':').toLongOrNull() in 0L..1L) {
+            dao.getLastPollTimestamp(USAGE_EVENTS_SENSOR_CHECKPOINT)?.let {
+                dao.upsert(UsagePollCheckpointEntity(key(), it))
+                return it
+            }
+        }
+        return acceptanceFloor.takeIf { it > 0 }
+    }
+
+    /** Remember the first accepted start before acquisition, even if its batch is later refused. */
+    public fun readOrRememberStart(fallback: () -> Long): Long = readPreviousPollTimestamp() ?: fallback().also {
+        dao.upsert(UsagePollCheckpointEntity(key(), it.coerceAtLeast(acceptanceFloor)))
+    }
 
     override fun commitPollTimestamp(currentPollTimestamp: Long) {
-        dao.upsert(UsagePollCheckpointEntity(USAGE_EVENTS_SENSOR_CHECKPOINT, currentPollTimestamp))
+        dao.upsert(UsagePollCheckpointEntity(key(), currentPollTimestamp))
     }
 }

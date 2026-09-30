@@ -37,4 +37,11 @@ class SleepActivityWriteOutcomeTest {
         countAbandonedGateBatch(ModuleResult.Failed(IllegalStateException("write failed")), 4, counts::add)
         assertEquals(listOf(4), counts)
     }
+
+    @Test fun abandonedStorageRetryCountsEveryLostSleepAndActivityRecord() {
+        val counts = mutableListOf<Int>()
+        countAbandonedGateBatch(ModuleResult.Retry("local storage temporarily unavailable"), 3, counts::add)
+        countAbandonedGateBatch(ModuleResult.Retry("local storage temporarily unavailable"), 2, counts::add)
+        assertEquals(listOf(3, 2), counts)
+    }
 }

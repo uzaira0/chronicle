@@ -97,8 +97,11 @@ public object AppNetworkUsageModuleHolder {
                 db.appNetworkUsageSampleDao(),
                 persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.APP_NETWORK_USAGE),
             ),
-            source = AndroidAppNetworkUsageSource(appContext),
+            source = AndroidAppNetworkUsageSource(appContext) {
+                ResearchPersistenceGate.observationScope(appContext, CollectionModuleId.APP_NETWORK_USAGE)
+            },
             enrolled = enrolledAndConsented(appContext, CollectionModuleId.APP_NETWORK_USAGE),
+            sampleLease = { sample -> ResearchPersistenceGate.withReadLease(sample) },
         )
     }
 }

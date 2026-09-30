@@ -10,7 +10,6 @@ import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import com.openlattice.chronicle.collection.permissions.ModulePermissions
-import kotlinx.coroutines.runBlocking
 
 /**
  * The Health Connect grant flow for the `health_connect` module. Health Connect does NOT use the
@@ -84,10 +83,7 @@ public object HealthConnectPermissions {
     public fun allGranted(context: Context): Boolean {
         if (!isAvailable(context)) return false
         val granted = runCatching {
-            runBlocking {
-                HealthConnectClient.getOrCreate(context.applicationContext)
-                    .permissionController.getGrantedPermissions()
-            }
+            grantedHealthConnectPermissions(HealthConnectClient.getOrCreate(context.applicationContext))
         }.onFailure { Log.w(TAG, "Health Connect permission query failed: ${it.javaClass.simpleName}") }
             .getOrDefault(emptySet())
         return granted.containsAll(permissionsToRequest(context))

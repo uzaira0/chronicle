@@ -41,6 +41,16 @@ class Enrollment : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val mHandler = object : Handler(Looper.getMainLooper()) {}
 
+    private fun postIfCurrent(action: () -> Unit) {
+        mHandler.post { if (!isFinishing && !isDestroyed) action() }
+    }
+
+    override fun onDestroy() {
+        executor.shutdown()
+        mHandler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
+
     private lateinit var studyIdText: TextInputEditText
     private lateinit var participantIdText: TextInputEditText
     private lateinit var studyIdTextView: TextView
@@ -146,7 +156,7 @@ class Enrollment : AppCompatActivity() {
             val recovery = EnrollmentRecoveryManager.resumeIfNeeded(applicationContext)
             val enrollmentAlreadyComplete = recovery == EnrollmentRecoveryResult.NONE &&
                 runCatching { EnrollmentSettings(applicationContext).isEnrolled() }.getOrDefault(false)
-            mHandler.post {
+            postIfCurrent {
                 progressBar.visibility = View.INVISIBLE
                 when (recovery) {
                     EnrollmentRecoveryResult.NONE -> {
@@ -202,6 +212,13 @@ class Enrollment : AppCompatActivity() {
         val appLinkData = appLinkIntent.data
 
         if (Intent.ACTION_VIEW == appLinkAction && appLinkData != null) {
+            if (!appLinkData.isHierarchical || appLinkData.scheme != "chronicle" ||
+                appLinkData.host != "enroll" || !appLinkData.path.isNullOrEmpty()) {
+                Log.w(javaClass.simpleName, "Rejecting invalid enrollment destination")
+                statusMessageText.text = getString(R.string.enrollment_invitation_unverified)
+                statusMessageText.visibility = View.VISIBLE
+                return
+            }
             val studyId = appLinkData.getQueryParameter("studyId")?.take(36)
             val participantId = appLinkData.getQueryParameter("participantId")?.take(256)
             enrollmentAccessCode = detachedAccessCode
@@ -250,7 +267,7 @@ class Enrollment : AppCompatActivity() {
         progressBar.visibility = View.VISIBLE
         executor.execute {
             val cancelled = EnrollmentRecoveryManager.cancelPendingAttempt(applicationContext)
-            mHandler.post {
+            postIfCurrent {
                 progressBar.visibility = View.INVISIBLE
                 doneBtn.isEnabled = true
                 if (cancelled) {
@@ -407,7 +424,7 @@ class Enrollment : AppCompatActivity() {
                 null
             }
             if (existingEnrollment == null) {
-                mHandler.post {
+                postIfCurrent {
                     progressBar.visibility = View.INVISIBLE
                     submitBtn.isEnabled = true
                     statusMessageText.text = getString(R.string.device_enroll_failure)
@@ -423,7 +440,7 @@ class Enrollment : AppCompatActivity() {
                     participantId,
                 ) is SingleEnrollmentResolution.Reject
             ) {
-                mHandler.post {
+                postIfCurrent {
                     progressBar.visibility = View.INVISIBLE
                     submitBtn.isEnabled = true
                     statusMessageText.text =
@@ -454,14 +471,14 @@ class Enrollment : AppCompatActivity() {
                     null
                 }
             }
-            mHandler.post {
+            postIfCurrent {
                 progressBar.visibility = View.INVISIBLE
                 submitBtn.isEnabled = true
                 if (preview == null || fetched == null || plan == null) {
                     statusMessageText.text =
                         getString(R.string.enrollment_invitation_unverified)
                     statusMessageText.visibility = View.VISIBLE
-                    return@post
+                    return@postIfCurrent
                 }
                 // Hold the exact authenticated disclosure, then obtain an affirmative study-level
                 // decision before asking for module-specific choices.
@@ -625,36 +642,38 @@ class Enrollment : AppCompatActivity() {
                         getDevice(deviceInstanceId),
                     )
                     try {
-                        ChronicleDb.getInstance(applicationContext).uploadServerDao()
-                            .reserveSingleEnrollment(
-                                UploadServerEntity(
-                                    name = serverName,
-                                    url = serverUrl,
-                                    studyId = studyId.toString(),
-                                    participantId = participantId,
-                                    sourceDeviceId = deviceInstanceId,
-                                    mobileSigningSecretOverride = mobileSigningSecretOverride,
-                                    studyDisclosureJson = manifestJson,
-                                    disclosureVersion = preview.manifest.participantPolicy.version,
-                                    manifestDigest = preview.manifestDigest,
-                                    pendingAcceptedModuleIds =
-                                        encodePendingEnrollmentModules(partition.accepted),
-                                    pendingDeclinedModuleIds =
-                                        encodePendingEnrollmentModules(partition.declined),
-                                    pendingUnavailableModuleIds =
-                                        encodePendingEnrollmentModules(partition.unavailable),
-                                    pendingEnrollmentAttemptId = enrollmentAttemptId,
-                                    pendingEnrollmentAccessCode = enrollmentAccessCode,
-                                    pendingEnrollmentInviteExpiresAtEpochMillis =
-                                        preview.manifest.expiresAt.toInstant().toEpochMilli(),
-                                    pendingProposedApiKey = proposedApiKey,
-                                    pendingEnrollmentSourceDeviceJson = sourceDeviceJson,
-                                    enabled = false,
-                                    createdAt = OffsetDateTime.now().toString(),
-                                ),
-                            )
+                        com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
+                            ChronicleDb.getInstance(applicationContext).uploadServerDao()
+                                .reserveSingleEnrollment(
+                                    UploadServerEntity(
+                                        name = serverName,
+                                        url = serverUrl,
+                                        studyId = studyId.toString(),
+                                        participantId = participantId,
+                                        sourceDeviceId = deviceInstanceId,
+                                        mobileSigningSecretOverride = mobileSigningSecretOverride,
+                                        studyDisclosureJson = manifestJson,
+                                        disclosureVersion = preview.manifest.participantPolicy.version,
+                                        manifestDigest = preview.manifestDigest,
+                                        pendingAcceptedModuleIds =
+                                            encodePendingEnrollmentModules(partition.accepted),
+                                        pendingDeclinedModuleIds =
+                                            encodePendingEnrollmentModules(partition.declined),
+                                        pendingUnavailableModuleIds =
+                                            encodePendingEnrollmentModules(partition.unavailable),
+                                        pendingEnrollmentAttemptId = enrollmentAttemptId,
+                                        pendingEnrollmentAccessCode = enrollmentAccessCode,
+                                        pendingEnrollmentInviteExpiresAtEpochMillis =
+                                            preview.manifest.expiresAt.toInstant().toEpochMilli(),
+                                        pendingProposedApiKey = proposedApiKey,
+                                        pendingEnrollmentSourceDeviceJson = sourceDeviceJson,
+                                        enabled = false,
+                                        createdAt = OffsetDateTime.now().toString(),
+                                    ),
+                                )
+                        }
                     } catch (error: SingleEnrollmentConflictException) {
-                        mHandler.post {
+                        postIfCurrent {
                             clearPendingEnrollmentState()
                             progressBar.visibility = View.INVISIBLE
                             submitBtn.visibility = View.VISIBLE
@@ -672,16 +691,16 @@ class Enrollment : AppCompatActivity() {
                     when (EnrollmentRecoveryManager.resumeIfNeeded(applicationContext)) {
                         EnrollmentRecoveryResult.COMPLETED -> Unit
                         EnrollmentRecoveryResult.RETRY_REQUIRED -> {
-                            mHandler.post { showIssuedEnrollmentRecoveryRetry() }
+                            postIfCurrent { showIssuedEnrollmentRecoveryRetry() }
                             return@execute
                         }
                         EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED -> {
-                            mHandler.post { showPendingEnrollmentRecoveryRetry() }
+                            postIfCurrent { showPendingEnrollmentRecoveryRetry() }
                             return@execute
                         }
                         EnrollmentRecoveryResult.TERMINAL_FAILURE -> {
                             LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_FAILURE, null)
-                            mHandler.post {
+                            postIfCurrent {
                                 progressBar.visibility = View.INVISIBLE
                                 submitBtn.visibility = View.VISIBLE
                                 submitBtn.isEnabled = true
@@ -693,7 +712,7 @@ class Enrollment : AppCompatActivity() {
                             return@execute
                         }
                         EnrollmentRecoveryResult.NONE -> {
-                            mHandler.post { showIssuedEnrollmentRecoveryRetry() }
+                            postIfCurrent { showIssuedEnrollmentRecoveryRetry() }
                             return@execute
                         }
                     }
@@ -765,7 +784,7 @@ class Enrollment : AppCompatActivity() {
                     com.openlattice.chronicle.collection.state.CollectionSettingsSyncWorker
                         .enqueueNow(applicationContext)
 
-                    mHandler.post {
+                    postIfCurrent {
                         showEnrollmentSuccess()
                     }
                 } catch (error: Exception) {
@@ -773,7 +792,7 @@ class Enrollment : AppCompatActivity() {
                         javaClass.canonicalName,
                         "Enrollment setup failed safely (${error.javaClass.simpleName})",
                     )
-                    mHandler.post {
+                    postIfCurrent {
                         clearPendingEnrollmentState()
                         progressBar.visibility = View.INVISIBLE
                         submitBtn.visibility = View.VISIBLE

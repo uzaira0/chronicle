@@ -36,6 +36,8 @@ public class LifecycleEventSink private constructor(
         persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
     ) : this(UsageEventSink(storageQueue, log, persistenceGuard))
 
+    public fun captureAdmission(): CollectionPersistenceGuard = delegate.captureAdmission()
+
     /**
      * Persists lifecycle [entries] through the shared usage write path.
      *

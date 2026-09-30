@@ -580,8 +580,8 @@ class AppDecisionSurfaceContractTest {
             ),
             "collection/state/CollectionLoopCoordinator.kt" to listOf(
                 "UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)",
-                "syncEncryptionSetting(studyId, server.url, server.mobileSigningSecretOverride)",
-                "UploadWorker.getChronicleStudyApi(serverUrl, mobileSigningSecretOverride)",
+                "syncEncryptionSetting(studyId, server, encryptionGeneration)",
+                "UploadWorker.getChronicleStudyApi(expected.url, expected.mobileSigningSecretOverride)",
             ),
             "services/sensors/SensorSettingsRefreshWorker.kt" to listOf(
                 "UploadWorker.getChronicleStudyApi(primary.url, primary.mobileSigningSecretOverride)",

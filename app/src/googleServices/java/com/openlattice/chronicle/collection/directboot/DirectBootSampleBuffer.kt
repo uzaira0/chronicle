@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection.directboot
 
 import android.content.Context
+import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.storage.SensorSampleEntry
@@ -8,13 +9,14 @@ import com.openlattice.chronicle.serialization.JsonSerializer
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.security.MessageDigest
+import java.time.OffsetDateTime
 import java.util.UUID
 
 private const val TAG = "DirectBootSampleBuffer"
@@ -61,7 +63,7 @@ class DirectBootSampleBuffer(
     private data class DecodeResult(
         val entries: List<OwnedSample>,
         val badRecords: List<Pair<Int, ByteArray>>,
-        val corruptTail: Boolean,
+        val corruptTail: ByteArray,
     )
 
     /** Outcome of a [drain]: what persisted, what was dropped, and whether persistence failed. */
@@ -71,8 +73,12 @@ class DirectBootSampleBuffer(
         val failed: Boolean,
     )
 
-    /** IDs confirmed transferred by the persistence callback; all other IDs remain buffered. */
-    data class DrainTransfer(val transferredIds: Set<String>, val failed: Boolean = false)
+    /** IDs confirmed persisted or erased by policy; all other IDs remain buffered. */
+    data class DrainTransfer(
+        val transferredIds: Set<String>,
+        val failed: Boolean = false,
+        val discardedIds: Set<String> = emptySet(),
+    )
 
     private val liveFile: File get() = File(dir, DIRECT_BOOT_LIVE_FILE_NAME)
     private val drainingFile: File get() = File(dir, DIRECT_BOOT_DRAINING_FILE_NAME)
@@ -101,20 +107,43 @@ class DirectBootSampleBuffer(
         liveCleared && drainingCleared && otherCleared
     }
 
-    /** Remove a disabled sensor from both the live file and a previously interrupted drain. */
-    fun eraseSensorType(sensorType: String, expectedOwner: String? = null): Int =
+    /** Remove a disabled sensor from active records and retained encrypted copies. */
+    fun eraseSensorType(sensorType: String, expectedOwner: String? = null,
+                        beforeErase: (Set<String>) -> Unit = {}): Int =
+        eraseSensorTypes(setOf(sensorType), expectedOwner, beforeErase)
+
+    internal fun eraseSensorTypes(sensorTypes: Set<String>, expectedOwner: String?,
+                                  beforeErase: (Set<String>) -> Unit = {}): Int =
         synchronized(DIRECT_BOOT_BUFFER_LOCK) {
             val removed = linkedSetOf<String>()
-            listOf(drainingFile, liveFile).filter { it.length() > 0L }.forEach { file ->
+            val sampleFiles = dir.walkTopDown().filter {
+                it.isFile && !it.name.startsWith("diagnostics") &&
+                    (it.name.endsWith(".bin") || it.name.endsWith(".tmp"))
+            }.toList()
+            sampleFiles.filter { it.name.endsWith(".tmp") }.forEach {
+                check(it.delete()) { "Unable to erase direct-boot sample checkpoint" }
+            }
+            sampleFiles.filter { !it.name.endsWith(".tmp") && it.length() > 0L }.forEach { file ->
                 val decoded = decodeAll(file)
-                preserveCorruption(file, decoded)
+                val policyIds = linkedSetOf<String>()
                 val keep = decoded.entries.filterNot {
-                    val erase = it.sample.sensorType == sensorType &&
-                        (expectedOwner == null || it.owner == null || it.owner == expectedOwner)
-                    if (erase) removed += it.sample.id
+                    val unknownSensor = runCatching { AndroidSensorType.valueOf(it.sample.sensorType) }.isFailure
+                    // Ownerless legacy records of an erased sensor cannot prove another owner, so they go too.
+                    val erase = unknownSensor || (it.sample.sensorType in sensorTypes &&
+                        (expectedOwner == null || it.owner.isNullOrBlank() || it.owner == expectedOwner))
+                    if (erase && removed.add(it.sample.id)) {
+                        if (unknownSensor) reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, "unknown-sensor:${it.sample.id}")
+                        else policyIds += it.sample.id
+                    }
                     erase
                 }
+                beforeErase(policyIds)
+                // Undecodable sample payloads cannot be scoped to a sensor or enrollment.
                 writeRecords(file, keep)
+                if (file == liveFile || file == drainingFile) {
+                    runCatching { preserveCorruption(decoded, retainPayloads = false) }
+                        .onFailure { log.warn(TAG, "Unable to journal erased corrupt samples", it) }
+                }
             }
             removed.size
         }
@@ -166,6 +195,7 @@ class DirectBootSampleBuffer(
      */
     fun drain(
         expectedOwner: String = "test-owner",
+        enrollmentCreatedAt: String? = null,
         persist: (List<SensorSampleEntry>) -> DrainTransfer,
     ): DrainResult = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
         // A crashed prior drain leaves a draining file; fold the live file into it so one
@@ -187,11 +217,15 @@ class DirectBootSampleBuffer(
         }
 
         val decoded = decodeAll(drainingFile)
-        // Records written before ownership existed (2026.9.27 and earlier) carry no owner. The
-        // buffer is erased on withdrawal, so they belong to the enrollment draining them now.
-        val entries = decoded.entries.map { if (it.owner == null) it.copy(owner = expectedOwner) else it }
-        val corrupt = decoded.badRecords.size + if (decoded.corruptTail) 1 else 0
-        preserveCorruption(drainingFile, decoded)
+        val createdAt = enrollmentCreatedAt?.let { runCatching { OffsetDateTime.parse(it).toInstant() }.getOrNull() }
+        val entries = decoded.entries.map {
+            val timestamp = runCatching { OffsetDateTime.parse(it.sample.timestamp).toInstant() }.getOrNull()
+            if (it.owner == null && createdAt != null && timestamp != null && timestamp >= createdAt) {
+                it.copy(owner = expectedOwner)
+            } else it
+        }
+        val corrupt = decoded.badRecords.size + if (decoded.corruptTail.isNotEmpty()) 1 else 0
+        preserveCorruption(decoded)
         val unauthorized = entries.filter { it.owner != expectedOwner }
         if (unauthorized.isNotEmpty()) {
             val quarantineDir = File(dir, "quarantine")
@@ -203,16 +237,18 @@ class DirectBootSampleBuffer(
         }
         var remaining = entries.filter { it.owner == expectedOwner }
         // Remove the unauthorized records and corrupt tail before persisting. The encrypted
-        // quarantine and corrupt original are durable first.
+        // quarantine and undecodable bytes are durable first.
         writeRecords(drainingFile, remaining)
         var persisted = 0
         val retained = mutableListOf<OwnedSample>()
         while (remaining.isNotEmpty()) {
             val batch = remaining.take(DRAIN_BATCH)
             val result = persist(batch.map { it.sample })
-            check(result.transferredIds.all { id -> batch.any { it.sample.id == id } })
+            val consumed = result.transferredIds + result.discardedIds
+            check(consumed.all { id -> batch.any { it.sample.id == id } })
+            result.discardedIds.forEach { id -> reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, "unknown-sensor:$id") }
             persisted += batch.count { it.sample.id in result.transferredIds }
-            retained += batch.filterNot { it.sample.id in result.transferredIds }
+            retained += batch.filterNot { it.sample.id in consumed }
             remaining = remaining.drop(batch.size)
             writeRecords(drainingFile, retained + remaining)
             if (result.failed) {
@@ -227,19 +263,19 @@ class DirectBootSampleBuffer(
         DrainResult(persisted, corrupt, failed = retained.isNotEmpty())
     }
 
-    private fun preserveCorruption(file: File, decoded: DecodeResult) {
+    private fun preserveCorruption(decoded: DecodeResult, retainPayloads: Boolean = true) {
         decoded.badRecords.forEach { (ordinal, blob) ->
             val digest = MessageDigest.getInstance("SHA-256").digest(blob)
             val id = UUID.nameUUIDFromBytes(digest + ordinal.toByte()).toString()
             val preserved = File(dir, "corrupt-$id.bin")
-            if (!preserved.exists()) preserved.writeBytes(blob)
+            if (retainPayloads && !preserved.exists()) preserved.writeBytes(blob)
             reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, id)
         }
-        if (decoded.corruptTail) {
-            val digest = MessageDigest.getInstance("SHA-256").digest(file.readBytes())
+        if (decoded.corruptTail.isNotEmpty()) {
+            val digest = MessageDigest.getInstance("SHA-256").digest(decoded.corruptTail)
             val id = UUID.nameUUIDFromBytes(digest).toString()
             val preserved = File(dir, "corrupt-$id.bin")
-            if (!preserved.exists()) file.copyTo(preserved)
+            if (retainPayloads && !preserved.exists()) preserved.writeBytes(decoded.corruptTail)
             reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, id)
         }
     }
@@ -248,27 +284,22 @@ class DirectBootSampleBuffer(
     private fun decodeAll(file: File): DecodeResult {
         val entries = mutableListOf<OwnedSample>()
         val badRecords = mutableListOf<Pair<Int, ByteArray>>()
-        var corruptTail = false
+        var corruptTail = byteArrayOf()
         var ordinal = 0
-        DataInputStream(FileInputStream(file).buffered()).use { input ->
+        RandomAccessFile(file, "r").use { input ->
             while (true) {
-                if (input.available() == 0) break
+                if (input.filePointer == input.length()) break
+                val recordStart = input.filePointer
                 ordinal++
-                val length = try {
-                    input.readInt()
-                } catch (_: EOFException) {
-                    corruptTail = true
-                    break
-                }
-                if (length !in 1..MAX_RECORD_BYTES) {
-                    corruptTail = true
-                    break
-                }
-                val blob = ByteArray(length)
-                try {
+                val blob = try {
+                    val length = input.readInt()
+                    if (length !in 1..MAX_RECORD_BYTES) throw EOFException()
+                    val blob = ByteArray(length)
                     input.readFully(blob)
+                    blob
                 } catch (_: EOFException) {
-                    corruptTail = true
+                    input.seek(recordStart)
+                    corruptTail = ByteArray((input.length() - recordStart).toInt()).also(input::readFully)
                     break
                 }
                 try {

@@ -49,14 +49,16 @@ class ExpansionUploadWorker(context: Context, workerParameters: WorkerParameters
 
     override fun doWork(): Result {
         return try {
+            if (inputData.getBoolean(INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD, false)) {
+                ResearchPersistenceGate.collectForCurrentOwner(applicationContext) {
+                    collectExpansionSamples(applicationContext)
+                }
+            }
             val result = ResearchPersistenceGate.runIfActive(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(EXPANSION_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Expansion upload deferred because the queue is already being drained")
                     Result.retry()
                 } else try {
-                    if (inputData.getBoolean(INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD, false)) {
-                        collectExpansionSamples(applicationContext)
-                    }
                     val failures = ExpansionUploadWorkerDelegate(
                         applicationContext, ChronicleDb.getInstance(applicationContext),
                     ).execute()

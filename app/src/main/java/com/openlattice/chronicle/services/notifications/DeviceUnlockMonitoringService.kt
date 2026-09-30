@@ -215,10 +215,9 @@ class DeviceUnlockMonitoringService : Service() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        DeviceLifecycleEventRecorder.recordAsync(
-            applicationContext,
-            DeviceLifecycleEventRecorder.lowMemoryEvent(level)
-        )
+        DeviceLifecycleEventRecorder.recordObserved(applicationContext) {
+            listOf(DeviceLifecycleEventRecorder.lowMemoryEvent(level))
+        }
     }
 
     override fun onDestroy() {
@@ -246,12 +245,16 @@ internal object UnlockMonitoringRuntimeStatus {
             .getBoolean(PREF_START_DEFERRED, false)
 
     fun markDeferred(context: Context, deferred: Boolean) {
-        check(
-            EncryptedPrefsHelper.getEncryptedPrefs(context.applicationContext)
-                .edit()
-                .putBoolean(PREF_START_DEFERRED, deferred)
-                .commit(),
-        ) { "Unable to persist unlock-monitoring runtime status" }
+        try {
+            check(
+                EncryptedPrefsHelper.getEncryptedPrefs(context.applicationContext)
+                    .edit()
+                    .putBoolean(PREF_START_DEFERRED, deferred)
+                    .commit(),
+            ) { "Unable to persist unlock-monitoring runtime status" }
+        } catch (error: Exception) {
+            Log.e("UnlockMonitoringRuntimeStatus", "Unable to persist monitoring status hint", error)
+        }
     }
 }
 

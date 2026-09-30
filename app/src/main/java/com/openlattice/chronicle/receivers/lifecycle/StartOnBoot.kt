@@ -34,15 +34,21 @@ class StartOnBoot : BroadcastReceiver() {
         val pendingResult = goAsync()
         try {
             IO_EXECUTOR.execute {
-                try {
-                    handleBoot(context.applicationContext)
-                } finally {
-                    pendingResult.finish()
-                }
+                runBootTask(context.applicationContext) { pendingResult.finish() }
             }
         } catch (error: RejectedExecutionException) {
             pendingResult.finish()
             Log.e(javaClass.canonicalName, "Boot recovery executor rejected work", error)
+        }
+    }
+
+    internal fun runBootTask(context: Context, finish: () -> Unit) {
+        try {
+            handleBoot(context)
+        } catch (error: Exception) {
+            Log.e(TAG, "Boot initialization unavailable; collection remains stopped", error)
+        } finally {
+            finish()
         }
     }
 

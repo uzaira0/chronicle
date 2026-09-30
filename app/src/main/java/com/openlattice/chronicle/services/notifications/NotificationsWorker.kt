@@ -55,16 +55,32 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
     private lateinit var studyId: UUID
     private lateinit var participantId: String
 
+    private var statusFetched = false
     private var participationStatus: ParticipationStatus = ParticipationStatus.UNKNOWN
     private var studyQuestionnaires: Map<UUID, Map<FullQualifiedName, Set<Any>>> = mapOf()
     private var notificationsEnabled: Boolean = false
 
     private lateinit var chronicleApi: ChronicleStudyApi
 
-    override fun doWork(): Result {
+    override fun doWork(): Result = try {
+        val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+        val expected = gate.captureOwner(applicationContext)
+        if (expected == null) Result.success() else {
+            val generation = com.openlattice.chronicle.collection.state.ResearchErasureFence(applicationContext).settingsGeneration()
+            val result = gate.runIfExpectedOwner(applicationContext, expected) { workAdmitted() } ?: Result.success()
+            if (statusFetched) gate.applyParticipationStatus(applicationContext, expected, generation, participationStatus)
+            result
+        }
+    } catch (error: Exception) {
+        Log.w(TAG, "Reminder reconciliation failed", error)
+        Result.retry()
+    }
+
+    private fun workAdmitted(): Result {
 
         if (!BuildConfig.ALLOW_PARTICIPANT_FORM_REMINDERS) {
             WorkManager.getInstance(applicationContext).cancelUniqueWork(NOTIFICATIONS_WORK_NAME)
+            eraseSurveyArtifacts(applicationContext)
             EnrollmentSettings(applicationContext).apply {
                 setMobileReminderRequestCodes(emptySet())
                 setAwarenessNotificationsEnabled(false)
@@ -126,7 +142,7 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
             apiKey,
         )
         participationStatus = configuration.participationStatus
-        enrollmentSettings.setParticipationStatus(participationStatus)
+        statusFetched = true
 
         val notifications = configuration.forms.mapNotNull { form ->
             val type = when (form.formKind) {
@@ -179,9 +195,7 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
             emptyMap()
         }
 
-        enrollmentSettings.setParticipationStatus(
-            participationStatus
-        )
+        statusFetched = true
         enrollmentSettings.setAwarenessNotificationsEnabled(notificationsEnabled)
 
         Log.i(javaClass.name, "Participation status: $participationStatus")
@@ -239,6 +253,8 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
     private fun scheduleNotification(notification: NotificationDetails) {
         Log.i(javaClass.name, "notification to schedule: $notification")
 
+        enrollmentSettings.setMobileReminderRequestCodes(
+            enrollmentSettings.getMobileReminderRequestCodes() + notification.requestCode())
         val intent = createNotificationIntent(notification)
         val pendingIntent = PendingIntent.getBroadcast(
             applicationContext,
@@ -342,6 +358,10 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
 
     private fun createNotificationIntent(notification: NotificationDetails): Intent {
         return Intent(applicationContext, SurveyNotificationsReceiver::class.java).apply {
+            val scope = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.observationScope(
+                applicationContext, com.openlattice.chronicle.collection.CollectionModuleId.QUESTIONNAIRE,
+            ) ?: error("Reminder enrollment retired")
+            putExtra(SURVEY_ENROLLMENT_SCOPE, scope.first)
             putExtra(NOTIFICATION_DETAILS, Gson().toJson(notification))
             putExtra(STUDY_ID, enrollmentSettings.getStudyId().toString())
             putExtra(PARTICIPANT_ID, enrollmentSettings.getParticipantId())

@@ -81,7 +81,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (!enrollmentSettings.isEnrolled()) {
+        val enrolled = try {
+            enrollmentSettings.isEnrolled()
+        } catch (error: LocalStoreRecoveryRequiredException) {
+            startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
+            finish()
+            return
+        }
+        if (!enrolled) {
             DeviceUnlockMonitoringService.stopService(applicationContext)
             startActivity(Intent(this, Enrollment::class.java).apply {
                 data = intent.data

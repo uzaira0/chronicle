@@ -19,7 +19,7 @@ internal object DistributionCollectionContributions {
         context: Context,
         schedule: ExpansionPullSchedule?,
         nowMs: Long,
-    ) = Unit
+    ): Boolean = true
 
     fun uploadAdditionalStreams(
         delegate: ExpansionUploadWorkerDelegate,

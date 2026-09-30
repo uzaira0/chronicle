@@ -53,6 +53,19 @@ class ProcessExitDiagnosticsTest {
     }
 
     @Test
+    fun historicalExitsBeforeTheEnrollmentFloorAreNeverAttributedToItsOwner() {
+        val store = LocalUploadDiagnosticsStore(MemoryPersistence())
+        val floor = now - 1_000
+        recordProcessExits(store, listOf(
+            ProcessExit(ApplicationExitInfo.REASON_CRASH, floor - 1),
+            ProcessExit(ApplicationExitInfo.REASON_ANR, floor + 1),
+        ), watermarkMillis = 0, admissionFloor = floor)
+        val pending = store.pending(LocalDate.now())
+        assertEquals(1, pending.size)
+        assertEquals("APP_ANR", pending.single().issue)
+    }
+
+    @Test
     fun wirePayloadHasNoMessageOrStackField() {
         val fields = AndroidUploadDiagnosticEvent::class.java.declaredFields.map { it.name.lowercase() }
         assertTrue(fields.none { "message" in it || "stack" in it || "trace" in it || "description" in it })

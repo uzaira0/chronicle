@@ -74,15 +74,17 @@ class DirectBootSensorSnapshot(
      * "nothing may collect before unlock". Synchronous commit so callers can trust the
      * locked-boot view once this returns.
      */
-    fun write(collectable: Map<AndroidSensorType, SensorConfig>): Boolean {
+    fun write(collectable: Map<AndroidSensorType, SensorConfig>, consentStamps: Map<AndroidSensorType, String> = emptyMap()): Boolean {
         val editor = prefs.edit()
         AndroidSensorType.entries.forEach { sensor ->
-            editor.remove(KEY_RATE_HZ_PREFIX + sensor.name)
+            editor.remove("db_consent_stamp_" + sensor.name)
+                .remove(KEY_RATE_HZ_PREFIX + sensor.name)
                 .remove(KEY_DUTY_ACTIVE_PREFIX + sensor.name)
                 .remove(KEY_DUTY_PERIOD_PREFIX + sensor.name)
         }
         editor.putStringSet(KEY_SENSORS, collectable.keys.map { it.name }.toSet())
         collectable.forEach { (sensor, config) ->
+            editor.putString("db_consent_stamp_" + sensor.name, consentStamps[sensor])
             editor.putInt(KEY_RATE_HZ_PREFIX + sensor.name, config.samplingRateHz)
                 .putInt(KEY_DUTY_ACTIVE_PREFIX + sensor.name, config.dutyCycleActiveSeconds)
                 .putInt(KEY_DUTY_PERIOD_PREFIX + sensor.name, config.dutyCyclePeriodSeconds)
@@ -90,6 +92,10 @@ class DirectBootSensorSnapshot(
         editor.putLong(KEY_WRITTEN_AT, clock())
         return editor.commit()
     }
+
+    fun writtenAt(): Long? = prefs.getLong(KEY_WRITTEN_AT, -1L).takeIf { it >= 0 }
+
+    fun consentStamp(sensor: AndroidSensorType): String? = prefs.getString("db_consent_stamp_" + sensor.name, null)
 
     /** Removes the snapshot entirely; a locked boot then starts nothing. */
     fun clear(): Boolean = prefs.edit().clear().commit()

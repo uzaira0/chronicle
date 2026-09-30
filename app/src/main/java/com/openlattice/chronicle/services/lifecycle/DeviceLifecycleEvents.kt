@@ -17,7 +17,11 @@ import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
 import com.openlattice.chronicle.storage.QueueEntry
 import com.openlattice.chronicle.utils.Utils
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.collection.state.ResearchErasureFence
 import java.util.concurrent.ThreadLocalRandom
 
 // ANDROID_SYSTEM_* / INTERACTION_BATTERY_* / INTERACTION_LOW_MEMORY are owned by
@@ -42,7 +46,7 @@ const val ACTION_CONNECTIVITY_CHANGE = "android.net.conn.CONNECTIVITY_CHANGE"
 // the legacy and module paths share one dedupe state and suppress identically.
 private const val RECORDER_PREFS_NAME = "chronicle_lifecycle_recorder"
 private const val DEDUPE_WINDOW_MS = 2_000L
-private val lifecycleExecutor = Executors.newSingleThreadExecutor()
+private val lifecycleExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue())
 
 /**
  * Compatibility shim over the Phase 5 [DeviceLifecycleModuleHolder] /
@@ -69,7 +73,23 @@ private val lifecycleExecutor = Executors.newSingleThreadExecutor()
  *    Phase 5 parity tests *and* the migration flip prove the module path is byte-identical;
  *    that flip is a separate, separately-reviewed step. Until then `recordNow` stays.
  */
-object DeviceLifecycleEventRecorder {
+object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
+    init { ResearchErasureFence.registerObserver(this, setOf(CollectionModuleId.DEVICE_LIFECYCLE)) }
+    override fun eraseResearchObservations() { lifecycleExecutor.queue.clear() }
+
+    fun recordObserved(context: Context, observations: () -> List<ExtractedUsageEvent>) {
+        val origin = ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)
+        if (!origin.isCurrent()) return
+        val appContext = context.applicationContext
+        lifecycleExecutor.execute {
+            try {
+                origin.persist { recordAsync(appContext, observations(), origin) }
+            } catch (error: Exception) {
+                Log.w(TAG, "Lifecycle observation deferred after storage failure", error)
+            }
+        }
+    }
+
     private val TAG = DeviceLifecycleEventRecorder::class.java.simpleName
 
     fun eventForBroadcast(intent: Intent): ExtractedUsageEvent? {
@@ -84,24 +104,28 @@ object DeviceLifecycleEventRecorder {
         return LifecycleEventMapper.lowMemoryEvent(level, timestampMillis)
     }
 
-    fun recordAsync(context: Context, event: ExtractedUsageEvent?) {
+    fun recordAsync(context: Context, event: ExtractedUsageEvent?, origin: CollectionPersistenceGuard = ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)) {
         if (event == null) return
-        recordAsync(context, listOf(event))
+        recordAsync(context, listOf(event), origin)
     }
 
-    fun recordAsync(context: Context, events: List<ExtractedUsageEvent>) {
+    fun recordAsync(context: Context, events: List<ExtractedUsageEvent>, origin: CollectionPersistenceGuard = ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)) {
         if (events.isEmpty()) return
         val appContext = context.applicationContext
+        val floor = ResearchPersistenceGate.observationScope(appContext, CollectionModuleId.DEVICE_LIFECYCLE)?.second ?: Long.MAX_VALUE
+        val admittedEvents = events.filter { it.timestamp.toInstant().toEpochMilli() >= floor }
         lifecycleExecutor.execute {
             try {
+                origin.persist {
                 if (LifecycleWorkerMigration.USE_MODULE_MANAGER_LIFECYCLE_PATH) {
                     // Phase 5B module path: route through the sanctioned LifecycleEventSink.
                     // A ModuleResult.Failed is logged + recorded in module diagnostics by
                     // persist() itself — async failures are never silently swallowed.
-                    DeviceLifecycleModuleHolder.get(appContext).persist(events)
+                    DeviceLifecycleModuleHolder.get(appContext).persist(admittedEvents, origin)
                 } else {
                     // Default path: the legacy inline direct writer — the regression baseline.
-                    recordNow(appContext, events)
+                    recordNow(appContext, admittedEvents)
+                }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to persist lifecycle events ${events.joinToString { it.interactionType }}", e)
@@ -124,6 +148,13 @@ object DeviceLifecycleEventRecorder {
      * is removed only once the migration flip proves parity (refactor plan §8.2 #20).
      */
     fun recordNow(context: Context, events: List<ExtractedUsageEvent>): Boolean {
+        val origin = ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)
+        var result = true
+        origin.persist { result = recordNowAdmitted(context, events) }
+        return result
+    }
+
+    private fun recordNowAdmitted(context: Context, events: List<ExtractedUsageEvent>): Boolean {
         if (events.isEmpty()) return true
         val settings = EnrollmentSettings(context)
         if (settings.getParticipationStatus() != ParticipationStatus.ENROLLED) {

@@ -23,7 +23,7 @@ class UploadsFragment : Fragment(R.layout.fragment_uploads) {
             triggerImmediateChronicleSync(requireContext().applicationContext)
             Toast.makeText(requireContext(), R.string.upload_queued, Toast.LENGTH_SHORT).show()
             button.isEnabled = false
-            viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
                 delay(5_000L)
                 button.isEnabled = true
             }
@@ -32,7 +32,7 @@ class UploadsFragment : Fragment(R.layout.fragment_uploads) {
 
     override fun onResume() {
         super.onResume()
-        refreshJob = viewLifecycleOwner.lifecycleScope.launch {
+        refreshJob = viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             while (true) {
                 val snapshot = DashboardDataRepository.load(requireContext())
                 view?.let { bind(it, snapshot) }
@@ -111,8 +111,11 @@ class UploadsFragment : Fragment(R.layout.fragment_uploads) {
                     copy = requireContext().copyResolver(),
                 )
             }
-        val localIssues = renderLocalUploadIssues(snapshot.localUploadIssues, requireContext().copyResolver())
-        view.findViewById<TextView>(R.id.uploadsHistory).text = listOf(serverHistory, localIssues)
+        val localIssues = if (snapshot.localUploadDiagnosticsAvailable) {
+            renderLocalUploadIssues(snapshot.localUploadIssues, requireContext().copyResolver())
+        } else getString(R.string.upload_diagnostics_unavailable)
+        val scheduling = if (snapshot.workSchedulingAvailable) "" else getString(R.string.work_scheduling_unavailable)
+        view.findViewById<TextView>(R.id.uploadsHistory).text = listOf(scheduling, serverHistory, localIssues)
             .filter(String::isNotBlank)
             .joinToString("\n\n")
             .ifBlank { getString(R.string.uploads_none_configured) }

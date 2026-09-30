@@ -36,6 +36,7 @@ public class AppNetworkUsageCollectionModule(
     private val enrolled: () -> Boolean,
     private val clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
+    private val sampleLease: (() -> ModuleResult) -> ModuleResult = { it() },
 ) : DataCollectionModule {
 
     override val id: CollectionModuleId = CollectionModuleId.APP_NETWORK_USAGE
@@ -51,8 +52,7 @@ public class AppNetworkUsageCollectionModule(
     @Volatile
     private var state: SampleState = SampleState(null, ModuleResult.Skipped("not yet run"), 0, null)
 
-    @Synchronized
-    public fun sample(): ModuleResult {
+    public fun sample(): ModuleResult = sampleLease { synchronized(this) {
         val now = clock.nowEpochMs()
         val result = runSample(now)
         state = SampleState(
@@ -61,7 +61,8 @@ public class AppNetworkUsageCollectionModule(
             itemsCollected = if (result is ModuleResult.Ok) result.items else 0,
             lastError = if (result is ModuleResult.Failed) result.redactedMessage else null,
         )
-        return result
+        result
+    }
     }
 
     private fun runSample(now: Long): ModuleResult {

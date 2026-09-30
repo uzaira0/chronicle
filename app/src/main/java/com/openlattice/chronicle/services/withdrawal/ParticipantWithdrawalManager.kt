@@ -1,6 +1,8 @@
 package com.openlattice.chronicle.services.withdrawal
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
+import com.openlattice.chronicle.collection.CollectionModuleId
 import android.content.SharedPreferences
 import android.util.Log
 import androidx.work.Constraints
@@ -66,7 +68,7 @@ public class WithdrawalStateStore internal constructor(
     public fun setState(state: WithdrawalState) {
         val editor = prefs.edit().putString(KEY_STATE, state.name)
         if (state == WithdrawalState.COMPLETE) editor.remove(KEY_WITHDRAWAL_REQUEST_ID)
-        check(editor.commit()) {
+        checkLocalStoreWrite(editor.commit()) {
             "Failed to persist participant withdrawal state"
         }
     }
@@ -89,7 +91,7 @@ public class WithdrawalStateStore internal constructor(
             "Cannot replace a withdrawal request identity before reenrollment commits"
         }
         val requestId = UUID.randomUUID().toString()
-        check(
+        checkLocalStoreWrite(
             prefs.edit()
                 .putString(KEY_STATE, WithdrawalState.PENDING.name)
                 .putString(KEY_WITHDRAWAL_REQUEST_ID, requestId)
@@ -113,7 +115,7 @@ public class WithdrawalStateStore internal constructor(
         // Upgrade recovery for withdrawals persisted by a client predating request IDs, or for a
         // malformed local value. Commit the replacement before it can reach an HTTP header.
         val generated = UUID.randomUUID().toString()
-        check(prefs.edit().putString(KEY_WITHDRAWAL_REQUEST_ID, generated).commit()) {
+        checkLocalStoreWrite(prefs.edit().putString(KEY_WITHDRAWAL_REQUEST_ID, generated).commit()) {
             "Failed to persist participant withdrawal request id"
         }
         return generated
@@ -127,7 +129,7 @@ public class WithdrawalStateStore internal constructor(
 
     public fun acknowledgeServer(id: Long) {
         val updated = acknowledgedServerIds().toMutableSet().apply { add(id) }
-        check(
+        checkLocalStoreWrite(
             prefs.edit()
                 .putStringSet(KEY_ACKNOWLEDGED_SERVERS, updated.mapTo(linkedSetOf(), Long::toString))
                 .commit(),
@@ -137,7 +139,7 @@ public class WithdrawalStateStore internal constructor(
     }
 
     public fun resetAcknowledgments() {
-        check(
+        checkLocalStoreWrite(
             prefs.edit()
                 .remove(KEY_ACKNOWLEDGED_SERVERS)
                 .remove(KEY_SERVER_DELETION_NEEDS_SUPPORT)
@@ -148,7 +150,7 @@ public class WithdrawalStateStore internal constructor(
     }
 
     public fun requireServerDeletionSupport() {
-        check(prefs.edit().putBoolean(KEY_SERVER_DELETION_NEEDS_SUPPORT, true).commit()) {
+        checkLocalStoreWrite(prefs.edit().putBoolean(KEY_SERVER_DELETION_NEEDS_SUPPORT, true).commit()) {
             "Failed to persist the server-deletion support requirement"
         }
     }
@@ -157,7 +159,7 @@ public class WithdrawalStateStore internal constructor(
         prefs.getBoolean(KEY_SERVER_DELETION_NEEDS_SUPPORT, false)
 
     public fun resetForReenrollment() {
-        check(
+        checkLocalStoreWrite(
             prefs.edit()
                 .remove(KEY_STATE)
                 .remove(KEY_ACKNOWLEDGED_SERVERS)
@@ -175,7 +177,7 @@ public class WithdrawalStateStore internal constructor(
      */
     public fun completeReenrollment(studyId: UUID, participantId: String) {
         InteractionPolicySettings.invalidateMemoryCache()
-        check(
+        checkLocalStoreWrite(
             prefs.edit()
                 .putString(STUDY_ID, studyId.toString())
                 .putString(PARTICIPANT_ID, participantId)
@@ -232,8 +234,10 @@ public object ParticipantWithdrawalManager {
         val stateStore = WithdrawalStateStore(appContext)
         var createdRequest = false
         try {
-            ResearchPersistenceGate.stop {
+            ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation("withdrawal")) {
                 if (stateStore.state() == WithdrawalState.NONE) {
+                    com.openlattice.chronicle.collection.state.ResearchErasureFence(appContext)
+                        .erase(CollectionModuleId.values().toSet(), durableIntent = false)
                     stateStore.beginWithdrawal()
                     createdRequest = true
                 }
@@ -242,7 +246,6 @@ public object ParticipantWithdrawalManager {
                     settings.setParticipationStatus(ParticipationStatus.NOT_ENROLLED)
                 }
                 CollectionAckRetryQueue.of(appContext).clearForWithdrawal()
-                LocalUploadDiagnosticsStore.of(appContext).clear()
             }
         } catch (error: Exception) {
             Log.e(TAG, "Unable to persist the withdrawal request", error)
@@ -258,9 +261,13 @@ public object ParticipantWithdrawalManager {
     /** Reasserts and re-enqueues an unfinished durable request after process death. */
     public fun resumePending(context: Context) {
         val appContext = context.applicationContext
+        ResearchPersistenceGate.executeAsync { resumePendingOnWorker(appContext) }
+    }
+
+    internal fun resumePendingOnWorker(appContext: Context) {
         if (!collectionMustRemainStopped(appContext)) return
         runCatching {
-            ResearchPersistenceGate.stop {
+            ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation("withdrawal")) {
                 val settings = EnrollmentSettings(appContext)
                 if (settings.getParticipationStatus() != ParticipationStatus.NOT_ENROLLED) {
                     settings.setParticipationStatus(ParticipationStatus.NOT_ENROLLED)
@@ -295,15 +302,22 @@ public class ParticipantWithdrawalWorker(
     context: Context,
     params: WorkerParameters,
 ) : Worker(context, params) {
-    override fun doWork(): Result = UploadQueueSingleFlight.withExclusiveMutation {
-        performWithdrawal()
+    override fun doWork(): Result {
+        if (WithdrawalStateStore(applicationContext).state() != WithdrawalState.PENDING) return Result.success()
+        ParticipantWithdrawalManager.enforceCollectionStopped(applicationContext)
+        val diagnostics = try {
+            LocalUploadDiagnosticsStore.of(applicationContext)
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to prepare withdrawal diagnostics erasure", error)
+            return Result.retry()
+        }
+        return performWithdrawal(diagnostics)
     }
 
-    private fun performWithdrawal(): Result {
+    private fun requestWithdrawalAcknowledgments(): Pair<List<com.openlattice.chronicle.storage.UploadServerEntity>, Boolean>? {
         val appContext = applicationContext
         val stateStore = WithdrawalStateStore(appContext)
-        if (stateStore.state() != WithdrawalState.PENDING) return Result.success()
-        ParticipantWithdrawalManager.enforceCollectionStopped(appContext)
+        if (stateStore.state() != WithdrawalState.PENDING) return null
         val db = ChronicleDb.getInstance(appContext)
         val servers = listOfNotNull(db.uploadServerDao().getConfiguredServer())
         val acknowledged = stateStore.acknowledgedServerIds()
@@ -313,7 +327,7 @@ public class ParticipantWithdrawalWorker(
             stateStore.withdrawalRequestIdForRetry()
         } catch (error: RuntimeException) {
             Log.e(TAG, "Failed to persist the withdrawal request identity", error)
-            return Result.retry()
+            return null
         }
 
         for (server in servers) {
@@ -337,9 +351,45 @@ public class ParticipantWithdrawalWorker(
                 // Do not convert a temporary outage into an abandoned erasure request. The
                 // idempotency identity and credential remain encrypted locally and WorkManager
                 // retries with backoff until the authoritative server acknowledges withdrawal.
-                return Result.retry()
+                return null
             }
         }
+
+        return servers to needsSupport
+    }
+
+    private fun performWithdrawal(diagnostics: LocalUploadDiagnosticsStore): Result {
+        // Release the upload lock before acquiring stop for acknowledged local erasure.
+        val acknowledged = UploadQueueSingleFlight.withExclusiveMutation { requestWithdrawalAcknowledgments() }
+            ?: return if (WithdrawalStateStore(applicationContext).state() == WithdrawalState.PENDING) Result.retry() else Result.success()
+        var result: Result = Result.retry()
+        return try {
+            ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation("withdrawal")) {
+                result = UploadQueueSingleFlight.withExclusiveMutation {
+                    finishAcknowledgedWithdrawal(diagnostics, acknowledged.first, acknowledged.second)
+                }
+            }
+            result
+        } catch (error: Exception) {
+            Log.e(TAG, "Acknowledged withdrawal cleanup will retry", error)
+            Result.retry()
+        }
+    }
+
+    private fun finishAcknowledgedWithdrawal(
+        diagnostics: LocalUploadDiagnosticsStore,
+        servers: List<com.openlattice.chronicle.storage.UploadServerEntity>,
+        needsSupport: Boolean,
+    ): Result {
+        val appContext = applicationContext
+        val stateStore = WithdrawalStateStore(appContext)
+        if (stateStore.state() != WithdrawalState.PENDING) return Result.success()
+        val db = ChronicleDb.getInstance(appContext)
+        if (db.uploadServerDao().getConfiguredServer()?.let {
+                com.openlattice.chronicle.collection.state.ResearchErasureFence.enrollmentKey(it)
+            } != servers.singleOrNull()?.let(com.openlattice.chronicle.collection.state.ResearchErasureFence::enrollmentKey)) return Result.retry()
+        com.openlattice.chronicle.collection.state.ResearchErasureFence(appContext)
+            .erase(CollectionModuleId.values().toSet(), durableIntent = false)
 
         return try {
             val enrollmentSettings = EnrollmentSettings(appContext)
@@ -348,6 +398,10 @@ public class ParticipantWithdrawalWorker(
                 EncryptionSettingStore.of(appContext).evict(studyId)
             }
             CollectionAckRetryQueue.of(appContext).clearForWithdrawal()
+            // Also remove the legacy encrypted diagnostics preference after acknowledgment.
+            com.openlattice.chronicle.collection.device.AndroidAppNetworkUsageSource.clearCheckpoint(appContext)
+            com.openlattice.chronicle.collection.state.eraseResearchSourceState(appContext)
+            diagnostics.clear()
             db.clearAllTables()
             val recoveryScopes = servers.map { it.studyId to it.participantId }.toMutableSet()
             if (studyId != com.openlattice.chronicle.preferences.INVALID_STUDY_ID &&
@@ -357,7 +411,9 @@ public class ParticipantWithdrawalWorker(
             recoveryScopes.forEach { (study, participant) ->
                 LocalStoreRecoveryManager.eraseForEnrollment(appContext, study, participant)
             }
-            enrollmentSettings.clearEnrollment(eraseLocalData = true)
+            enrollmentSettings.clearEnrollment(eraseLocalData = true, diagnostics = diagnostics)
+            val fence = com.openlattice.chronicle.collection.state.ResearchErasureFence(appContext)
+            fence.pending().forEach(fence::completed)
             stateStore.setState(
                 if (needsSupport || stateStore.serverDeletionNeedsSupport()) {
                     WithdrawalState.NEEDS_SUPPORT

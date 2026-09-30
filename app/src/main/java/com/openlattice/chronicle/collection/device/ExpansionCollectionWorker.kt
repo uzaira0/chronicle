@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.device
 import android.content.Context
 import android.util.Log
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.BackoffPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
@@ -25,17 +26,15 @@ private const val EXPANSION_COLLECTION_INTERVAL_MIN = 15L
  *  - ensures Play Services registration for the push modules sleep / activity_recognition matches
  *    current consent (idempotent — registers consented, removes declined).
  *
- * Always reports [Result.success]: a module that is gated off skips, and the modules convert any
- * failure into a logged [ModuleResult] rather than throwing, so this worker never crashes the
- * WorkManager dispatcher.
+ * Gated modules skip; failed reads/writes retry locally with WorkManager's backoff.
  */
 class ExpansionCollectionWorker(context: Context, workerParameters: WorkerParameters) :
     Worker(context, workerParameters) {
 
     override fun doWork(): Result {
         // Periodic path: honor each module's per-module collection interval via a last-run gate.
-        collectExpansionSamples(applicationContext, ExpansionPullSchedule(applicationContext))
-        return Result.success()
+        return if (collectExpansionSamples(applicationContext, ExpansionPullSchedule(applicationContext))) Result.success()
+        else Result.retry()
     }
 }
 
@@ -48,12 +47,13 @@ class ExpansionCollectionWorker(context: Context, workerParameters: WorkerParame
  * interval is enforced: a module is sampled only when due, and a successful sample resets its
  * interval clock. When [schedule] is null (immediate "upload now") every module samples.
  */
-fun collectExpansionSamples(context: Context, schedule: ExpansionPullSchedule? = null) {
+fun collectExpansionSamples(context: Context, schedule: ExpansionPullSchedule? = null): Boolean {
     val appContext = context.applicationContext
     val now = System.currentTimeMillis()
-    pullExpansionModule(CollectionModuleId.CONNECTIVITY_STATE, schedule, now) { ConnectivityStateModuleHolder.get(appContext).sample() }
-    pullExpansionModule(CollectionModuleId.DEVICE_SETTINGS, schedule, now) { DeviceSettingsModuleHolder.get(appContext).sample() }
-    DistributionCollectionContributions.collectAdditionalSamples(appContext, schedule, now)
+    val connectivity = pullExpansionModule(CollectionModuleId.CONNECTIVITY_STATE, schedule, now) { ConnectivityStateModuleHolder.get(appContext).sample() }
+    val settings = pullExpansionModule(CollectionModuleId.DEVICE_SETTINGS, schedule, now) { DeviceSettingsModuleHolder.get(appContext).sample() }
+    val additional = DistributionCollectionContributions.collectAdditionalSamples(appContext, schedule, now)
+    return connectivity && settings && additional
 }
 
 internal inline fun pullExpansionModule(
@@ -61,12 +61,12 @@ internal inline fun pullExpansionModule(
     schedule: ExpansionPullSchedule?,
     nowMs: Long,
     block: () -> ModuleResult,
-) {
+): Boolean {
     if (schedule != null && !schedule.isDue(moduleId, nowMs)) {
         Log.d(TAG, "${moduleId.id} not due yet (interval ${schedule.intervalSeconds(moduleId)}s); skipping")
-        return
+        return true
     }
-    try {
+    return try {
         val result = block()
         when (result) {
             is ModuleResult.Failed -> Log.w(TAG, "${moduleId.id} sample failed: ${result.redactedMessage}")
@@ -75,9 +75,11 @@ internal inline fun pullExpansionModule(
             is ModuleResult.Ok -> schedule?.markRan(moduleId, nowMs)
             else -> Unit
         }
+        result !is ModuleResult.Failed && result !is ModuleResult.Retry
     } catch (e: Exception) {
         // sample() does not throw by contract; defence-in-depth so one module can't crash the run.
         Log.w(TAG, "${moduleId.id} collection threw unexpectedly", e)
+        false
     }
 }
 
@@ -86,7 +88,7 @@ fun scheduleExpansionCollectionWork(context: Context) {
     val workRequest = PeriodicWorkRequestBuilder<ExpansionCollectionWorker>(
         EXPANSION_COLLECTION_INTERVAL_MIN,
         TimeUnit.MINUTES,
-    ).build()
+    ).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
 
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         EXPANSION_COLLECTION_WORK_NAME,

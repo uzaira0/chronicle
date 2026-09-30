@@ -18,7 +18,13 @@ internal object DistributionRestrictedRuntime {
     fun scheduleSensorSettingsRefresh(context: Context): Unit = Unit
     fun reinitializeDirectBootProcess(context: Context): Unit = Unit
     fun drainDirectBootSamples(context: Context): Unit = Unit
+    fun pendingDirectBootSensorErasures(context: Context): Set<String> = emptySet()
+    fun markDirectBootSensorErasures(context: Context, sensorTypes: Set<String>): Unit = Unit
     fun eraseDirectBootSensorSamples(context: Context, sensorType: String): Unit = Unit
+    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) { check(context.getSharedPreferences("activity_registration_scopes", Context.MODE_PRIVATE).edit().remove(module.id).commit()) }
+
+    fun eraseHealthSource(context: Context) { check(context.getSharedPreferences("chronicle_health_connect", Context.MODE_PRIVATE).edit().clear().commit()) }
+
     fun uploadSensors(context: Context, db: ChronicleDb): Int = 0
 
     fun reportSensorAvailability(

@@ -59,7 +59,6 @@ object TargetUserRouter {
      * holds one; otherwise a fresh instance is constructed (identical to the historical
      * call sites that did `EnrollmentSettings(context).setTargetUser(...)`).
      */
-    @Synchronized
     fun setTargetUser(
         context: Context,
         user: String,
@@ -71,31 +70,33 @@ object TargetUserRouter {
         val settings = enrollmentSettings ?: EnrollmentSettings(context)
         var result: ModuleResult = ModuleResult.Skipped("no active study enrollment")
         val persisted = ResearchPersistenceGate.persistIfActive(context) {
-            // Re-read both scope layers inside the same withdrawal barrier as the actual write.
-            // An Activity or notification that was already open cannot outlive study authorization,
-            // a participant toggle-off, or a terminal withdrawal and then persist a late label.
-            result = when (
-                targetUserWriteRoute(
-                    studyAuthorized = settings.isUserIdentificationStudyAuthorized(),
-                    participantEnabled = settings.isUserIdentificationEnabled() &&
-                        CollectionGate.collects(context, CollectionModuleId.USER_IDENTIFICATION),
-                    resettingToUnassigned = user == context.getString(R.string.user_unassigned),
-                )
-            ) {
-                TargetUserWriteRoute.MODULE -> {
-                    if (UserIdentificationMigration.USE_MODULE_MANAGER_USER_IDENTIFICATION_PATH) {
-                        UserIdentificationModuleHolder.get(context).setTargetUser(user)
-                    } else {
+            synchronized(this) {
+                // Re-read both scope layers inside the same withdrawal barrier as the actual write.
+                // An Activity or notification that was already open cannot outlive study authorization,
+                // a participant toggle-off, or a terminal withdrawal and then persist a late label.
+                result = when (
+                    targetUserWriteRoute(
+                        studyAuthorized = settings.isUserIdentificationStudyAuthorized(),
+                        participantEnabled = settings.isUserIdentificationEnabled() &&
+                            CollectionGate.collects(context, CollectionModuleId.USER_IDENTIFICATION),
+                        resettingToUnassigned = user == context.getString(R.string.user_unassigned),
+                    )
+                ) {
+                    TargetUserWriteRoute.MODULE -> {
+                        if (UserIdentificationMigration.USE_MODULE_MANAGER_USER_IDENTIFICATION_PATH) {
+                            UserIdentificationModuleHolder.get(context).setTargetUser(user)
+                        } else {
+                            settings.setTargetUser(user)
+                            ModuleResult.Ok(1)
+                        }
+                    }
+                    TargetUserWriteRoute.RESET_TO_UNASSIGNED -> {
                         settings.setTargetUser(user)
                         ModuleResult.Ok(1)
                     }
+                    TargetUserWriteRoute.REJECT ->
+                        ModuleResult.Skipped("user identification is outside the active study scope")
                 }
-                TargetUserWriteRoute.RESET_TO_UNASSIGNED -> {
-                    settings.setTargetUser(user)
-                    ModuleResult.Ok(1)
-                }
-                TargetUserWriteRoute.REJECT ->
-                    ModuleResult.Skipped("user identification is outside the active study scope")
             }
         }
         if (persisted) result else ModuleResult.Skipped("no active study enrollment")

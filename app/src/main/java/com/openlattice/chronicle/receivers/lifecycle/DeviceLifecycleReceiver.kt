@@ -9,13 +9,9 @@ import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
 
 class DeviceLifecycleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == ACTION_CONNECTIVITY_CHANGE) {
-            DeviceLifecycleEventRecorder.recordAsync(context, DeviceStateSampler(context).poll())
-        } else {
-            DeviceLifecycleEventRecorder.recordAsync(
-                context,
-                DeviceLifecycleEventRecorder.eventForBroadcast(intent)
-            )
+        DeviceLifecycleEventRecorder.recordObserved(context) {
+            if (intent.action == ACTION_CONNECTIVITY_CHANGE) DeviceStateSampler(context).poll()
+            else listOfNotNull(DeviceLifecycleEventRecorder.eventForBroadcast(intent))
         }
     }
 }

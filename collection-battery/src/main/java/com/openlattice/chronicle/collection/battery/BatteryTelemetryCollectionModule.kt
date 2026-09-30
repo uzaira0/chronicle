@@ -10,6 +10,7 @@ import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.collection.sink.BatterySampleSink
 import com.openlattice.chronicle.storage.BatterySampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
@@ -130,6 +131,7 @@ public class BatteryTelemetryCollectionModule(
         if (!enrolled()) {
             return ModuleResult.Skipped("participant not enrolled")
         }
+        val observation = sink.captureAdmission()
         val owner = ownerForSample()
 
         val reading: BatteryReading? = try {
@@ -160,7 +162,7 @@ public class BatteryTelemetryCollectionModule(
             health = reading.health.name,
         )
 
-        return when (val writeResult = sink.write(listOf(entry)).also {
+        return when (val writeResult = observation.writeObservation { sink.write(listOf(entry)) }.also {
             accountWriteResult(owner, it, 1)
         }) {
             is ModuleResult.Ok -> {

@@ -17,10 +17,14 @@ import org.robolectric.RobolectricTestRunner
 /** Lost and refused writes are counted only for the enrollment that produced them. */
 @RunWith(RobolectricTestRunner::class)
 class EnrollmentBoundLossTest {
+    @get:org.junit.Rule val backgroundPersistence = com.openlattice.chronicle.collection.state.BackgroundPersistenceRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val db get() = ChronicleDb.getInstance(context)
 
-    @Before fun setUp() = TestStores.install(context, enrolled = true)
+    @Before fun setUp() {
+        TestStores.install(context, enrolled = true)
+        ResearchPersistenceGate.initialize(context)
+    }
 
     private fun diagnosticCount(issue: String) = db.openHelper.readableDatabase
         .query("SELECT coalesce(sum(count), 0) FROM upload_diagnostics WHERE issueCode = ?", arrayOf(issue))

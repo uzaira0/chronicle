@@ -238,5 +238,14 @@ fun clearDirectBootSensorBuffer(context: Context): Boolean = synchronized(DIRECT
     val otherCleared = dir.listFiles()?.filter { it != liveFile && it != drainingFile }
         ?.all(File::deleteRecursively) ?: true
     if (liveCleared && drainingCleared && otherCleared) dir.delete()
-    liveCleared && drainingCleared && otherCleared
+    // A pending storage-pause episode belongs to the erased enrollment too.
+    val protectedContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        context.createDeviceProtectedStorageContext()
+    } else context
+    val admissionCleared = protectedContext.getSharedPreferences("direct_boot_storage_admission", Context.MODE_PRIVATE)
+        .edit().clear().commit()
+    val erasuresCleared = liveCleared && drainingCleared && otherCleared &&
+        protectedContext.getSharedPreferences("direct_boot_pending_sensor_erasures", Context.MODE_PRIVATE)
+            .edit().clear().commit()
+    liveCleared && drainingCleared && otherCleared && admissionCleared && erasuresCleared
 }

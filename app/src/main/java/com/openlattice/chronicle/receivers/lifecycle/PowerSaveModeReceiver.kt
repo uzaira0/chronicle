@@ -18,6 +18,17 @@ class PowerSaveModeReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        try {
+            handlePowerSave(context)
+        } catch (error: Exception) {
+            Log.e(TAG, "Power-save collection initialization unavailable", error)
+            DistributionRestrictedRuntime.stopHardwareSensors(context)
+        }
+    }
+
+    private fun handlePowerSave(context: Context) {
+        val origin = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.captureObservation(
+            context, com.openlattice.chronicle.collection.CollectionModuleId.DEVICE_LIFECYCLE)
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         if (powerManager.isPowerSaveMode) {
             Log.i(TAG, "Power save mode ON - stopping sensor collection")
@@ -27,7 +38,8 @@ class PowerSaveModeReceiver : BroadcastReceiver() {
                     "android.os.action.POWER_SAVE_MODE_CHANGED:on",
                     INTERACTION_POWER_SAVE_MODE_ON,
                     System.currentTimeMillis()
-                )
+                ),
+                origin,
             )
             if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS && SensorSettings(context).isEnabled()) {
                 DistributionRestrictedRuntime.stopHardwareSensors(context)
@@ -40,7 +52,8 @@ class PowerSaveModeReceiver : BroadcastReceiver() {
                     "android.os.action.POWER_SAVE_MODE_CHANGED:off",
                     INTERACTION_POWER_SAVE_MODE_OFF,
                     System.currentTimeMillis()
-                )
+                ),
+                origin,
             )
             if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS && SensorSettings(context).isEnabled()) {
                 DistributionRestrictedRuntime.startHardwareSensors(context)

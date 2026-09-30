@@ -263,7 +263,7 @@ class SensorUploadWorkerDelegate internal constructor(
 
         val result = drainSensorBatches(
             enabledDestinations = servers,
-            loadOldest = dao::getOldest,
+            loadOldest = { limit -> dao.getOldest(limit) },
             isAcknowledged = { server, sampleIds ->
                 dao.countDeliveriesForServer(
                     server.id, server.sensorDeliveryGeneration, sampleIds,

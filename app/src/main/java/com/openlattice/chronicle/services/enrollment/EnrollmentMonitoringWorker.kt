@@ -64,7 +64,7 @@ class EnrollmentMonitoringWorker(
                 return Result.success()
             }
             if (server.authMode == AUTH_MODE_API_KEY) {
-                persistStatusIfSameActiveEnrollment(ParticipationStatus.ENROLLED)
+                persistStatusIfSameActiveEnrollment(ParticipationStatus.ENROLLED, server)
                 Log.i(TAG, "Skipping legacy participation status endpoint for API-key enrollment")
                 LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_MONITOR_SUCCESS, null)
                 return Result.success()
@@ -75,10 +75,12 @@ class EnrollmentMonitoringWorker(
                 server.mobileSigningSecretOverride,
             )
 
-            val participationStatus =
+            val generation = com.openlattice.chronicle.collection.state.ResearchErasureFence(applicationContext).settingsGeneration()
+            val participationStatus = ResearchPersistenceGate.runIfExpectedOwner(applicationContext, server) {
                 chronicleApi.getParticipationStatus(studyId, participantId) ?: ParticipationStatus.UNKNOWN
+            } ?: return Result.success()
 
-            persistStatusIfSameActiveEnrollment(participationStatus)
+            ResearchPersistenceGate.applyParticipationStatus(applicationContext, server, generation, participationStatus)
 
             Log.i(TAG, "Updated participation status: $participationStatus")
             LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_MONITOR_SUCCESS, null)
@@ -92,15 +94,11 @@ class EnrollmentMonitoringWorker(
     }
 
     /** Serializes the final identity/status mutation against withdrawal's stop barrier. */
-    private fun persistStatusIfSameActiveEnrollment(status: ParticipationStatus): Boolean =
-        ResearchPersistenceGate.runIfActive(applicationContext) {
-            val current = EnrollmentSettings(applicationContext)
-            check(current.getStudyId() == studyId && current.getParticipantId() == participantId) {
-                "Enrollment identity changed during status refresh"
-            }
-            current.setParticipationStatus(status)
-            true
-        } == true
+    private fun persistStatusIfSameActiveEnrollment(status: ParticipationStatus,
+        expected: com.openlattice.chronicle.storage.UploadServerEntity): Boolean =
+        ResearchPersistenceGate.applyParticipationStatus(applicationContext, expected,
+            com.openlattice.chronicle.collection.state.ResearchErasureFence(applicationContext).settingsGeneration(), status)
+
 }
 
 fun scheduleEnrollmentMonitoringWork(context: Context) {

@@ -147,7 +147,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         }
 
         view.findViewById<MaterialButton>(R.id.openServerSettingsButton).setOnClickListener {
-            viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
                 val snapshot = DashboardDataRepository.load(requireContext())
                 val intent = Intent(requireContext(), ServerEnrollmentActivity::class.java)
                 snapshot.servers.firstOrNull()?.let {
@@ -178,7 +178,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             showNotificationPermissionRecovery()
             return
         }
-        viewLifecycleOwner.lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             val (persisted, targetResult) = withContext(Dispatchers.IO) {
                 var targetResult: ModuleResult? = null
                 var studyAuthorized = false
@@ -255,7 +255,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
 
     private fun persistTargetUser(user: String) {
         val appContext = requireContext().applicationContext
-        viewLifecycleOwner.lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             val result = try {
                 withContext(Dispatchers.IO) {
                     TargetUserRouter.setTargetUser(appContext, user, settings)
@@ -299,7 +299,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             }
             isEnabled = false
         }
-        viewLifecycleOwner.lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             val state = withContext(Dispatchers.IO) {
                 val activeEnrollment = ResearchPersistenceGate.isActiveEnrollment(appContext)
                 val userIdentificationAuthorized =
@@ -447,7 +447,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
 
     private fun withNotificationAccessAllowed(onAllowed: (Set<CollectionModuleId>) -> Unit) {
         val appContext = requireContext().applicationContext
-        viewLifecycleOwner.lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             val activeModules = withContext(Dispatchers.IO) {
                 val moduleStates = CollectionLoopStore.of(appContext).loadAll().values
                 if (notificationAccessMayBeRequested(
@@ -515,12 +515,11 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     }
 
     private fun setServerEnabled(serverId: Long, enabled: Boolean) {
-        viewLifecycleOwner.lifecycleScope.launch {
-            withContext(Dispatchers.IO) {
-                ChronicleDb.getInstance(requireContext().applicationContext)
-                    .uploadServerDao()
-                    .setEnabled(serverId, enabled)
-            }
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
+            withContext(Dispatchers.IO) { participantStorageWrite {
+                com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+                    .setServerEnabled(requireContext().applicationContext, serverId, enabled)
+            }.getOrThrow() }
             view?.let { refresh(it) }
         }
     }

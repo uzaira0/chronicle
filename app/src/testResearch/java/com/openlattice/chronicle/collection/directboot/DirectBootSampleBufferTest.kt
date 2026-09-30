@@ -9,6 +9,7 @@ import java.io.FileOutputStream
 import java.util.UUID
 import com.openlattice.chronicle.serialization.JsonSerializer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -172,6 +173,84 @@ class DirectBootSampleBufferTest {
         assertEquals(1, result.corruptRecordsDropped)
         assertFalse(result.failed)
         assertTrue(buffer.isEmpty())
+        assertArrayEquals(byteArrayOf(0, 0, 1, 0, 42),
+            tmp.root.listFiles()!!.single { it.name.startsWith("corrupt-") }.readBytes())
+    }
+
+    @Test
+    fun `sensor discard scrubs retained owner and whole file corrupt copies and erases undecodable bytes`() {
+        val buffer = buffer()
+        buffer.append(listOf(sample("erase"), sample("keep", "gyroscope")))
+        val live = File(tmp.root, "buffer.bin")
+        val quarantine = File(tmp.newFolder("quarantine"), "owner-existing.bin")
+        live.copyTo(quarantine)
+        val badBlob = cipher.encrypt("not JSON".toByteArray())
+        DataOutputStream(FileOutputStream(live, true)).use {
+            it.writeInt(badBlob.size)
+            it.write(badBlob)
+        }
+        val tail = byteArrayOf(0, 0, 1, 0, 42)
+        live.appendBytes(tail)
+        val corrupt = File(tmp.root, "corrupt-existing.bin")
+        live.copyTo(corrupt)
+
+        assertEquals(1, buffer.eraseSensorType("accelerometer", "test-owner"))
+        assertEquals(0, buffer.eraseSensorType("accelerometer", "test-owner"))
+        listOf(live, quarantine, corrupt).forEachIndexed { index, retained ->
+            val replayDir = tmp.newFolder("replay-$index")
+            retained.copyTo(File(replayDir, "buffer.bin"))
+            val imported = mutableListOf<String>()
+            val result = buffer(replayDir).drain { batch ->
+                imported += batch.map { it.id }
+                transferred(batch)
+            }
+            assertEquals(listOf("keep"), imported)
+            assertEquals(0, result.corruptRecordsDropped)
+        }
+    }
+
+    @Test
+    fun `sensor discard retains records belonging to another known owner`() {
+        val other = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog, ownerForAppend = { "other" })
+        other.append(listOf(sample("other")))
+        other.drain("test-owner") { transferred(it) }
+        buffer().append(listOf(sample("current")))
+
+        assertEquals(1, buffer().eraseSensorType("accelerometer", "test-owner"))
+        val replayDir = tmp.newFolder("replay")
+        File(tmp.root, "quarantine").listFiles()!!.single().copyTo(File(replayDir, "buffer.bin"))
+        val imported = mutableListOf<String>()
+        buffer(replayDir).drain("other") { batch ->
+            imported += batch.map { it.id }
+            transferred(batch)
+        }
+        assertEquals(listOf("other"), imported)
+    }
+
+    @Test
+    fun `build 63 obfuscated batch and sample fields are preserved and reported without crashing`() {
+        val losses = mutableListOf<Pair<String, Int>>()
+        val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
+            reportLoss = { code, count, _ -> losses += code to count })
+        val blobs = listOf(
+            """{"a":"test-owner","b":[{"a":"old","b":"accelerometer","c":"2026-07-15T18:18:09.282Z","d":"UTC","e":0.1,"f":-9.8,"g":0.02,"h":null,"i":3,"j":null}]}""",
+            """[{"a":"legacy","b":"accelerometer","c":"2026-07-15T18:18:09.282Z","d":"UTC","e":0.1,"f":-9.8,"g":0.02,"h":null,"i":3,"j":null}]""",
+        ).map { cipher.encrypt(it.toByteArray()) }
+        DataOutputStream(FileOutputStream(File(tmp.root, "buffer.bin"))).use { output ->
+            blobs.forEach { output.writeInt(it.size); output.write(it) }
+        }
+        buffer.append(listOf(sample("good")))
+        val imported = mutableListOf<String>()
+        val result = buffer.drain { batch ->
+            imported += batch.map { it.id }
+            transferred(batch)
+        }
+        assertEquals(listOf("good"), imported)
+        assertEquals(2, result.corruptRecordsDropped)
+        assertFalse(result.failed)
+        assertEquals(List(2) { "DIRECT_BOOT_CORRUPT_RECORD" to 1 }, losses)
+        val copies = tmp.root.listFiles()!!.filter { it.name.startsWith("corrupt-") }
+        blobs.forEach { blob -> assertTrue(copies.any { it.readBytes().contentEquals(blob) }) }
     }
 
     @Test
@@ -310,22 +389,44 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `records from before ownership drain under the current enrollment after an upgrade`() {
-        val plaintext = JsonSerializer.toJson(listOf(sample("legacy"))).toByteArray()
+    fun `only ownerless records captured at or after enrollment creation are adopted`() {
+        val plaintext = JsonSerializer.toJson(listOf(
+            sample("before").copy(timestamp = "2026-07-15T18:18:09.281Z"),
+            sample("at"),
+            sample("after").copy(timestamp = "2026-07-15T13:18:09.283-05:00"),
+            sample("invalid").copy(timestamp = "invalid"),
+        )).toByteArray()
         val blob = cipher.encrypt(plaintext)
         DataOutputStream(FileOutputStream(File(tmp.root, "buffer.bin"))).use {
             it.writeInt(blob.size)
             it.write(blob)
         }
         val imported = mutableListOf<String>()
-        buffer().drain { batch ->
+        buffer().drain(enrollmentCreatedAt = "2026-07-15T18:18:09.282Z") { batch ->
             imported += batch.map { it.id }
             transferred(batch)
         }
-        // 2026.9.27 and earlier cleared the buffer with the enrollment, so an ownerless record
-        // can only belong to the enrollment that is draining it.
-        assertEquals(listOf("legacy"), imported)
-        assertTrue(File(tmp.root, "quarantine").listFiles().isNullOrEmpty())
+        assertEquals(listOf("at", "after"), imported)
+        val replayDir = tmp.newFolder("legacy-quarantine")
+        File(tmp.root, "quarantine").listFiles()!!.single().copyTo(File(replayDir, "buffer.bin"))
+        val quarantined = mutableListOf<String>()
+        buffer(replayDir).drain(enrollmentCreatedAt = "2026-07-15T18:18:09.280Z") { batch ->
+            quarantined += batch.map { it.id }
+            transferred(batch)
+        }
+        assertEquals(listOf("before"), quarantined)
+        assertEquals(1, File(replayDir, "quarantine").listFiles()?.size)
+    }
+
+    @Test
+    fun `ownerless records without a provable enrollment creation time are quarantined`() {
+        val blob = cipher.encrypt(JsonSerializer.toJson(listOf(sample("legacy"))).toByteArray())
+        DataOutputStream(FileOutputStream(File(tmp.root, "buffer.bin"))).use {
+            it.writeInt(blob.size)
+            it.write(blob)
+        }
+        assertEquals(0, buffer().drain { transferred(it) }.persisted)
+        assertEquals(1, File(tmp.root, "quarantine").listFiles()?.size)
     }
 
     @Test

@@ -4,6 +4,8 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Delete
+import androidx.room.Update
 
 @Dao
 interface UploadDiagnosticDao {
@@ -67,8 +69,20 @@ interface LocalDataQuarantineDao {
     @Query("SELECT * FROM local_data_quarantine WHERE sourceTable = :sourceTable AND sourceId = :sourceId")
     fun get(sourceTable: String, sourceId: String): LocalDataQuarantineEntity?
 
+    @Query("SELECT * FROM local_data_quarantine WHERE sourceTable = :sourceTable")
+    fun forSource(sourceTable: String): List<LocalDataQuarantineEntity>
+
+    @Update
+    fun update(row: LocalDataQuarantineEntity)
+
+    @Delete
+    fun delete(row: LocalDataQuarantineEntity)
+
     @Query("SELECT COUNT(*) FROM local_data_quarantine WHERE sourceTable = :sourceTable")
     fun count(sourceTable: String): Int
+
+    @Query("DELETE FROM local_data_quarantine WHERE sourceTable IN (:sourceTables)")
+    fun eraseSources(sourceTables: List<String>): Int
 
     @Query("DELETE FROM local_data_quarantine WHERE studyId = :studyId AND participantId = :participantId")
     fun eraseEnrollment(studyId: String, participantId: String): Int

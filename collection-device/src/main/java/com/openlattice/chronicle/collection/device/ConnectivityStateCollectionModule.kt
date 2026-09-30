@@ -13,6 +13,7 @@ import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.collection.sink.ConnectivityStateSampleSink
 import com.openlattice.chronicle.storage.ConnectivityStateSampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
@@ -68,6 +69,7 @@ public class ConnectivityStateCollectionModule(
 
     private fun runSample(now: Long): ModuleResult {
         if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
+        val observation = sink.captureAdmission()
         val owner = ownerForSample()
 
         val reading: ConnectivityStateReading? = try {
@@ -92,7 +94,7 @@ public class ConnectivityStateCollectionModule(
             validated = reading.validated,
         )
 
-        return when (val writeResult = sink.write(listOf(entry)).also {
+        return when (val writeResult = observation.writeObservation { sink.write(listOf(entry)) }.also {
             accountWriteResult(owner, it, 1)
         }) {
             is ModuleResult.Ok -> {

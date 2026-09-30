@@ -105,11 +105,15 @@ class UploadExecutor(
                         emptyList()
                     } else {
                         mapLegacyQueueItems(rawItems, mapItem = { rawItem ->
-                                mapUsageSamplesForUpload(
-                                    mapLegacyQueueEntry(JsonSerializer.deserializeLegacyQueueEntry(
-                                        "[$rawItem]".toByteArray(Charsets.UTF_8),
-                                    )), studyId, participantId, queueEntry.writeTimestamp,
-                                )
+                                val bytes = "[$rawItem]".toByteArray(Charsets.UTF_8)
+                                runCatching {
+                                    mapUsageSamplesForUpload(JsonSerializer.deserializeQueueEntry(bytes),
+                                        studyId, participantId, queueEntry.writeTimestamp)
+                                }.getOrNull()?.takeIf { it.isNotEmpty() }
+                                    ?: mapUsageSamplesForUpload(
+                                        mapLegacyQueueEntry(JsonSerializer.deserializeLegacyQueueEntry(bytes)),
+                                        studyId, participantId, queueEntry.writeTimestamp,
+                                    )
                             }, onMalformed = { index, rawItem ->
                             quarantineMalformedSample(
                                 chronicleDb, server, "dataQueue", "$sourceId:$index",
@@ -244,7 +248,7 @@ class UploadExecutor(
     }
 }
 
-/** A malformed legacy event never hides valid siblings, and quarantine failure aborts the row. */
+/** A malformed array element never hides valid siblings, and quarantine failure aborts the row. */
 internal fun <T> mapLegacyQueueItems(
     rawItems: List<String>,
     mapItem: (String) -> List<T>,

@@ -26,6 +26,27 @@ import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 class SurveyNotificationsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (!com.openlattice.chronicle.BuildConfig.ALLOW_PARTICIPANT_FORM_REMINDERS) return
+        val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+        val owner = gate.captureOwner(context) ?: return
+        val token = gate.captureObservation(context, com.openlattice.chronicle.collection.CollectionModuleId.QUESTIONNAIRE)
+        val pending = goAsync()
+        Thread {
+        try { token.persist {
+        gate.runIfExpectedOwner(context, owner) {
+            val scope = gate.observationScope(context, com.openlattice.chronicle.collection.CollectionModuleId.QUESTIONNAIRE)
+            if (scope?.first == intent.getStringExtra(com.openlattice.chronicle.services.notifications.SURVEY_ENROLLMENT_SCOPE) &&
+                owner.studyId == intent.getStringExtra(STUDY_ID) && owner.participantId == intent.getStringExtra(PARTICIPANT_ID)) {
+                postAdmitted(context, intent)
+            }
+            true
+        }
+        } } catch (error: Exception) { Log.w(javaClass.name, "Survey reminder admission unavailable", error) }
+        finally { pending.finish() }
+        }.start()
+    }
+
+    private fun postAdmitted(context: Context, intent: Intent) {
 
         if (intent.action != SURVEY_NOTIFICATION_ACTION) {
             return
@@ -88,7 +109,7 @@ class SurveyNotificationsReceiver : BroadcastReceiver() {
         // then throws SecurityException. Handle it explicitly (same contract as CollectionLoopCoordinator.notifySafely):
         // the deep-link survey reminder is best-effort, so a denied permission is logged and swallowed, never crashes the receiver.
         try {
-            NotificationManagerCompat.from(context).notify(notification.requestCode(), builder.build())
+            NotificationManagerCompat.from(context).notify(com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_TAG, notification.requestCode(), builder.build())
         } catch (e: SecurityException) {
             Log.w(javaClass.name, "Survey notification suppressed (POST_NOTIFICATIONS not granted)", e)
         }

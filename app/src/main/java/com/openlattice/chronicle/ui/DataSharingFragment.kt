@@ -100,7 +100,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
     override fun onResume() {
         super.onResume()
-        refreshJob = viewLifecycleOwner.lifecycleScope.launch {
+        refreshJob = viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             val environment = withContext(Dispatchers.IO) {
                 CollectionCapabilityResolver.snapshot(requireContext().applicationContext)
             }
@@ -496,8 +496,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         declined: Set<CollectionModuleId>,
         reviewedHealthConnectScope: Set<HealthConnectRecordType>? = null,
     ) {
-        viewLifecycleOwner.lifecycleScope.launch {
-            val locallyApplied = withContext(Dispatchers.IO) {
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
+            val locallyApplied = withContext(Dispatchers.IO) { participantStorageWrite {
                 // A re-decision driven by a study setting change (per-module consent design
                 // §3.3 — SETTINGS_CHANGE). Accepting resumes collection; declining trips the
                 // global halt. Either way the gate re-evaluates, so refresh both sections.
@@ -515,7 +515,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                     )
                     true
                 }
-            }
+            }.getOrThrow() }
             val snapshot = DashboardDataRepository.load(requireContext())
             val environment = loadCapabilityEnvironment()
             capabilities = computeCapabilities(snapshot.collectionModules, environment)
@@ -667,8 +667,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         reviewedHealthConnectScope: Set<HealthConnectRecordType>? = null,
     ) {
         switch.isEnabled = false
-        viewLifecycleOwner.lifecycleScope.launch {
-            val locallyApplied = withContext(Dispatchers.IO) {
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
+            val locallyApplied = withContext(Dispatchers.IO) { participantStorageWrite {
                 val coordinator = CollectionLoopCoordinator(requireContext().applicationContext)
                 if (reviewedHealthConnectScope != null) {
                     coordinator.applyReviewedHealthConnectAcceptance(
@@ -683,7 +683,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                     )
                     true
                 }
-            }
+            }.getOrThrow() }
             // Rebind from fresh state; the loop will also refresh, but this is immediate.
             val snapshot = DashboardDataRepository.load(requireContext())
             val environment = loadCapabilityEnvironment()

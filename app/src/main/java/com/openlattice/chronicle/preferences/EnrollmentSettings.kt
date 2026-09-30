@@ -2,6 +2,7 @@
 
 package com.openlattice.chronicle.preferences
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
 import android.os.Build
 import com.openlattice.chronicle.R
@@ -20,7 +21,6 @@ import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
 import com.openlattice.chronicle.collection.directboot.clearDirectBootSensorBuffer
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.utils.Utils
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.apache.olingo.commons.api.edm.FullQualifiedName
@@ -40,12 +40,18 @@ const val MOBILE_REMINDER_REQUEST_CODES = "mobileReminderRequestCodes"
 val INVALID_STUDY_ID = UUID(0, 0)
 
 class EnrollmentSettings(private val context: Context) {
-    private val settings = EncryptedPrefsHelper.getEncryptedPrefs(context)
+    private val settings = try {
+        EncryptedPrefsHelper.getEncryptedPrefs(context)
+    } catch (error: SecurePreferencesUnavailableException) {
+        throw com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException(
+            com.openlattice.chronicle.storage.LocalStoreRecoveryReason.INVALID_KEY_MATERIAL, error,
+        )
+    }
     private var participantId: String
     private var studyId: UUID
 
-    private lateinit var chronicleDb: ChronicleDb
-    private lateinit var userStorageQueue: UserStorageQueue
+    private val chronicleDb: ChronicleDb by lazy { ChronicleDb.getInstance(context) }
+    private val userStorageQueue: UserStorageQueue by lazy { chronicleDb.userQueueEntryData() }
 
     init {
         val studyIdString = settings.getString(STUDY_ID, "") ?: ""
@@ -53,8 +59,6 @@ class EnrollmentSettings(private val context: Context) {
         studyId =
             if (Utils.isValidUUID(studyIdString)) UUID.fromString(studyIdString) else INVALID_STUDY_ID
 
-        chronicleDb = ChronicleDb.getInstance(context)
-        userStorageQueue = chronicleDb.userQueueEntryData()
     }
 
     fun isEnrolled(): Boolean = isEnrolled(strictStorage = false)
@@ -64,20 +68,43 @@ class EnrollmentSettings(private val context: Context) {
 
     private fun isEnrolled(strictStorage: Boolean): Boolean {
         if (studyId == INVALID_STUDY_ID || participantId.isBlank()) return false
-        val server = try {
-            // This legacy synchronous API is used by Activity lifecycle callbacks. Room rejects
-            // DAO reads on the main thread, so preserve the API while performing its authoritative
-            // single-server lookup on the IO dispatcher.
-            runBlocking(Dispatchers.IO) {
-                chronicleDb.uploadServerDao().getConfiguredServer()
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            com.openlattice.chronicle.collection.state.ResearchPersistenceGate.executeAsync {
+                try { isEnrolled(strictStorage = true) }
+                catch (error: Exception) { android.util.Log.e("EnrollmentSettings", "Queued enrollment reconciliation failed", error) }
             }
+            return com.openlattice.chronicle.collection.state.ResearchPersistenceGate.isEnrolledSnapshot(studyId, participantId)
+        }
+        val server = try {
+            chronicleDb.uploadServerDao().getConfiguredServer()
         } catch (error: RuntimeException) {
             // A transient storage failure is not evidence that the enrollment disappeared.
             if (strictStorage) throw error
             return false
         }
         if (server == null || server.studyId != studyId.toString() || server.participantId != participantId) {
-            clearOrphanedEnrollmentState()
+            try {
+                val reconcile = {
+                    com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(context) {
+                        val currentSettings = EnrollmentSettings(context)
+                        val current = ChronicleDb.getInstance(context).uploadServerDao().getConfiguredServer()
+                        if (currentSettings.getStudyId() == studyId && currentSettings.getParticipantId() == participantId &&
+                            (current == null || current.studyId != studyId.toString() || current.participantId != participantId)) {
+                            currentSettings.clearOrphanedEnrollmentState()
+                        }
+                    }
+                }
+                if (com.openlattice.chronicle.collection.state.ResearchPersistenceGate.canStopOnCurrentThread() && !chronicleDb.inTransaction()) {
+                    reconcile()
+                } else {
+                    com.openlattice.chronicle.collection.state.ResearchPersistenceGate.executeAsync(reconcile)
+                }
+            } catch (error: Exception) {
+                android.util.Log.e("EnrollmentSettings", "Enrollment reconciliation could not be persisted", error)
+                throw com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException(
+                    com.openlattice.chronicle.storage.LocalStoreRecoveryReason.KEY_PERSISTENCE_FAILED, error,
+                )
+            }
             return false
         }
         return server.enabled &&
@@ -107,19 +134,17 @@ class EnrollmentSettings(private val context: Context) {
         return studyId
     }
 
-    fun setParticipantId(_participantId: String) {
+    fun setParticipantId(_participantId: String) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
         participantId = _participantId
-        settings.edit()
-            .putString(PARTICIPANT_ID, _participantId)
-            .commit()
+        checkLocalStoreWrite(settings.edit().putString(PARTICIPANT_ID, _participantId).commit()) { "Failed to persist participant id" }
     }
 
-    fun setStudyId(_studyId: UUID) {
+    fun setStudyId(_studyId: UUID) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
         val changed = studyId != _studyId
         if (changed) InteractionPolicySettings.invalidateMemoryCache()
         val editor = settings.edit().putString(STUDY_ID, _studyId.toString())
         if (changed) editor.remove(INTERACTION_POLICY_SNAPSHOT_KEY)
-        check(editor.commit()) { "Failed to persist study id" }
+        checkLocalStoreWrite(editor.commit()) { "Failed to persist study id" }
         studyId = _studyId
     }
 
@@ -144,13 +169,13 @@ class EnrollmentSettings(private val context: Context) {
         return deserializePropertyTypeIds(settings.getString(PROPERTY_TYPE_IDS, ""))
     }
 
-    fun setParticipationStatus(participationStatus: ParticipationStatus) {
+    fun setParticipationStatus(participationStatus: ParticipationStatus) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
         val changed = getParticipationStatus() != participationStatus
         if (changed) InteractionPolicySettings.invalidateMemoryCache()
         val editor = settings.edit()
             .putString(PARTICIPATION_STATUS, participationStatus.toString())
         if (changed) editor.remove(INTERACTION_POLICY_SNAPSHOT_KEY)
-        check(editor.commit()) { "Failed to persist participation status" }
+        checkLocalStoreWrite(editor.commit()) { "Failed to persist participation status" }
         // A participant no longer ENROLLED must not be collected for during a future
         // direct-boot window; the snapshot is rewritten from live gate reads when (if)
         // collection resumes. Fail closed.
@@ -177,27 +202,26 @@ class EnrollmentSettings(private val context: Context) {
         .toSet()
 
     fun setMobileReminderRequestCodes(requestCodes: Set<Int>) {
-        settings.edit()
+        checkLocalStoreWrite(settings.edit()
             .putStringSet(MOBILE_REMINDER_REQUEST_CODES, requestCodes.map(Int::toString).toSet())
-            .apply()
+            .commit()) { "Unable to persist survey cancellation handles" }
     }
 
     /** Clears identity; only explicit withdrawal may erase locally retained research data. */
-    fun clearEnrollment(eraseLocalData: Boolean = false) {
+    fun clearEnrollment(eraseLocalData: Boolean = false, diagnostics: LocalUploadDiagnosticsStore? = null) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
         InteractionPolicySettings.invalidateMemoryCache()
+        com.openlattice.chronicle.services.notifications.eraseSurveyArtifacts(context)
         // Retire collection permission even when identity is temporarily orphaned.
         clearDirectBootSensorSnapshot(context)
         if (eraseLocalData) {
-            check(clearDirectBootSensorBuffer(context)) {
+            checkLocalStoreWrite(clearDirectBootSensorBuffer(context)) {
                 "Failed to clear direct-boot research samples"
             }
         }
         HealthConnectScopeStore.of(context).clear()
-        if (eraseLocalData) LocalUploadDiagnosticsStore.of(context).clear()
+        if (eraseLocalData) (diagnostics ?: LocalUploadDiagnosticsStore.of(context)).clear()
         if (eraseLocalData) com.openlattice.chronicle.services.crypto.PayloadSealer.clearSealedEnvelopes()
-        participantId = ""
-        studyId = INVALID_STUDY_ID
-        check(settings.edit()
+        checkLocalStoreWrite(settings.edit()
             .remove(PARTICIPANT_ID)
             .remove(STUDY_ID)
             .remove(ORGANIZATION_ID)
@@ -211,6 +235,8 @@ class EnrollmentSettings(private val context: Context) {
             .commit()) {
             "Failed to clear persisted enrollment state"
         }
+        participantId = ""
+        studyId = INVALID_STUDY_ID
     }
 
 
@@ -231,7 +257,7 @@ class EnrollmentSettings(private val context: Context) {
             launch {
                 userStorageQueue.insertEntry(UserQueueEntry(user = user))
             }
-            check(
+            checkLocalStoreWrite(
                 settings
                     .edit()
                     .putString(context.getString(R.string.current_user), user)
@@ -324,7 +350,7 @@ class EnrollmentSettings(private val context: Context) {
         fun clearForLocalStoreRecovery(context: Context) {
             InteractionPolicySettings.invalidateMemoryCache()
             clearDirectBootSensorSnapshot(context)
-            check(clearDirectBootSensorBuffer(context)) {
+            checkLocalStoreWrite(clearDirectBootSensorBuffer(context)) {
                 "Failed to clear direct-boot research samples during local-store recovery"
             }
             val prefs = EncryptedPrefsHelper.getEncryptedPrefs(context.applicationContext)
@@ -332,7 +358,7 @@ class EnrollmentSettings(private val context: Context) {
                 ?.takeIf(Utils::isValidUUID)
                 ?.let(UUID::fromString)
             existingStudyId?.let { EncryptionSettingStore.of(context).evict(it) }
-            check(
+            checkLocalStoreWrite(
                 prefs.edit()
                     .remove(PARTICIPANT_ID)
                     .remove(STUDY_ID)

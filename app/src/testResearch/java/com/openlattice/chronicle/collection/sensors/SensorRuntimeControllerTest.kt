@@ -28,15 +28,57 @@ import java.time.OffsetDateTime
  */
 class SensorRuntimeControllerTest {
 
+    @Test fun reconciliationContainsSchedulerShutdownBetweenCheckAndSubmit() {
+        var reject = false
+        val scheduler = object : SensorRuntimeScheduler {
+            override fun isShutdown(): Boolean = false
+            override fun execute(task: () -> Unit) {
+                if (reject) throw java.util.concurrent.RejectedExecutionException("handover shutdown")
+            }
+            override fun schedule(delaySeconds: Long, task: () -> Unit) = Unit
+            override fun shutdown() = Unit
+        }
+        val runtime = SensorRuntimeController(FakeSensorGateway(), FakeSensorRuntimeSettings(),
+            SensorSampleSink(FakeSensorSampleDao(), NoOpCollectionLog), scheduler, log = NoOpCollectionLog)
+        runtime.start()
+        reject = true
+        runtime.reconcile()
+        assertTrue(runtime.isStarted)
+        runtime.stop()
+    }
+
+    @Test fun callbackAdmittedBeforeDiscardCannotRefillTheBuffer() {
+        lateinit var runtime: SensorRuntimeController
+        var discard = true
+        runtime = controller(collectionAdmission = {
+            if (discard) { discard = false; runtime.discardSensorSamples(AndroidSensorType.accelerometer.name) }
+            true
+        }, scheduler = ManualSensorRuntimeScheduler(executeImmediately = false))
+        runtime.recordSample(AndroidSensorType.accelerometer, sample(), 3)
+        assertEquals(0, runtime.bufferedCount)
+        assertEquals(0L, runtime.droppedCount)
+        runtime.recordSample(AndroidSensorType.accelerometer, sample(), 3)
+        assertEquals(1, runtime.bufferedCount)
+    }
+
+    @Test fun discardReturnsTheExactRamCountOnceAndRetainsSibling() {
+        val runtime = controller(scheduler = ManualSensorRuntimeScheduler(executeImmediately = false))
+        repeat(2) { runtime.recordSample(AndroidSensorType.accelerometer, sample(), 3) }
+        runtime.recordSample(AndroidSensorType.gyroscope, sample(), 3)
+        assertEquals(2, runtime.discardSensorSamples(AndroidSensorType.accelerometer.name))
+        assertEquals(0, runtime.discardSensorSamples(AndroidSensorType.accelerometer.name))
+        assertEquals(1, runtime.bufferedCount)
+    }
+
     @Test
-    fun bufferOverflowAndClosedGateReportExactCounts() {
+    fun bufferOverflowReportsExactCountsForAcceptedSamples() {
         val losses = mutableListOf<Pair<String, Int>>()
         val controller = SensorRuntimeController(
             gateway = FakeSensorGateway(),
             settings = FakeSensorRuntimeSettings(),
             sink = SensorSampleSink(FakeSensorSampleDao(), NoOpCollectionLog),
             scheduler = ManualSensorRuntimeScheduler(executeImmediately = false),
-            collectionGate = { false },
+            collectionGate = { true },
             log = NoOpCollectionLog,
             reportLoss = { code, count -> losses += code to count },
         )
@@ -47,7 +89,7 @@ class SensorRuntimeControllerTest {
         controller.flushBuffer()
 
         assertEquals(1, losses.count { it == ("LOCAL_BUFFER_OVERFLOW" to 1) })
-        assertEquals(1, losses.count { it == ("COLLECTION_GATE_DROPPED" to SensorRuntimeController.MAX_BUFFERED_SAMPLES) })
+        assertEquals(listOf("LOCAL_BUFFER_OVERFLOW" to 1), losses)
     }
 
     private fun controller(
@@ -56,6 +98,7 @@ class SensorRuntimeControllerTest {
         scheduler: ManualSensorRuntimeScheduler = ManualSensorRuntimeScheduler(),
         dao: FakeSensorSampleDao = FakeSensorSampleDao(),
         collectionGate: (AndroidSensorType) -> Boolean = { true },
+        collectionAdmission: () -> Boolean = { true },
     ): SensorRuntimeController {
         val c = SensorRuntimeController(
             gateway = gateway,
@@ -63,6 +106,7 @@ class SensorRuntimeControllerTest {
             sink = SensorSampleSink(dao, NoOpCollectionLog),
             scheduler = scheduler,
             collectionGate = collectionGate,
+            collectionAdmission = collectionAdmission,
             clock = FixedCollectionClock(1_000L),
             log = NoOpCollectionLog,
         )
@@ -444,10 +488,8 @@ class SensorRuntimeControllerTest {
     // ----- collection-loop gate (design §7) -----
 
     @Test
-    fun closedGateDropsBufferedSamplesAndPersistsNothing() {
-        // Even with samples buffered (e.g. fed by always-armed persistent sensors after a
-        // legacy-path start), a closed gate must persist nothing and must not retain the
-        // un-acknowledged samples for a later flush.
+    fun closedGateRefusesObservationsBeforeBuffering() {
+        // Callbacks delivered while consent is closed never enter the accepted buffer.
         val dao = FakeSensorSampleDao()
         val gateway = FakeSensorGateway()
         val c = controller(gateway = gateway, dao = dao, collectionGate = { false })
@@ -456,9 +498,9 @@ class SensorRuntimeControllerTest {
 
         val result = c.flushBuffer()
 
-        assertTrue("a closed gate skips the flush", result is ModuleResult.Skipped)
+        assertEquals(ModuleResult.Ok(0), result)
         assertEquals("nothing persisted while the gate is closed", 0, dao.count())
-        assertEquals("un-acknowledged samples are dropped, not retained", 0, c.bufferedCount)
+        assertEquals("declined observations are never buffered", 0, c.bufferedCount)
     }
 
     @Test
@@ -475,6 +517,7 @@ class SensorRuntimeControllerTest {
 
         repeat(8) { c.recordSample(AndroidSensorType.accelerometer, sample(), 3) }
         repeat(5) { c.recordSample(AndroidSensorType.gyroscope, sample(), 3) }
+        gateCalls.clear()
 
         assertTrue(c.flushBuffer() is ModuleResult.Ok)
         assertEquals(13, dao.count())
@@ -657,6 +700,48 @@ class SensorRuntimeControllerTest {
         assertEquals(SensorRuntimeController.PERSISTENT_RETRY_DELAY_SECONDS, scheduler.runNext())
         assertEquals(listOf(sensorType), gateway.registeredPersistent)
         assertEquals(listOf(sensorType, sensorType), gateway.persistentRegistrationAttempts)
+    }
+
+    @Test fun persistentOnlySensorsRearmWhenScheduledStorageAdmissionCheckRecovers() {
+        val sensors = setOf(AndroidSensorType.tiltDetector, AndroidSensorType.significantMotion)
+        val gateway = FakeSensorGateway()
+        val scheduler = ManualSensorRuntimeScheduler()
+        var admitted = false
+        val c = controller(gateway = gateway, scheduler = scheduler,
+            settings = FakeSensorRuntimeSettings(sensors = sensors), collectionAdmission = { admitted })
+
+        c.start()
+        c.reconcile()
+        assertTrue(gateway.persistentRegistrationAttempts.isEmpty())
+        assertEquals(listOf(SensorRuntimeController.STORAGE_ADMISSION_RECHECK_SECONDS), scheduler.scheduled.map { it.first })
+        scheduler.runNext()
+        assertTrue(gateway.registeredPersistent.isEmpty())
+        assertEquals("a continuing pause keeps one admission check scheduled", 1, scheduler.scheduled.size)
+
+        admitted = true
+        scheduler.runNext()
+
+        assertEquals(sensors, gateway.registeredPersistent.toSet())
+        assertEquals(sensors.size, gateway.persistentRegistrationAttempts.size)
+        assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test fun stoppedPersistentRuntimeDoesNotRearmAfterStorageRecovery() {
+        val gateway = FakeSensorGateway()
+        val scheduler = ManualSensorRuntimeScheduler()
+        var admitted = false
+        val c = controller(gateway = gateway, scheduler = scheduler,
+            settings = FakeSensorRuntimeSettings(sensors = setOf(AndroidSensorType.tiltDetector)),
+            collectionAdmission = { admitted })
+        c.start()
+        assertEquals(1, scheduler.scheduled.size)
+
+        c.stop()
+        admitted = true
+        scheduler.runAll()
+
+        assertTrue(gateway.persistentRegistrationAttempts.isEmpty())
+        assertTrue(scheduler.scheduled.isEmpty())
     }
 
     @Test

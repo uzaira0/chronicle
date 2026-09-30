@@ -31,7 +31,7 @@ class DirectBootDrainGateTest {
     )
 
     @Test
-    fun `closed-gate and unparseable sensors remain buffered while open-gate samples transfer`() {
+    fun `closed-gate samples wait and unparseable sensors are erased while open-gate samples transfer`() {
         val written = mutableListOf<SensorSampleEntry>()
         val sink = SensorSampleWriter { samples ->
             written.addAll(samples)
@@ -50,6 +50,7 @@ class DirectBootDrainGateTest {
 
         assertEquals(listOf("open"), written.map { it.id })
         assertEquals(setOf("open"), result.transferredIds)
+        assertEquals(setOf("unknown"), result.discardedIds)
     }
 
     @Test

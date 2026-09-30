@@ -9,6 +9,8 @@ import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.device.serializeMalformedRow
+import com.openlattice.chronicle.api.RestrictedChronicleStudyApi
 import com.openlattice.chronicle.crypto.EncryptedPayloadType
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.crypto.EncryptionRequiredButUnavailableException
@@ -84,9 +86,12 @@ class InteractionUploadWorker(context: Context, workerParameters: WorkerParamete
     }
 }
 
-class InteractionUploadWorkerDelegate(
+internal class InteractionUploadWorkerDelegate(
     private val context: Context,
     private val db: ChronicleDb,
+    private val restrictedStudyApiFor: (com.openlattice.chronicle.storage.UploadServerEntity) -> RestrictedChronicleStudyApi = {
+        RestrictedUploadApiFactory.get(it.url, it.mobileSigningSecretOverride)
+    },
 ) {
 
     /** @return 1 when the active study server failed this run, otherwise 0. */
@@ -115,7 +120,7 @@ class InteractionUploadWorkerDelegate(
                 malformed++
                 Log.w(TAG, "Quarantining corrupt interaction sample ${entry.id}", e)
                 quarantineMalformedSample(db, servers.single(), "interaction_samples", entry.id,
-                    JsonSerializer.toJson(entry).toByteArray(), LocalUploadModuleFamily.INTERACTION) {
+                    serializeMalformedRow(entry), LocalUploadModuleFamily.INTERACTION) {
                     dao.deleteByIds(listOf(entry.id))
                 }
                 null
@@ -128,9 +133,7 @@ class InteractionUploadWorkerDelegate(
                 if (events.isNotEmpty()) {
                     val studyId = UUID.fromString(server.studyId)
                     val studyApi = UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
-                    val restrictedStudyApi = RestrictedUploadApiFactory.get(
-                        server.url, server.mobileSigningSecretOverride,
-                    )
+                    val restrictedStudyApi = restrictedStudyApiFor(server)
                     val store = EncryptionSettingStore.of(context)
                     val setting = store.get(studyId)
                     val routing = PayloadSealer.routing(setting, store.isEncryptionRequired(studyId))

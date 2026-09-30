@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.sink
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
 import com.openlattice.chronicle.storage.ConnectivityStateSampleDao
 import com.openlattice.chronicle.storage.ConnectivityStateSampleEntry
 
@@ -19,15 +20,19 @@ public open class ConnectivityStateSampleSink(
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
 ) : CollectionSink {
 
+    public fun captureAdmission(): CollectionPersistenceGuard = persistenceGuard.capture()
+
     public open fun write(samples: List<ConnectivityStateSampleEntry>): ModuleResult {
         if (samples.isEmpty()) {
             return ModuleResult.Ok(items = 0)
         }
         return try {
-            if (persistenceGuard.persist { dao.insertAll(samples) }) {
-                ModuleResult.Ok(items = samples.size)
-            } else {
-                ModuleResult.Skipped("active enrollment persistence gate closed")
+            when (persistenceGuard.persistResult { dao.insertAll(samples) }) {
+                CollectionPersistenceResult.PERSISTED -> ModuleResult.Ok(items = samples.size)
+                CollectionPersistenceResult.REFUSED ->
+                    ModuleResult.Skipped("active enrollment persistence gate closed")
+                CollectionPersistenceResult.STORAGE_UNAVAILABLE ->
+                    ModuleResult.Retry("local storage temporarily unavailable")
             }
         } catch (e: Exception) {
             log.error(TAG, "Failed to persist ${samples.size} connectivity sample(s)", e)

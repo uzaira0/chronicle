@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.sink
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
 import com.openlattice.chronicle.storage.QueueEntry
 import com.openlattice.chronicle.storage.StorageQueue
 
@@ -39,7 +40,14 @@ public open class UsageEventSink(
     private val storageQueue: StorageQueue,
     private val log: CollectionLog = CollectionLog.LOGCAT,
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
+    private val prepareEntries: (List<QueueEntry>) -> List<QueueEntry> = { it },
 ) : CollectionSink {
+
+    public fun captureAdmission(): CollectionPersistenceGuard = persistenceGuard.capture()
+
+    /** Evaluate admission and retain its lease through a transaction and its checkpoint. */
+    public fun withAdmission(persist: () -> Unit): CollectionPersistenceResult =
+        persistenceGuard.persistResult(persist)
 
     /**
      * Inserts [entries] into `dataQueue`.
@@ -52,15 +60,26 @@ public open class UsageEventSink(
             return ModuleResult.Ok(items = 0)
         }
         return try {
-            if (persistenceGuard.persist { storageQueue.insertEntries(entries) }) {
-                ModuleResult.Ok(items = entries.size)
-            } else {
-                ModuleResult.Skipped("active enrollment persistence gate closed")
+            when (persistenceGuard.persistResult { storageQueue.insertEntries(prepareEntries(entries)) }) {
+                CollectionPersistenceResult.PERSISTED -> ModuleResult.Ok(items = entries.size)
+                CollectionPersistenceResult.REFUSED ->
+                    ModuleResult.Skipped("active enrollment persistence gate closed")
+                CollectionPersistenceResult.STORAGE_UNAVAILABLE ->
+                    ModuleResult.Retry("local storage temporarily unavailable")
             }
         } catch (e: Exception) {
             log.error(TAG, "Failed to persist ${entries.size} usage queue entr(ies) to dataQueue", e)
             ModuleResult.Failed(e, redactedMessage = "dataQueue insert failed: ${e.javaClass.simpleName}")
         }
+    }
+
+    /** Inserts within a caller's existing admission lease and transaction; never checks admission again. */
+    public open fun writeAdmitted(entries: List<QueueEntry>): ModuleResult = try {
+        if (entries.isNotEmpty()) storageQueue.insertEntries(prepareEntries(entries))
+        ModuleResult.Ok(items = entries.size)
+    } catch (error: Exception) {
+        log.error(TAG, "Failed to persist ${entries.size} usage queue entr(ies) to dataQueue", error)
+        ModuleResult.Failed(error, redactedMessage = "dataQueue insert failed: ${error.javaClass.simpleName}")
     }
 
     /** Current number of rows in `dataQueue`. */

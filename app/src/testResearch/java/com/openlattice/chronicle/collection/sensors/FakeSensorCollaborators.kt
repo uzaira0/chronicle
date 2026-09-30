@@ -91,6 +91,11 @@ class FakeSensorGateway : SensorGateway {
         registeredContinuous.remove(sensorType)
     }
 
+    override fun unregisterPersistentSensor(sensorType: AndroidSensorType) {
+        registeredPersistent.remove(sensorType)
+        registeredTrigger.remove(sensorType)
+    }
+
     override fun unregisterAll() {
         unregisterAllCount++
         registeredContinuous.clear()

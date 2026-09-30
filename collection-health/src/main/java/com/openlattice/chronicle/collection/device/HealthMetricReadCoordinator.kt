@@ -15,32 +15,61 @@ public interface HealthMetricCheckpoint {
 public class HealthMetricReadCoordinator(
     private val checkpoint: HealthMetricCheckpoint,
     private val defaultBackfillMillis: Long = DEFAULT_HEALTH_BACKFILL_MILLIS,
+    private val consentScope: () -> Pair<String, Long>? = { null },
 ) {
     private var pendingEndMillis: Long? = null
+    private var pendingScope: Pair<String, Long>? = null
+    private var pendingCheckpoint: Long? = null
 
-    @Synchronized
+    private var readVersion = 0L
+    private var reading = false
+
     public fun <T> read(nowMillis: Long, readWindow: (startMillis: Long, endMillis: Long) -> List<T>): List<T> {
-        check(pendingEndMillis == null) { "Previous Health Connect read has not been acknowledged" }
-        val startMillis = checkpoint.read() ?: (nowMillis - defaultBackfillMillis)
-        if (startMillis >= nowMillis) return emptyList()
-
-        val records = readWindow(startMillis, nowMillis)
-        pendingEndMillis = nowMillis
-        return records
+        val version = synchronized(this) {
+            check(pendingEndMillis == null && !reading) { "Previous Health Connect read has not been acknowledged" }
+            reading = true
+            readVersion
+        }
+        try {
+            val scope = consentScope()
+            val previous = checkpoint.read()
+            val startMillis = maxOf(scope?.second ?: Long.MIN_VALUE, previous ?: (nowMillis - defaultBackfillMillis))
+            if (startMillis >= nowMillis) return emptyList()
+            val records = readWindow(startMillis, nowMillis)
+            val current = consentScope()
+            return synchronized(this) {
+                if (version != readVersion || scope != current) emptyList()
+                else {
+                    pendingScope = scope
+                    pendingCheckpoint = previous
+                    pendingEndMillis = nowMillis
+                    records
+                }
+            }
+        } finally { synchronized(this) { reading = false } }
     }
 
     /** Persists the pending window after its records have been durably queued. */
     @Synchronized
     public fun acknowledge() {
         val endMillis = pendingEndMillis ?: return
+        if (pendingScope != consentScope() || pendingCheckpoint != checkpoint.read()) {
+            reject()
+            return
+        }
         checkpoint.write(endMillis)
         pendingEndMillis = null
+        pendingScope = null
+        pendingCheckpoint = null
     }
 
     /** Leaves the durable checkpoint unchanged so a failed persistence attempt can retry. */
     @Synchronized
     public fun reject() {
+        readVersion++
         pendingEndMillis = null
+        pendingScope = null
+        pendingCheckpoint = null
     }
 }
 

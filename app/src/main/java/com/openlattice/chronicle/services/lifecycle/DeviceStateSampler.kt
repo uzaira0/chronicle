@@ -19,10 +19,14 @@ class DeviceStateSampler(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun poll(timestampMillis: Long = System.currentTimeMillis()): List<ExtractedUsageEvent> {
+        val origin = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.captureObservation(
+            context, com.openlattice.chronicle.collection.CollectionModuleId.DEVICE_LIFECYCLE)
         val events = mutableListOf<ExtractedUsageEvent>()
+        origin.persist {
         addChangedState(events, KEY_BATTERY_STATE, batteryState(), timestampMillis)
         addChangedState(events, KEY_NETWORK_STATE, networkState(), timestampMillis)
         addChangedState(events, KEY_POWER_SAVE_STATE, powerSaveState(), timestampMillis)
+        }
         return events
     }
 

@@ -19,7 +19,7 @@ class OverviewFragment : Fragment(R.layout.fragment_overview) {
 
     override fun onResume() {
         super.onResume()
-        refreshJob = viewLifecycleOwner.lifecycleScope.launch {
+        refreshJob = viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             while (true) {
                 val snapshot = DashboardDataRepository.load(requireContext())
                 view?.let { bind(it, snapshot) }

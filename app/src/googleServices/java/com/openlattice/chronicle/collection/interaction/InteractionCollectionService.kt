@@ -42,9 +42,7 @@ internal class BoundedInteractionTaskExecutor(
     private val onDropped: (Int) -> Unit,
     private val onShutdown: (Int) -> Unit = onDropped,
 ) {
-    init {
-        require(capacity > 0) { "capacity must be positive" }
-    }
+    init { require(capacity > 0) { "capacity must be positive" } }
 
     private val executor = ThreadPoolExecutor(
         1,
@@ -63,6 +61,8 @@ internal class BoundedInteractionTaskExecutor(
         if (executor.isShutdown) onShutdown(1) else onDropped(1)
         false
     }
+
+    fun discardPending() { executor.queue.clear() }
 
     /** Stops the worker and reports tasks abandoned from the bounded queue. */
     fun shutdownNow(): Int = executor.shutdownNow().size.also { abandoned ->
@@ -100,7 +100,15 @@ internal class BoundedInteractionTaskExecutor(
  * reads per event. Per-event writes use one bounded background queue; overload and shutdown drops
  * are counted and logged instead of allowing unbounded memory growth.
  */
-class InteractionCollectionService : AccessibilityService() {
+class InteractionCollectionService : AccessibilityService(), com.openlattice.chronicle.collection.state.ResearchErasureFence.Companion.Observer {
+    @Synchronized
+    override fun eraseResearchObservations() {
+        writeExecutor.discardPending()
+        rollingOrigin = null
+        lastEventUptimeMillis = null
+        currentEpisodeId = null
+        lastScrollDominantSign = 0
+    }
 
     private val droppedPersistenceTasks = AtomicLong()
     private val persistenceFailures = AtomicLong()
@@ -127,11 +135,16 @@ class InteractionCollectionService : AccessibilityService() {
     private var policySettings: InteractionPolicySettings? = null
     private var loggedPolicyUnavailable = false
 
-    // Episode/kinematics state. onAccessibilityEvent is delivered single-threaded, so these need
-    // no locking. An "episode" is a continuous burst of interactions; it resets after an idle gap.
+    // Episode/kinematics state shares the service monitor with worker-thread erasure resets.
+    private var rollingOrigin: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard? = null
     private var lastEventUptimeMillis: Long? = null
     private var currentEpisodeId: String? = null
     private var lastScrollDominantSign: Int = 0
+
+    init {
+        com.openlattice.chronicle.collection.state.ResearchErasureFence.registerObserver(this, setOf(CollectionModuleId.INTERACTION_EVENTS))
+    }
+
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -174,7 +187,9 @@ class InteractionCollectionService : AccessibilityService() {
         // arrive on the main thread, so the Room-backed gate must be checked by writeExecutor
         // immediately before persistence rather than here.
         val ctx = applicationContext
-
+        val origin = ResearchPersistenceGate.captureObservation(ctx, CollectionModuleId.INTERACTION_EVENTS)
+        if (!origin.isCurrent()) return
+        val expectedOwner = ResearchPersistenceGate.captureOwner(ctx)?.takeIf { it.studyId == policySnapshot.studyId }
         val bounds = Rect()
         // event.source is null when the framework can't supply the node (e.g. secure windows);
         // without bounds we cannot place the interaction in a region, so skip it.
@@ -188,6 +203,10 @@ class InteractionCollectionService : AccessibilityService() {
             node.recycle()
         }
 
+        if (bounds.left > bounds.right || bounds.top > bounds.bottom) {
+            Log.w(TAG, "Rejecting unordered accessibility bounds")
+            return
+        }
         val displayContext = displayContextFor(event)
         val legacyGridPosition = deriveLegacyInteractionGridPosition(
             bounds = InteractionNodeBounds(bounds.left, bounds.top, bounds.right, bounds.bottom),
@@ -205,13 +224,23 @@ class InteractionCollectionService : AccessibilityService() {
         // Monotonic event time (uptime domain). Authoritative for ordering + kinematics; we also
         // anchor it to an exact wall-clock so the stored timestamp matches the real event instant.
         val eventUptime = event.eventTime
-        val (episodeId, dwellMillisSincePrev) = advanceEpisode(eventUptime)
+        val (scrollDeltaX, scrollDeltaY) = scrollDeltas(event, eventType)
+        val (episode, kinematics) = synchronized(this) {
+            if (!origin.isCurrent()) return
+            if (rollingOrigin?.isCurrent() != true) {
+                lastEventUptimeMillis = null
+                currentEpisodeId = null
+                lastScrollDominantSign = 0
+            }
+            rollingOrigin = origin
+            val episode = advanceEpisode(eventUptime)
+            episode to scrollKinematics(eventType, scrollDeltaX, scrollDeltaY, episode.second)
+        }
+        val (episodeId, dwellMillisSincePrev) = episode
 
         // Role = the view's class name (e.g. "android.widget.Button"). Never element text.
         val elementRole = event.className?.toString()?.takeIf { it.isNotBlank() } ?: "unknown"
         val foregroundPackage = event.packageName?.toString()?.takeIf { it.isNotBlank() } ?: "unknown"
-        val (scrollDeltaX, scrollDeltaY) = scrollDeltas(event, eventType)
-        val kinematics = scrollKinematics(eventType, scrollDeltaX, scrollDeltaY, dwellMillisSincePrev)
 
         val entry = InteractionSampleEntry(
             id = UUID.randomUUID().toString(),
@@ -251,17 +280,7 @@ class InteractionCollectionService : AccessibilityService() {
 
         writeExecutor.execute {
             try {
-                val expectedOwner = ResearchPersistenceGate.captureOwner(ctx)
-                    ?.takeIf { it.studyId == policySnapshot.studyId }
-                // A settings/enrollment transition invalidates the captured generation before it
-                // changes durable state, so queued events can never persist under stale policy.
-                if (!runtimePolicySettings.isCurrent(policySnapshot)) {
-                    com.openlattice.chronicle.services.upload.recordForExpectedOwner(
-                        ctx, expectedOwner, LocalUploadModuleFamily.INTERACTION,
-                        LocalOperationalIssue.COLLECTION_GATE_DROPPED, 1,
-                    )
-                    return@execute
-                }
+                origin.persist {
                 ResearchPersistenceGate.persistIfCollecting(
                     ctx,
                     CollectionModuleId.INTERACTION_EVENTS,
@@ -275,6 +294,7 @@ class InteractionCollectionService : AccessibilityService() {
                 ) {
                     ChronicleDb.getInstance(ctx).interactionSampleDao().insertAll(listOf(entry))
                 }
+                }
             } catch (e: Exception) {
                 recordPersistenceFailure(e)
             }
@@ -282,6 +302,7 @@ class InteractionCollectionService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        com.openlattice.chronicle.collection.state.ResearchErasureFence.unregisterObserver(this)
         val abandoned = writeExecutor.shutdownNow()
         // shutdown(), not shutdownNow(): the queued flush still records the abandoned count.
         lossExecutor.shutdown()

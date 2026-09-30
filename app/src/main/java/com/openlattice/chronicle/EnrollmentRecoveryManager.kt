@@ -82,9 +82,9 @@ internal object EnrollmentRecoveryManager {
             val recovery = validateRecoveryState(row)
             val pending = recovery?.let { pendingRequest(row, it) }
             if (pending == null) {
-                dao.deleteCorruptPendingEnrollment(row.id) == 1
+                ResearchPersistenceGate.enrollmentMutation(context) { dao.deleteCorruptPendingEnrollment(row.id) == 1 }
             } else {
-                deleteExactPendingAttempt(dao, pending)
+                deleteExactPendingAttempt(context, dao, pending)
             }
         } catch (error: Exception) {
             Log.e(TAG, "Pending enrollment cancellation failed (${error.javaClass.simpleName})")
@@ -100,7 +100,7 @@ internal object EnrollmentRecoveryManager {
         val recovery = validateRecoveryState(row)
         val pending = recovery?.let { pendingRequest(row, it) }
         if (pending == null) {
-            return if (dao.deleteCorruptPendingEnrollment(row.id) == 1) {
+            return if (ResearchPersistenceGate.enrollmentMutation(context) { dao.deleteCorruptPendingEnrollment(row.id) == 1 }) {
                 EnrollmentRecoveryResult.TERMINAL_FAILURE
             } else {
                 EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED
@@ -109,7 +109,7 @@ internal object EnrollmentRecoveryManager {
 
         val plan = planEnrollmentReplay(pending, System.currentTimeMillis())
         if (plan is EnrollmentReplayPlan.Cleanup) {
-            return if (deleteExactPendingAttempt(dao, pending)) {
+            return if (deleteExactPendingAttempt(context, dao, pending)) {
                 EnrollmentRecoveryResult.TERMINAL_FAILURE
             } else {
                 EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED
@@ -119,7 +119,7 @@ internal object EnrollmentRecoveryManager {
         val request = plan.request
         val sourceDevice = decodePendingEnrollmentSourceDevice(request)
         if (sourceDevice == null) {
-            return if (deleteExactPendingAttempt(dao, request)) {
+            return if (deleteExactPendingAttempt(context, dao, request)) {
                 EnrollmentRecoveryResult.TERMINAL_FAILURE
             } else {
                 EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED
@@ -154,7 +154,7 @@ internal object EnrollmentRecoveryManager {
             )
         } catch (error: ChronicleCallException) {
             if (enrollmentHttpFailureIsTerminal(error.code)) {
-                return if (deleteExactPendingAttempt(dao, request)) {
+                return if (deleteExactPendingAttempt(context, dao, request)) {
                     EnrollmentRecoveryResult.TERMINAL_FAILURE
                 } else {
                     EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED
@@ -164,7 +164,7 @@ internal object EnrollmentRecoveryManager {
             return EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED
         } catch (error: HttpException) {
             if (enrollmentHttpFailureIsTerminal(error.code())) {
-                return if (deleteExactPendingAttempt(dao, request)) {
+                return if (deleteExactPendingAttempt(context, dao, request)) {
                     EnrollmentRecoveryResult.TERMINAL_FAILURE
                 } else {
                     EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED
@@ -179,7 +179,7 @@ internal object EnrollmentRecoveryManager {
 
         when (evaluateEnrollmentResponse(request, response.apiKey)) {
             is EnrollmentResponseDisposition.Cleanup -> {
-                return if (deleteExactPendingAttempt(dao, request)) {
+                return if (deleteExactPendingAttempt(context, dao, request)) {
                     EnrollmentRecoveryResult.TERMINAL_FAILURE
                 } else {
                     EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED
@@ -189,23 +189,25 @@ internal object EnrollmentRecoveryManager {
         }
 
         val persisted = try {
-            dao.persistIssuedEnrollment(
-                id = request.serverId,
-                ownerNonce = request.ownerNonce,
-                name = row.name,
-                sourceDeviceId = request.sourceDeviceId,
-                authMode = AUTH_MODE_API_KEY,
-                apiKey = request.proposedApiKey,
-                mobileSigningSecretOverride = request.mobileSigningSecretOverride,
-                studyDisclosureJson = requireNotNull(row.studyDisclosureJson),
-                disclosureVersion = requireNotNull(row.disclosureVersion),
-                manifestDigest = request.manifestDigest,
-                pendingAcceptedModuleIds = encodePendingEnrollmentModules(recovery.accepted),
-                pendingDeclinedModuleIds = encodePendingEnrollmentModules(recovery.declined),
-                pendingUnavailableModuleIds = encodePendingEnrollmentModules(recovery.unavailable),
-                enrollmentAttemptId = request.attemptId,
-                issuedAtEpochMillis = System.currentTimeMillis(),
-            )
+            com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(context) {
+                dao.persistIssuedEnrollment(
+                    id = request.serverId,
+                    ownerNonce = request.ownerNonce,
+                    name = row.name,
+                    sourceDeviceId = request.sourceDeviceId,
+                    authMode = AUTH_MODE_API_KEY,
+                    apiKey = request.proposedApiKey,
+                    mobileSigningSecretOverride = request.mobileSigningSecretOverride,
+                    studyDisclosureJson = requireNotNull(row.studyDisclosureJson),
+                    disclosureVersion = requireNotNull(row.disclosureVersion),
+                    manifestDigest = request.manifestDigest,
+                    pendingAcceptedModuleIds = encodePendingEnrollmentModules(recovery.accepted),
+                    pendingDeclinedModuleIds = encodePendingEnrollmentModules(recovery.declined),
+                    pendingUnavailableModuleIds = encodePendingEnrollmentModules(recovery.unavailable),
+                    enrollmentAttemptId = request.attemptId,
+                    issuedAtEpochMillis = System.currentTimeMillis(),
+                )
+            }
         } catch (error: Exception) {
             // Exact request state remains intact, including after remote success + local I/O failure.
             Log.e(TAG, "Issued credential persistence will retry (${error.javaClass.simpleName})")
@@ -255,6 +257,10 @@ internal object EnrollmentRecoveryManager {
             ?: return EnrollmentRecoveryResult.RETRY_REQUIRED
         val ownerNonce = requireNotNull(row.reservationNonce)
         ResearchPersistenceGate.stop {
+            CollectionLoopCoordinator(context).replayPendingErasures()
+            if (com.openlattice.chronicle.collection.state.ResearchErasureFence(context).installEnrollment(row)) {
+                com.openlattice.chronicle.collection.state.eraseResearchSourceState(context)
+            }
             // Resolve the legacy preference while the previous enrollment identity is still
             // available. Ambiguous ownership is quarantined by the importer.
             LocalUploadDiagnosticsStore.of(context)
@@ -275,13 +281,16 @@ internal object EnrollmentRecoveryManager {
             recovery.accepted,
             recovery.declined,
             recovery.unavailable,
+            expectedEnrollment = row,
         )
         if (!locallyApplied) {
             Log.w(TAG, "Issued enrollment local reconciliation will retry")
             return EnrollmentRecoveryResult.RETRY_REQUIRED
         }
-        check(dao.completeEnrollmentSetup(row.id, ownerNonce) == 1) {
-            "Issued enrollment ownership changed before setup completion"
+        ResearchPersistenceGate.stop {
+            check(dao.completeEnrollmentSetup(row.id, ownerNonce) == 1) {
+                "Issued enrollment ownership changed before setup completion"
+            }
         }
         return EnrollmentRecoveryResult.COMPLETED
     }
@@ -312,13 +321,16 @@ internal object EnrollmentRecoveryManager {
     }.getOrNull()
 
     private fun deleteExactPendingAttempt(
+        context: Context,
         dao: UploadServerDao,
         pending: PendingEnrollmentReplayRequest,
-    ): Boolean = dao.deletePendingEnrollmentAttempt(
-        id = pending.serverId,
-        ownerNonce = pending.ownerNonce,
-        enrollmentAttemptId = pending.attemptId,
-    ) == 1
+    ): Boolean = ResearchPersistenceGate.enrollmentMutation(context) {
+        dao.deletePendingEnrollmentAttempt(
+            id = pending.serverId,
+            ownerNonce = pending.ownerNonce,
+            enrollmentAttemptId = pending.attemptId,
+        ) == 1
+    }
 
     private fun validateRecoveryState(row: UploadServerEntity): RecoveryState? {
         val manifestJson = row.studyDisclosureJson ?: return null

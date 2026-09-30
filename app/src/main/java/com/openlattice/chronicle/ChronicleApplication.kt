@@ -1,6 +1,7 @@
 package com.openlattice.chronicle
 
 import android.app.Application
+import android.os.Build
 import androidx.work.Configuration
 import com.openlattice.chronicle.services.crypto.FileSealedEnvelopeStore
 import com.openlattice.chronicle.services.crypto.PayloadSealer
@@ -32,8 +33,16 @@ class ChronicleApplication : Application(), Configuration.Provider {
         // dataDir/no_backup is noBackupFilesDir, so the envelopes never enter a backup.
         PayloadSealer.sealedEnvelopeStore =
             FileSealedEnvelopeStore(File(applicationInfo.dataDir, "no_backup/sealed-envelopes"))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N ||
+            getSystemService(android.os.UserManager::class.java)?.isUserUnlocked == true) {
+            com.openlattice.chronicle.collection.state.ResearchPersistenceGate.initializeAsync(this)
+        }
     }
 
     override val workManagerConfiguration: Configuration
-        get() = Configuration.Builder().build()
+        get() = Configuration.Builder()
+            .setInitializationExceptionHandler { error ->
+                WorkSchedulingStatus.initializationFailed(error, baseContext?.applicationContext, reconcileStartup = true)
+            }
+            .build()
 }

@@ -44,6 +44,8 @@ data class DashboardSnapshot(
     val serverHealth: ServerHealthSummary,
     val servers: List<UploadServerSummary>,
     val localUploadIssues: List<LocalUploadIssueBucket>,
+    val localUploadDiagnosticsAvailable: Boolean = true,
+    val workSchedulingAvailable: Boolean = true,
 )
 
 data class CollectionStatusSummary(
@@ -113,6 +115,12 @@ object DashboardDataRepository {
             },
         )
 
+        val diagnostics = try {
+            LocalUploadDiagnosticsStore.of(appContext).recent()
+        } catch (error: Exception) {
+            android.util.Log.e("DashboardDataRepository", "Upload diagnostics unavailable; legacy import will retry", error)
+            null
+        }
         DashboardSnapshot(
             studyId = enrollment.getStudyId().toString(),
             participantId = enrollment.getParticipantId(),
@@ -129,7 +137,9 @@ object DashboardDataRepository {
             }.getOrDefault(emptyList()),
             sensors = loadSensorSummary(appContext, db),
             serverHealth = loadServerHealth(appContext, servers),
-            localUploadIssues = LocalUploadDiagnosticsStore.of(appContext).recent(),
+            localUploadIssues = diagnostics.orEmpty(),
+            localUploadDiagnosticsAvailable = diagnostics != null,
+            workSchedulingAvailable = !com.openlattice.chronicle.WorkSchedulingStatus.unavailable,
             servers = servers.map { server ->
                 val disclosure = parseDisclosure(server.studyDisclosureJson)
                 UploadServerSummary(

@@ -11,6 +11,8 @@ import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.collection.sink.LifecycleEventSink
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.storage.QueueEntry
@@ -143,7 +145,12 @@ public class DeviceLifecycleCollectionModule(
      * diagnostics, never swallowed. The caller (the `recordAsync` shim) decides what to
      * do with a [ModuleResult.Failed]; it is not thrown.
      */
-    public fun persist(events: List<ExtractedUsageEvent>): ModuleResult {
+    public fun persist(
+        events: List<ExtractedUsageEvent>,
+        origin: CollectionPersistenceGuard = sink.captureAdmission(),
+    ): ModuleResult = origin.writeObservation { persistAdmitted(events) }
+
+    private fun persistAdmitted(events: List<ExtractedUsageEvent>): ModuleResult {
         val now = clock.nowEpochMs()
         lastRunEpochMs = now
 

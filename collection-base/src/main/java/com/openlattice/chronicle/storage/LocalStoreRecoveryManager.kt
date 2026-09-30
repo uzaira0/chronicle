@@ -51,16 +51,110 @@ object LocalStoreRecoveryManager {
         eraseForScope(root, digest)
     }
 
-    internal fun eraseForScope(root: File, digest: String) {
+    /** Explicit pending module erasure also covers an archive made during verified recovery. */
+    fun erasePendingRecoveryArtifacts(context: Context, ownerScopeDigest: String?) {
+        val root = File(context.noBackupFilesDir, "chronicle-recovery")
+        eraseForScope(root, ownerScopeDigest)
+    }
+
+    internal fun eraseForScope(root: File, digest: String?) {
         root.listFiles()?.filter(File::isDirectory)?.forEach { directory ->
             val manifest = File(directory, "manifest.txt")
             val recorded = manifest.takeIf(File::isFile)?.readLines()
                 ?.firstOrNull { it.startsWith("owner_scope_sha256=") }
                 ?.substringAfter('=')
-            if (recorded == null || recorded == "unknown" || recorded == digest) {
-                check(directory.deleteRecursively()) { "Unable to erase withdrawn enrollment recovery bundle" }
+            if (digest == null || recorded == null || recorded == "unknown" || recorded == digest) {
+                val retained = try { preserveDiagnosticsBeforeErasure(directory); emptySet() }
+                catch (error: Exception) {
+                    android.util.Log.e("LocalStoreRecovery", "Unable to preserve separate recovery diagnostics before explicit erasure", error)
+                    diagnosticFiles(directory).toSet()
+                }
+                if (retained.isEmpty()) {
+                    checkLocalStoreWrite(directory.deleteRecursively()) { "Unable to erase withdrawn enrollment recovery bundle" }
+                } else {
+                    // Research artifacts go now; separate diagnostics stay in place for the next attempt.
+                    directory.listFiles().orEmpty().filter { it !in retained && it.name != "manifest.txt" }.forEach {
+                        checkLocalStoreWrite(it.deleteRecursively()) { "Unable to erase withdrawn enrollment recovery bundle" }
+                    }
+                }
             }
         }
+    }
+
+    private fun diagnosticFiles(directory: File): List<File> {
+        val names = File(directory, "manifest.txt").takeIf(File::isFile)?.readLines().orEmpty()
+            .filter { it.startsWith("diagnostic_artifact=") }.map { it.substringAfter('=') }.toSet()
+        return directory.listFiles().orEmpty().filter {
+            it.isFile && (it.name in names || it.name.contains("-diagnostics.") || it.name.contains("diagnostics-corrupt-"))
+        }
+    }
+
+    /** An unsplit database/preferences archive may contain the only diagnostic journal. */
+    private fun preserveDiagnosticsBeforeErasure(directory: File) {
+        val manifest = File(directory, "manifest.txt").takeIf(File::isFile)?.readLines().orEmpty()
+        val mixed = directory.listFiles().orEmpty().any {
+            it.name.contains("chronicle.db") || it.name.contains("-chronicle") || it.name.contains("chronicle_encrypted_prefs")
+        }
+        if (mixed && "diagnostics_separated=true" !in manifest) {
+            android.util.Log.w("LocalStoreRecovery", "Explicit erasure removes an unsplit recovery bundle and its mixed diagnostics")
+        }
+        val diagnosticNames = manifest.filter { it.startsWith("diagnostic_artifact=") }.map { it.substringAfter('=') }.toSet()
+        if (mixed && "diagnostics_separated=true" in manifest &&
+            (diagnosticNames.isEmpty() || diagnosticNames.any { !File(directory, it).isFile })) {
+            android.util.Log.w("LocalStoreRecovery", "Separate recovery diagnostics are missing; completing explicit erasure")
+        }
+        val diagnostics = diagnosticFiles(directory)
+        if (diagnostics.isEmpty()) return
+        val preserved = File(checkNotNull(checkNotNull(directory.parentFile).parentFile), "chronicle-diagnostics-recovery/${directory.name}")
+        check(preserved.exists() || preserved.mkdirs())
+        diagnostics.forEach { source ->
+            val destination = File(preserved, source.name)
+            if (!destination.exists()) {
+                FileOutputStream(destination).use { output -> source.inputStream().use { it.copyTo(output) }; output.fd.sync() }
+            }
+            if (!MessageDigest.getInstance("SHA-256").digest(source.readBytes()).contentEquals(
+                    MessageDigest.getInstance("SHA-256").digest(destination.readBytes()))) {
+                destination.delete() // a partial copy must not block the next attempt
+                error("Preserved diagnostic artifact verification failed")
+            }
+        }
+    }
+
+    /** Reads only diagnostic tables; no sample or participant payload enters this artifact. */
+    internal fun diagnosticSnapshot(db: ChronicleDb, legacyDiagnostics: String?): ByteArray {
+        val result = org.json.JSONObject().put("legacy_upload_diagnostics", legacyDiagnostics)
+        listOf("upload_diagnostics", "diagnostic_import_checkpoints").forEach { table ->
+            val rows = org.json.JSONArray()
+            db.openHelper.readableDatabase.query("SELECT * FROM `$table`").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val row = org.json.JSONObject()
+                    cursor.columnNames.forEachIndexed { index, name ->
+                        row.put(name, when (cursor.getType(index)) {
+                            android.database.Cursor.FIELD_TYPE_NULL -> org.json.JSONObject.NULL
+                            android.database.Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(index)
+                            android.database.Cursor.FIELD_TYPE_FLOAT -> cursor.getDouble(index)
+                            android.database.Cursor.FIELD_TYPE_BLOB -> android.util.Base64.encodeToString(cursor.getBlob(index), android.util.Base64.NO_WRAP)
+                            else -> cursor.getString(index)
+                        })
+                    }
+                    rows.put(row)
+                }
+            }
+            result.put(table, rows)
+        }
+        val quarantine = org.json.JSONArray()
+        db.openHelper.readableDatabase.query("SELECT * FROM local_data_quarantine WHERE sourceTable IN ('upload_diagnostics', 'legacy_upload_diagnostics', 'unowned_upload_diagnostics', 'direct_boot_diagnostic')").use { cursor ->
+            while (cursor.moveToNext()) {
+                val row = org.json.JSONObject()
+                cursor.columnNames.forEachIndexed { index, name ->
+                    row.put(name, if (cursor.getType(index) == android.database.Cursor.FIELD_TYPE_BLOB)
+                        android.util.Base64.encodeToString(cursor.getBlob(index), android.util.Base64.NO_WRAP) else cursor.getString(index))
+                }
+                quarantine.put(row)
+            }
+        }
+        result.put("diagnostic_quarantine", quarantine)
+        return result.toString().toByteArray(Charsets.UTF_8)
     }
 
     fun preserveAndReset(
@@ -68,6 +162,8 @@ object LocalStoreRecoveryManager {
         reason: LocalStoreRecoveryReason,
         confirmation: LocalStoreResetConfirmation,
         enrollmentOwner: Pair<String, String>? = null,
+        legacyDiagnostics: String? = null,
+        legacyDiagnosticsVerified: Boolean = false,
     ): LocalStoreResetResult {
         confirmation.requireExplicitApproval()
         val appContext = context.applicationContext
@@ -100,6 +196,18 @@ object LocalStoreRecoveryManager {
                 val artifact = File(bundleDirectory, "artifact-${index + 1}-${source.name}.enc")
                 val sha256 = DatabaseKeyManager.encryptAndVerifyRecoveryArtifact(source, artifact)
                 manifestLines += "artifact=${artifact.name},bytes=${source.length()},sha256=$sha256"
+            }
+            val diagnostics = runCatching { diagnosticSnapshot(ChronicleDb.getInstance(appContext), legacyDiagnostics) }.getOrNull()
+            if (diagnostics != null && (legacyDiagnosticsVerified || sources.none { it.name == "chronicle_encrypted_prefs.xml" })) {
+                val temporary = File(bundleDirectory, "diagnostic-snapshot.json")
+                try {
+                    FileOutputStream(temporary).use { it.write(diagnostics); it.fd.sync() }
+                    val artifact = File(bundleDirectory, "diagnostic-snapshot.enc")
+                    val digest = DatabaseKeyManager.encryptAndVerifyRecoveryArtifact(temporary, artifact)
+                    manifestLines += "diagnostic_artifact=${artifact.name}"
+                    manifestLines += "diagnostic_sha256=$digest"
+                    manifestLines += "diagnostics_separated=true"
+                } finally { check(!temporary.exists() || temporary.delete()) }
             }
             writeManifest(bundleDirectory, manifestLines)
 

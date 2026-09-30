@@ -26,6 +26,7 @@ import com.openlattice.chronicle.services.upload.LocalOperationalIssue
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.recordPolicyErasureInTransaction
 import com.openlattice.chronicle.services.upload.recordPolicyErasureCountInTransaction
+import com.openlattice.chronicle.services.upload.quarantineSourcesForTable
 
 private const val TAG = "MinimalPlayBoundary"
 private const val UNIQUE_WORK_NAME = "minimal_play_artifact_boundary"
@@ -46,6 +47,7 @@ class MinimalPlayBoundaryWorker(
         if (BuildConfig.DISTRIBUTION_CHANNEL !in setOf("PLAY", "AMAZON")) return Result.success()
         return try {
             ResearchPersistenceGate.stop {
+                purgeRestrictedPlaySourceState(applicationContext)
                 val inventory = inspectDirectBootSamplesForErasure(applicationContext)
                 UploadQueueSingleFlight.withExclusiveMutation {
                     val db = ChronicleDb.getInstance(applicationContext)
@@ -96,6 +98,19 @@ class MinimalPlayBoundaryWorker(
     }
 }
 
+internal fun purgeRestrictedPlaySourceState(context: Context) {
+    com.openlattice.chronicle.collection.state.CollectionLoopCoordinator(context).replayPendingErasures()
+    val restricted = com.openlattice.chronicle.collection.CollectionModuleId.values().filter {
+        it.id !in BuildConfig.PLAY_APPROVED_MODULE_IDS.split(',')
+    }.toSet()
+    com.openlattice.chronicle.collection.state.ResearchErasureFence(context)
+        .erase(restricted, durableIntent = false)
+    com.openlattice.chronicle.collection.state.eraseResearchSourceState(context)
+    UploadQueueSingleFlight.withExclusiveMutation {
+        restricted.forEach { com.openlattice.chronicle.collection.state.eraseModuleAuxiliaryState(context, it) }
+    }
+}
+
 internal fun purgeRestrictedPlayRows(db: ChronicleDb) {
     val approvedModuleIds = BuildConfig.PLAY_APPROVED_MODULE_IDS
         .split(',')
@@ -113,6 +128,7 @@ internal fun purgeRestrictedPlayRows(db: ChronicleDb) {
             "sleep_samples",
             "activity_recognition_samples",
             "health_metric_samples",
+            "app_network_usage_samples",
         ).forEach { table ->
             val family = when (table) {
                 "sensor_samples", "sensor_sample_dead_letters" -> LocalUploadModuleFamily.SENSOR
@@ -122,11 +138,13 @@ internal fun purgeRestrictedPlayRows(db: ChronicleDb) {
                 "notification_activity_samples" -> LocalUploadModuleFamily.NOTIFICATION
                 "sleep_samples" -> LocalUploadModuleFamily.SLEEP
                 "activity_recognition_samples" -> LocalUploadModuleFamily.ACTIVITY_RECOGNITION
+                "app_network_usage_samples" -> LocalUploadModuleFamily.APP_NETWORK
                 else -> LocalUploadModuleFamily.HEALTH
             }
             recordPolicyErasureInTransaction(
                 db, table, family, LocalOperationalIssue.DISTRIBUTION_POLICY_ERASED,
             )
+            db.localDataQuarantineDao().eraseSources(quarantineSourcesForTable(table))
             sql.execSQL("DELETE FROM `$table`")
         }
         val placeholders = approvedModuleIds.joinToString(",") { "?" }

@@ -38,7 +38,7 @@ object EncryptedPrefsHelper {
             )
         } catch (e: Exception) {
             Log.e(TAG, "EncryptedSharedPreferences unavailable; refusing plaintext fallback", e)
-            throw IllegalStateException("Secure preference storage is unavailable", e)
+            throw SecurePreferencesUnavailableException(e)
         }
 
         // Migration is separate — a migration failure must not cause encryption fallback

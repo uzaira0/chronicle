@@ -25,6 +25,7 @@ private val TAG = DirectBootProcessInit::class.java.simpleName
 object DirectBootProcessInit {
 
     fun reinitializeAfterUnlock(context: Context) {
+        com.openlattice.chronicle.collection.state.ResearchPersistenceGate.initializeAsync(context)
         val initializer = AppInitializer.getInstance(context.applicationContext)
         runCatching { initializer.initializeComponent(ProcessLifecycleInitializer::class.java) }
             .onFailure { Log.w(TAG, "ProcessLifecycle re-init failed (non-fatal)", it) }

@@ -92,6 +92,8 @@ class UsageMonitoringWorker(context: Context, workerParameters: WorkerParameters
 }
 
 class UsageCollectionDelegate(private val context: Context) {
+    private lateinit var observationSink: com.openlattice.chronicle.collection.sink.UsageEventSink
+    private lateinit var observationCheckpoint: com.openlattice.chronicle.collection.usage.DaoUsagePollCheckpointStore
     private val sw = Stopwatch.createStarted()
     private val rand = SecureRandom()
     private val serviceId = rand.nextLong()
@@ -168,6 +170,14 @@ class UsageCollectionDelegate(private val context: Context) {
         )
 
         val w = Stopwatch.createStarted()
+        val scope = ResearchPersistenceGate.withReadLease {
+            val currentScope = ResearchPersistenceGate.observationScope(context, CollectionModuleId.USAGE_EVENTS)
+                ?: return@withReadLease null
+            observationSink = ResearchPersistenceGate.usageSink(context)
+            observationCheckpoint = com.openlattice.chronicle.collection.usage.DaoUsagePollCheckpointStore(
+                chronicleDb.usagePollCheckpointDao(), currentScope.first, currentScope.second, com.openlattice.chronicle.collection.state.ResearchErasureFence(context).legacyCheckpointOwner())
+            currentScope
+        } ?: return true
         val currentPollTimestamp = System.currentTimeMillis()
         // Legacy independently schedulable collection must obey the same optional-field scope as
         // the module delegate. A stale local identify_user preference is never study authority.
@@ -185,9 +195,8 @@ class UsageCollectionDelegate(private val context: Context) {
         val usageEvents = sensors.flatMap { sensor ->
             when (sensor) {
                 is UsageEventsChronicleSensor -> {
-                    val previousPollTimestamp = chronicleDb.usagePollCheckpointDao()
-                        .getLastPollTimestamp(USAGE_EVENTS_SENSOR_CHECKPOINT)
-                        ?: sensor.previousPollTimestamp()
+                    val previousPollTimestamp = observationCheckpoint.readPreviousPollTimestamp()
+                        ?: maxOf(scope.second, sensor.previousPollTimestamp())
                     sensor.poll(previousPollTimestamp, currentPollTimestamp, users)
                 }
                 else -> sensor.poll(currentPollTimestamp, users)
@@ -236,7 +245,7 @@ class UsageCollectionDelegate(private val context: Context) {
         // Therefore we can clear out user entries that have a lower timestamp
         val lowestTimestamp = users.lowerEntry(currentPollTimestamp)?.key
         lowestTimestamp?.let {
-            userStorageQueue.deleteEntriesWithLowerTimestamp(currentPollTimestamp)
+            observationSink.withAdmission { userStorageQueue.deleteEntriesWithLowerTimestamp(currentPollTimestamp) }
         }
         users.clear() //Release references for GC
 
@@ -246,21 +255,10 @@ class UsageCollectionDelegate(private val context: Context) {
     private fun persistUsageQueueAndCheckpoint(
         queueEntries: List<QueueEntry>,
         currentPollTimestamp: Long,
-    ): Boolean = ResearchPersistenceGate.persistIfCollecting(
-        context,
-        CollectionModuleId.USAGE_EVENTS,
-        // Not a loss: the checkpoint advances only in this transaction, so the next poll re-reads.
-        records = 0,
-    ) {
-        chronicleDb.runInTransaction {
-            if (queueEntries.isNotEmpty()) {
-                storageQueue.insertEntries(queueEntries)
-            }
-            chronicleDb.usagePollCheckpointDao().upsert(
-                UsagePollCheckpointEntity(USAGE_EVENTS_SENSOR_CHECKPOINT, currentPollTimestamp)
-            )
-        }
-    }
+    ): Boolean = com.openlattice.chronicle.collection.usage.UsageModulePersistence.persist(
+        queueEntries, currentPollTimestamp, observationSink, observationCheckpoint::commitPollTimestamp,
+        { block -> chronicleDb.runInTransaction(block) },
+    )
 
     private fun getPropertyTypeIds(): Map<FullQualifiedName, UUID> {
         // try retrieving cached values first
@@ -322,13 +320,13 @@ internal fun buildUsageQueueEntries(
     }
 }
 
-fun scheduleUsageMonitoringWork(context: Context) {
+fun scheduleUsageMonitoringWork(context: Context): androidx.work.Operation {
 
     val workRequest: PeriodicWorkRequest =
         PeriodicWorkRequestBuilder<UsageMonitoringWorker>(15, TimeUnit.MINUTES)
             .build()
 
-    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+    return WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         USAGE_WORK_NAME,
         ExistingPeriodicWorkPolicy.UPDATE,
         workRequest

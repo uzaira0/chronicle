@@ -95,17 +95,6 @@ class UsageModuleCollectionDelegate(private val context: Context) {
             propertyTypeIds = getPropertyTypeIds()
             storageQueue = chronicleDb.queueEntryData()
             userStorageQueue = chronicleDb.userQueueEntryData()
-            usageEventSink = UsageEventSink(
-                storageQueue,
-                persistenceGuard = ResearchPersistenceGate.guard(context, CollectionModuleId.USAGE_EVENTS),
-            )
-            usageModule = UsageEventsCollectionModule(
-                poller = SystemUsageEventPoller(context),
-                checkpointStore = DaoUsagePollCheckpointStore(chronicleDb.usagePollCheckpointDao()),
-                // Identical fallback ordering to the legacy path:
-                // checkpoint row, else the sensor's encrypted-prefs default.
-                previousPollTimestampFallback = { UsageEventsChronicleSensor(context).previousPollTimestamp() },
-            )
             val collected = monitorUsage()
             if (!collected) {
                 return false
@@ -153,14 +142,32 @@ class UsageModuleCollectionDelegate(private val context: Context) {
         )
 
         val w = Stopwatch.createStarted()
+        var collectActivityClass = false
+        var collectUser = false
+        val captured = ResearchPersistenceGate.withReadLease {
+            val scope = ResearchPersistenceGate.observationScope(context, CollectionModuleId.USAGE_EVENTS)
+                ?: return@withReadLease false
+            usageEventSink = ResearchPersistenceGate.usageSink(context)
+            collectActivityClass = ResearchPersistenceGate.collectsNow(context, CollectionModuleId.IN_APP_ACTIVITY_CLASS)
+            collectUser = settings.isUserIdentificationEnabled() &&
+                ResearchPersistenceGate.collectsNow(context, CollectionModuleId.USER_IDENTIFICATION)
+            val checkpoints = DaoUsagePollCheckpointStore(chronicleDb.usagePollCheckpointDao(), scope.first, scope.second, com.openlattice.chronicle.collection.state.ResearchErasureFence(context).legacyCheckpointOwner())
+            val initialStart = checkpoints.readOrRememberStart {
+                maxOf(scope.second, UsageEventsChronicleSensor(context).previousPollTimestamp())
+            }
+            usageModule = UsageEventsCollectionModule(
+                poller = SystemUsageEventPoller(context),
+                checkpointStore = checkpoints,
+                previousPollTimestampFallback = { initialStart },
+            )
+            true
+        }
+        if (!captured) return true
         val currentPollTimestamp = System.currentTimeMillis()
         // Participant labels are an optional field authorized by USER_IDENTIFICATION, not an
         // implicit part of usage_events. Never attach an old queue after that study scope or the
         // participant's local choice has closed.
-        val userTimestamps = if (
-            settings.isUserIdentificationEnabled() &&
-            CollectionGate.collects(context, CollectionModuleId.USER_IDENTIFICATION)
-        ) {
+        val userTimestamps = if (collectUser) {
             userStorageQueue.getUserTimestamps()
         } else {
             emptyList()
@@ -175,9 +182,8 @@ class UsageModuleCollectionDelegate(private val context: Context) {
             users,
             CollectionWindow(startEpochMs = 0L, endEpochMs = currentPollTimestamp),
         )
-        // in_app_activity_class field gate: strip the within-app Activity/screen class unless the
-        // participant has accepted that (opt-in) module; package-level usage is unaffected.
-        val collectActivityClass = CollectionGate.collects(context, CollectionModuleId.IN_APP_ACTIVITY_CLASS)
+        // Project using capture-time admission. The sink revalidates the optional fields'
+        // owner, erasure epochs and observation floors during insertion.
         val gatedUsageEvents = gateActivityClass(outcome.events, collectActivityClass)
         // Keep the upstream combined UsageStats event sequence intact. Supplemental device-state
         // broadcasts have their own persistence path and are not synthesized into each poll.
@@ -185,7 +191,7 @@ class UsageModuleCollectionDelegate(private val context: Context) {
 
         if (queueEntry.isEmpty()) {
             Log.i(TAG, "No sensors reported any data since last poll.")
-            persistUsageQueueAndCheckpoint(emptyList(), currentPollTimestamp)
+            if (!persistUsageQueueAndCheckpoint(emptyList(), currentPollTimestamp)) return true
             users.clear() //Release references for GC
             return true
         }
@@ -194,7 +200,7 @@ class UsageModuleCollectionDelegate(private val context: Context) {
             queueEntry,
             chronicleDb.nextQueueWriteTimestamp(),
         ) { rand.nextLong() }
-        persistUsageQueueAndCheckpoint(queueEntries, currentPollTimestamp)
+        if (!persistUsageQueueAndCheckpoint(queueEntries, currentPollTimestamp)) return true
 
         queueEntry.asSequence().chunked(1000).forEach { chunk ->
             Log.d(
@@ -211,7 +217,7 @@ class UsageModuleCollectionDelegate(private val context: Context) {
 
         val lowestTimestamp = users.lowerEntry(currentPollTimestamp)?.key
         lowestTimestamp?.let {
-            userStorageQueue.deleteEntriesWithLowerTimestamp(currentPollTimestamp)
+            usageEventSink.withAdmission { userStorageQueue.deleteEntriesWithLowerTimestamp(currentPollTimestamp) }
         }
         users.clear() //Release references for GC
 
@@ -228,15 +234,13 @@ class UsageModuleCollectionDelegate(private val context: Context) {
     private fun persistUsageQueueAndCheckpoint(
         queueEntries: List<com.openlattice.chronicle.storage.QueueEntry>,
         currentPollTimestamp: Long,
-    ) {
-        UsageModulePersistence.persist(
+    ): Boolean = UsageModulePersistence.persist(
             entries = queueEntries,
             currentPollTimestamp = currentPollTimestamp,
             sink = usageEventSink,
             commitCheckpoint = usageModule::commitCheckpoint,
             transaction = { body -> chronicleDb.runInTransaction(body) },
         )
-    }
 
     private fun getPropertyTypeIds(): Map<FullQualifiedName, UUID> {
         var propertyTypeIds = settings.getPropertyTypeIds()

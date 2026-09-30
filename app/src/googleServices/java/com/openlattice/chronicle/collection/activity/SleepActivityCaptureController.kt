@@ -3,6 +3,8 @@ package com.openlattice.chronicle.collection.activity
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
@@ -54,13 +56,16 @@ public object SleepActivityCaptureController {
         GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context) ==
             ConnectionResult.SUCCESS
 
-    public fun ensureRegistration(context: Context) {
+    public fun ensureRegistration(context: Context) = ResearchPersistenceGate.withReadLease {
+        ensureRegistrationAdmitted(context)
+    }
+
+    private fun ensureRegistrationAdmitted(context: Context) {
         val appContext = context.applicationContext
         if (!isAvailable(appContext)) {
             Log.i(TAG, "Google Play Services unavailable; sleep/activity registration skipped")
             return
         }
-        val pendingIntent = pendingIntent(appContext)
         val client = ActivityRecognition.getClient(appContext)
         val hasPermission = hasActivityRecognitionPermission(appContext)
 
@@ -69,6 +74,7 @@ public object SleepActivityCaptureController {
         // also handled explicitly so lint's permission contract for the gated GMS call is satisfied
         // (lint does not follow the hoisted permission check through a helper).
         if (CollectionGate.collects(appContext, CollectionModuleId.ACTIVITY_RECOGNITION) && hasPermission) {
+            val pendingIntent = registrationIntent(appContext, CollectionModuleId.ACTIVITY_RECOGNITION) ?: return
             try {
                 client.requestActivityTransitionUpdates(transitionRequest(), pendingIntent)
                     .addOnFailureListener { Log.w(TAG, "requestActivityTransitionUpdates failed: ${it.javaClass.simpleName}") }
@@ -78,11 +84,12 @@ public object SleepActivityCaptureController {
                 Log.w(TAG, "activity transition registration threw: ${e.javaClass.simpleName}")
             }
         } else {
-            removeActivityTransitionUpdatesSafely(client, pendingIntent)
+            eraseRegistration(appContext, CollectionModuleId.ACTIVITY_RECOGNITION)
         }
 
         // sleep
         if (CollectionGate.collects(appContext, CollectionModuleId.SLEEP) && hasPermission) {
+            val pendingIntent = registrationIntent(appContext, CollectionModuleId.SLEEP) ?: return
             try {
                 client.requestSleepSegmentUpdates(pendingIntent, SleepSegmentRequest.getDefaultSleepSegmentRequest())
                     .addOnFailureListener { Log.w(TAG, "requestSleepSegmentUpdates failed: ${it.javaClass.simpleName}") }
@@ -92,17 +99,50 @@ public object SleepActivityCaptureController {
                 Log.w(TAG, "sleep registration threw: ${e.javaClass.simpleName}")
             }
         } else {
-            removeSleepUpdatesSafely(client, pendingIntent)
+            eraseRegistration(appContext, CollectionModuleId.SLEEP)
         }
     }
 
     /** Removes both registrations (used on withdrawal / disable). */
     public fun unregisterAll(context: Context) {
         val appContext = context.applicationContext
-        val pendingIntent = pendingIntent(appContext)
-        val client = ActivityRecognition.getClient(appContext)
-        removeActivityTransitionUpdatesSafely(client, pendingIntent)
-        removeSleepUpdatesSafely(client, pendingIntent)
+        eraseRegistration(appContext, CollectionModuleId.SLEEP)
+        eraseRegistration(appContext, CollectionModuleId.ACTIVITY_RECOGNITION)
+        // Retire the old shared registration as well when upgrading a pre-epoch installation.
+        val legacy = PendingIntent.getBroadcast(appContext, REQUEST_CODE,
+            Intent(appContext, SleepActivityReceiver::class.java).setAction(SleepActivityReceiver.ACTION_SLEEP_ACTIVITY),
+            pendingFlags(PendingIntent.FLAG_NO_CREATE))
+        if (legacy != null) {
+            val client = ActivityRecognition.getClient(appContext)
+            removeActivityTransitionUpdatesSafely(client, legacy)
+            removeSleepUpdatesSafely(client, legacy)
+            legacy.cancel()
+        }
+    }
+
+    public fun eraseRegistration(context: Context, module: CollectionModuleId) {
+        val prefs = context.getSharedPreferences("activity_registration_scopes", Context.MODE_PRIVATE)
+        val scope = prefs.getString(module.id, null) ?: return
+        val pending = pendingIntent(context, module, scope, PendingIntent.FLAG_NO_CREATE)
+        if (pending != null) {
+            val client = ActivityRecognition.getClient(context)
+            if (module == CollectionModuleId.SLEEP) removeSleepUpdatesSafely(client, pending)
+            else removeActivityTransitionUpdatesSafely(client, pending)
+            pending.cancel()
+        }
+        check(prefs.edit().remove(module.id).commit())
+    }
+
+    private fun registrationIntent(context: Context, module: CollectionModuleId): PendingIntent? {
+        val origin = ResearchPersistenceGate.captureObservation(context, module)
+        if (!origin.isCurrent()) return null
+        val scope = ResearchPersistenceGate.observationScope(context, module)?.first ?: return null
+        val prefs = context.getSharedPreferences("activity_registration_scopes", Context.MODE_PRIVATE)
+        if (prefs.getString(module.id, null) != scope) {
+            eraseRegistration(context, module)
+            check(prefs.edit().putString(module.id, scope).commit())
+        }
+        return pendingIntent(context, module, scope, PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     /**
@@ -146,13 +186,15 @@ public object SleepActivityCaptureController {
         return ActivityTransitionRequest(transitions)
     }
 
-    private fun pendingIntent(appContext: Context): PendingIntent {
-        val intent = Intent(appContext, SleepActivityReceiver::class.java)
+    private fun pendingFlags(base: Int): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) base or PendingIntent.FLAG_MUTABLE else base
+
+    private fun pendingIntent(context: Context, module: CollectionModuleId, scope: String, flags: Int): PendingIntent? {
+        val intent = Intent(context, SleepActivityReceiver::class.java)
             .setAction(SleepActivityReceiver.ACTION_SLEEP_ACTIVITY)
-        var flags = PendingIntent.FLAG_UPDATE_CURRENT
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            flags = flags or PendingIntent.FLAG_MUTABLE
-        }
-        return PendingIntent.getBroadcast(appContext, REQUEST_CODE, intent, flags)
+            .setData(Uri.parse("chronicle://activity-registration/${module.id}/${Uri.encode(scope)}"))
+            .putExtra("registration_scope", scope)
+            .putExtra("registration_module", module.id)
+        return PendingIntent.getBroadcast(context, REQUEST_CODE + module.ordinal, intent, pendingFlags(flags))
     }
 }

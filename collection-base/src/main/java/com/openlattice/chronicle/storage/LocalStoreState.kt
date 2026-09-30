@@ -25,3 +25,10 @@ class LocalStoreRecoveryRequiredException(
     val recoveryReason: LocalStoreRecoveryReason,
     cause: Throwable? = null
 ) : IllegalStateException("Encrypted local store requires explicit recovery: ${recoveryReason.name}", cause)
+
+/** Distinguishes failed durable writes from rejected domain preconditions. */
+fun checkLocalStoreWrite(success: Boolean, message: () -> String = { "Local store write failed" }) {
+    if (!success) throw LocalStoreRecoveryRequiredException(
+        LocalStoreRecoveryReason.KEY_PERSISTENCE_FAILED, IllegalStateException(message()),
+    )
+}
