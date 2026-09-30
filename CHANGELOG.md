@@ -10,6 +10,10 @@
 
 Full notes per release are in the monorepo `CHANGELOG.md`.
 
+- versionCode 65, `2026.09.30-internal.open.1` (release 2026.9.30): after enrollment the app opens Data Sharing when an
+  accepted module still needs Android access (Usage Access), and Overview says so; questionnaire reminders are delivered
+  again, including when the alarm starts the app; no false enrollment screen after the app is killed; rotating the phone
+  keeps the invitation and consent progress; lifecycle events refused for low storage are counted as lost.
 - versionCode 64, `2026.09.29-internal.open.1` (release 2026.9.29): fixes from the 2026.9.28 review: persistence lock-order hangs fixed; low-storage batches retried or counted as lost, never dropped silently;
   discarded sensors erased from retry buffers and direct-boot files, including interrupted erasures; direct-boot
   files readable across release builds (R8 keep rules); app-network usage never read across enrollments.
