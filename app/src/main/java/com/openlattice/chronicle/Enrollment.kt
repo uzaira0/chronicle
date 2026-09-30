@@ -12,6 +12,8 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -65,16 +67,49 @@ class Enrollment : AppCompatActivity() {
     private lateinit var serverSigningSecretText: TextInputEditText
     private lateinit var serverSigningSecretTextLayout: TextInputLayout
 
-    // Context held across the orientation wizard launch so the result callback can enroll with
-    // the very setting consent was shown for (consent-before-enroll; no second settings fetch).
-    private var pendingStudyId: UUID? = null
-    private var pendingParticipantId: String? = null
-    private var pendingServerUrl: String? = null
-    private var pendingMobileSigningSecretOverride: String? = null
-    private var pendingFetched: AndroidDataCollectionSetting? = null
-    private var pendingPreview: EnrollmentPreviewResponse? = null
-    private var enrollmentAccessCode: String? = null
-    private var pendingEnrollmentAccessCode: String? = null
+    /**
+     * Context held across the disclosure / orientation wizard launches so the result callback can
+     * enroll with the very setting consent was shown for (consent-before-enroll; no second settings
+     * fetch). Held in a ViewModel so a configuration change (rotation during the wizard) keeps it;
+     * memory only — the one-time credential never goes into a saved-state Bundle, disk or logs.
+     */
+    internal class WizardState : ViewModel() {
+        var studyId: UUID? = null
+        var participantId: String? = null
+        var serverUrl: String? = null
+        var mobileSigningSecretOverride: String? = null
+        var fetched: AndroidDataCollectionSetting? = null
+        var preview: EnrollmentPreviewResponse? = null
+        var accessCode: String? = null
+        var pendingAccessCode: String? = null
+        /** The link's credential from the moment it is stripped until [handleIntent] adopts it. */
+        var detachedAccessCode: String? = null
+    }
+    private lateinit var wizard: WizardState
+    private var pendingStudyId: UUID?
+        get() = wizard.studyId
+        set(value) { wizard.studyId = value }
+    private var pendingParticipantId: String?
+        get() = wizard.participantId
+        set(value) { wizard.participantId = value }
+    private var pendingServerUrl: String?
+        get() = wizard.serverUrl
+        set(value) { wizard.serverUrl = value }
+    private var pendingMobileSigningSecretOverride: String?
+        get() = wizard.mobileSigningSecretOverride
+        set(value) { wizard.mobileSigningSecretOverride = value }
+    private var pendingFetched: AndroidDataCollectionSetting?
+        get() = wizard.fetched
+        set(value) { wizard.fetched = value }
+    private var pendingPreview: EnrollmentPreviewResponse?
+        get() = wizard.preview
+        set(value) { wizard.preview = value }
+    private var enrollmentAccessCode: String?
+        get() = wizard.accessCode
+        set(value) { wizard.accessCode = value }
+    private var pendingEnrollmentAccessCode: String?
+        get() = wizard.pendingAccessCode
+        set(value) { wizard.pendingAccessCode = value }
     private var cancelPendingRecoveryOnDone = false
 
     private val orientationLauncher = registerForActivityResult(
@@ -87,6 +122,7 @@ class Enrollment : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wizard = ViewModelProvider(this)[WizardState::class.java]
         try {
             ChronicleDb.getInstance(applicationContext)
         } catch (error: LocalStoreRecoveryRequiredException) {
@@ -131,7 +167,18 @@ class Enrollment : AppCompatActivity() {
         // Enrollment must load the study's configuration and show its per-module consent before
         // asking for sensitive OS access. Usage Access is requested later from Data Sharing, and
         // only when an accepted, active module actually needs it.
-        resumeIssuedEnrollmentOrHandleIntent(intent)
+        if (savedInstanceState != null && (enrollmentAccessCode != null || pendingPreview != null)) {
+            // Configuration change: the stripped Intent no longer carries the credential, so do not
+            // re-handle it. The retained invitation / wizard state stays, and the launchers deliver
+            // the pending disclosure or orientation result to this new instance.
+            submitBtn.isEnabled = pendingPreview == null
+        } else {
+            // A recreation before handleIntent ran finds the credential already stripped.
+            resumeIssuedEnrollmentOrHandleIntent(
+                intent,
+                detachEnrollmentCredential(intent) ?: wizard.detachedAccessCode.takeIf { savedInstanceState != null },
+            )
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -149,6 +196,7 @@ class Enrollment : AppCompatActivity() {
         sourceIntent: Intent,
         detachedAccessCode: String? = detachEnrollmentCredential(sourceIntent),
     ) {
+        wizard.detachedAccessCode = detachedAccessCode
         val invitationOpened = sourceIntent.action == Intent.ACTION_VIEW && sourceIntent.data != null
         submitBtn.isEnabled = false
         progressBar.visibility = View.VISIBLE
@@ -352,6 +400,7 @@ class Enrollment : AppCompatActivity() {
         pendingPreview = null
         enrollmentAccessCode = null
         pendingEnrollmentAccessCode = null
+        wizard.detachedAccessCode = null
     }
 
     private fun validateInput(studyId: String, participantId: String): Boolean {

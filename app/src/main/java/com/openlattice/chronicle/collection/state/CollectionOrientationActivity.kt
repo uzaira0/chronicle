@@ -7,7 +7,9 @@ import android.os.Bundle
 import android.view.View
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.ViewModel
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.openlattice.chronicle.R
@@ -37,9 +39,19 @@ class CollectionOrientationActivity : AppCompatActivity() {
 
     private lateinit var plan: ConsentPlan
     private lateinit var steps: List<Step>
-    private val accepted = linkedSetOf<CollectionModuleId>()
-    private val declined = linkedSetOf<CollectionModuleId>()
-    private var current = 0
+
+    /** Step index and decisions survive rotation; memory only, never a saved-state Bundle. */
+    internal class Progress : ViewModel() {
+        val accepted = linkedSetOf<CollectionModuleId>()
+        val declined = linkedSetOf<CollectionModuleId>()
+        var current = 0
+    }
+    private val progress: Progress by viewModels()
+    private val accepted get() = progress.accepted
+    private val declined get() = progress.declined
+    private var current: Int
+        get() = progress.current
+        set(value) { progress.current = value }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
