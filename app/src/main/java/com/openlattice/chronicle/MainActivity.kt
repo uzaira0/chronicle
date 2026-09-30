@@ -41,6 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val FOREGROUND_SYNC_INTERVAL = 60_000L
+private val EXEMPTION_DIALOG_TAGS = listOf("batteryExemption", "hibernationExemption", "oemBackgroundGuidance")
 
 class MainActivity : AppCompatActivity() {
 
@@ -222,7 +223,11 @@ class MainActivity : AppCompatActivity() {
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         val alarmManager = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        if (!alarmManager.canScheduleExactAlarms()) {
+        // Asked once, ever: reminders fall back to inexact alarms, and opening this settings page on
+        // every launch kept the participant from reaching the app.
+        val prefs = getSharedPreferences("main_activity_prefs", Context.MODE_PRIVATE)
+        if (!alarmManager.canScheduleExactAlarms() && !prefs.getBoolean("exact_alarm_asked", false)) {
+            prefs.edit().putBoolean("exact_alarm_asked", true).apply()
             Log.e(javaClass.name, "Exact alarm permission not granted")
             DeviceSettingsNavigator.open(this, Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -238,7 +243,12 @@ class MainActivity : AppCompatActivity() {
             ParticipantWithdrawalManager.resumePending(this)
             return
         }
-        if (::enrollmentSettings.isInitialized &&
+        // A permission prompt or settings page pauses and resumes this activity; without the tag
+        // check each return stacked another copy of a dialog that was still open.
+        val exemptionDialogOpen = EXEMPTION_DIALOG_TAGS.any { supportFragmentManager.findFragmentByTag(it) != null }
+        if (exemptionDialogOpen) {
+            // One dialog at a time; the next one in the chain shows after this one is dismissed.
+        } else if (::enrollmentSettings.isInitialized &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             !hasIgnoreBatteryOptimization(this) &&
             enrollmentSettings.isBatteryOptimizationDialogEnabled()
