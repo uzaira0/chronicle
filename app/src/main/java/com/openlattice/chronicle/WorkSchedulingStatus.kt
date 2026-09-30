@@ -6,7 +6,6 @@ import android.annotation.SuppressLint
 import androidx.work.impl.WorkManagerImpl
 import androidx.work.impl.utils.ForceStopRunnable
 import androidx.work.impl.WorkDatabasePathHelper
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -44,7 +43,9 @@ internal object WorkSchedulingStatus {
     @SuppressLint("RestrictedApi")
     private fun reconcileStartup(context: Context) {
         val wm = WorkManagerImpl.getInstance(context)
-        val completed = CompletableFuture<Unit>()
+        // CountDownLatch, not CompletableFuture: minSdk 23 has no CompletableFuture.
+        val done = java.util.concurrent.CountDownLatch(1)
+        val failure = java.util.concurrent.atomic.AtomicReference<Exception>()
         // Use WorkManager's serial executor and its startup reconciliation, including RUNNING
         // work and stale progress. UPDATE alone deliberately preserves a running periodic row.
         wm.workTaskExecutor.executeOnTaskThread {
@@ -52,12 +53,14 @@ internal object WorkSchedulingStatus {
                 WorkDatabasePathHelper.migrateDatabase(context)
                 ForceStopRunnable(context, wm).forceStopRunnable()
                 startupRecoveryRequired = false
-                completed.complete(Unit)
             } catch (error: Exception) {
-                completed.completeExceptionally(error)
+                failure.set(error)
+            } finally {
+                done.countDown()
             }
         }
-        completed.get()
+        done.await()
+        failure.get()?.let { throw it }
     }
 
     @Synchronized
