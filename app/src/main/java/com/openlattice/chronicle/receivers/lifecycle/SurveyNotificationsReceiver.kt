@@ -28,11 +28,15 @@ class SurveyNotificationsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!com.openlattice.chronicle.BuildConfig.ALLOW_PARTICIPANT_FORM_REMINDERS) return
         val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-        val owner = gate.captureOwner(context) ?: return
-        val token = gate.captureObservation(context, com.openlattice.chronicle.collection.CollectionModuleId.QUESTIONNAIRE)
         val pending = goAsync()
         Thread {
-        try { token.persist {
+        try {
+        // An alarm often cold-starts the process before authorization is published; wait for it,
+        // well inside the ~10 s goAsync budget, instead of dropping the reminder.
+        gate.awaitAuthorization(context, AUTHORIZATION_WAIT_MS)
+        val owner = gate.captureOwner(context) ?: return@Thread
+        val token = gate.captureStudyEnabledObservation(context, com.openlattice.chronicle.collection.CollectionModuleId.QUESTIONNAIRE)
+        token.persist {
         gate.runIfExpectedOwner(context, owner) {
             val scope = gate.observationScope(context, com.openlattice.chronicle.collection.CollectionModuleId.QUESTIONNAIRE)
             if (scope?.first == intent.getStringExtra(com.openlattice.chronicle.services.notifications.SURVEY_ENROLLMENT_SCOPE) &&
@@ -115,3 +119,5 @@ class SurveyNotificationsReceiver : BroadcastReceiver() {
         }
     }
 }
+
+private const val AUTHORIZATION_WAIT_MS = 5_000L

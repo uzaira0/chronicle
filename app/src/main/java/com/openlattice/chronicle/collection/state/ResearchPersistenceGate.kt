@@ -142,6 +142,20 @@ object ResearchPersistenceGate {
         executeAsync { retryInitialization(context.applicationContext, epoch) }
     }
 
+    /**
+     * Off-main callers woken in a cold process (e.g. an alarm) wait, bounded, for the first
+     * initialization attempt to publish authorization before capturing an owner. Returns at once
+     * when an owner is already published; never waits on the authorization worker itself.
+     */
+    internal fun awaitAuthorization(context: Context, timeoutMs: Long) {
+        check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { "awaitAuthorization blocks" }
+        if (authorization.owner != null || onAuthorizationWorker.get() == true) return
+        initializeAsync(context)
+        // FIFO single worker: this marker runs after the queued initialization attempt.
+        runCatching { replayWorker.submit {}.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) }
+            .onFailure { Log.w(TAG, "Enrollment admission not published before the reminder deadline", it) }
+    }
+
     private fun retryInitialization(context: Context, epoch: Long) {
         if (epoch != initializationEpoch.get()) return
         try {
@@ -202,6 +216,25 @@ object ResearchPersistenceGate {
         return ObservationToken(context.applicationContext, moduleId, snapshot.ownerKey,
             if (moduleId == null) snapshot.totalGeneration else snapshot.generations[moduleId] ?: -1,
             !persistenceFailureClosed && snapshot.active && (moduleId == null || moduleId in snapshot.accepted))
+    }
+
+    /**
+     * [captureObservation] for a non-choice module (QUESTIONNAIRE). Such a module never gets a
+     * consent decision, so it is never in [AuthorizationSnapshot.accepted]; the captured
+     * enrollment's authenticated manifest is its authority instead. Owner, generation and
+     * erasure-fence checks are the same token checks every other observation uses.
+     */
+    fun captureStudyEnabledObservation(context: Context, moduleId: CollectionModuleId): CollectionPersistenceGuard {
+        require(moduleId !in CollectionStateMachine.ACK_GATED_MODULES) { "${moduleId.id} is consent-gated" }
+        authorizationContext = context.applicationContext
+        val snapshot = authorization
+        val owner = snapshot.owner
+        val studyEnabled = owner != null && runCatching {
+            com.openlattice.chronicle.preferences.configuredStudyModuleEnabled(
+                owner, java.util.UUID.fromString(owner.studyId), owner.participantId, moduleId)
+        }.getOrDefault(false)
+        return ObservationToken(context.applicationContext, moduleId, snapshot.ownerKey,
+            snapshot.generations[moduleId] ?: -1, !persistenceFailureClosed && snapshot.active && studyEnabled)
     }
 
     private class ObservationToken(
