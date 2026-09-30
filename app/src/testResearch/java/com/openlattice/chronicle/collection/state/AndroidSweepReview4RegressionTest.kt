@@ -134,15 +134,15 @@ class AndroidSweepReview4RegressionTest {
         Application::class.java.getDeclaredMethod("attach", Context::class.java).apply { isAccessible = true }.invoke(it, base)
     }
 
-    @Test @Config(sdk = [23]) fun row1_android6StartupAndDirectBootErasureUseSupportedApis() {
+    @Test @Config(sdk = [26]) fun row1_minSdkStartupAndDirectBootErasureUseSupportedApis() {
         coldSnapshot()
         application().onCreate()
         worker { DirectBootStorageAdmission.clear(context) }
-        assertTrue("Android 6 must initialize authorization", ResearchPersistenceGate.collectsNow(context, module))
+        assertTrue("Oldest supported API must initialize authorization", ResearchPersistenceGate.collectsNow(context, module))
         val receiver = com.openlattice.chronicle.receivers.lifecycle.SurveyNotificationsReceiver()
-        context.registerReceiver(receiver, IntentFilter("test.api23.survey"))
+        context.registerReceiver(receiver, IntentFilter("test.minsdk.survey"))
         try {
-            context.sendBroadcast(Intent("test.api23.survey"))
+            context.sendBroadcast(Intent("test.minsdk.survey"))
             shadowOf(Looper.getMainLooper()).idle()
             assertTrue(shadowOf(receiver).wentAsync())
             shadowOf(shadowOf(receiver).originalPendingResult).getFuture().get(5, TimeUnit.SECONDS)

@@ -229,7 +229,7 @@ android {
     }
     defaultConfig {
         applicationId "com.bcm.chronicle"
-        minSdk = 23
+        minSdk = 26
         targetSdk = 36
         versionCode 65
         versionName "2026.09.30-internal.open.1"

@@ -93,7 +93,7 @@ class AndroidSweepReview5RecoveryTest {
         db.close()
     }
 
-    @Test @Config(sdk = [23]) fun row1_startupRecoveryRetriesCleanupBeforeReenqueuingOrphanedPeriodicWork() {
+    @Test @Config(sdk = [26]) fun row1_startupRecoveryRetriesCleanupBeforeReenqueuingOrphanedPeriodicWork() {
         val wm = WorkManagerImpl.getInstance(context)
         // A fresh process has no in-process execution of the previous process's RUNNING row.
         // Retain the real OS scheduler but disable GreedyScheduler's immediate worker launch.
