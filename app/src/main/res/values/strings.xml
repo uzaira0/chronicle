@@ -244,6 +244,7 @@
     <string name="overview_latest_timestamp">Latest usage/lifecycle timestamp\n%1$s</string>
     <string name="overview_collection_status">Collection status\n%1$s</string>
     <string name="overview_collection_status_review">Collection status\n%1$s\n\nTap to review in Data Sharing →</string>
+    <string name="overview_collection_status_access">Collection status\n%1$s\n\nAccess needed: a data type you accepted cannot collect until you allow it. Tap to review in Data Sharing →</string>
     <string name="overview_server_health">Server health\n%1$s</string>
     <string name="uploads_none_configured">No upload servers configured</string>
     <string name="reminder_tap_survey">Tap to complete survey</string>

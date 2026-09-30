@@ -12,7 +12,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withStarted
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
@@ -27,11 +29,13 @@ import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.services.sync.triggerImmediateChronicleSync
 import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
 import com.openlattice.chronicle.ui.OverviewFragment
+import com.openlattice.chronicle.ui.activeModuleAccessMissing
 import com.openlattice.chronicle.ui.DataSharingFragment
 import com.openlattice.chronicle.ui.SettingsHomeFragment
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 import com.openlattice.chronicle.ui.UploadsFragment
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,7 +47,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var enrollmentSettings: EnrollmentSettings
     private lateinit var bottomNav: BottomNavigationView
 
+    /** Set once the authoritative off-main enrollment read admitted this dashboard. */
+    private var enrollmentConfirmed = false
     private var ackRouteAttempted = false
+    private var accessRouteAttempted = false
     private var lastForegroundSyncEnqueuedAt = 0L
 
     // Optional, one-time notification ask (Android 13+). Notifications are NOT required to
@@ -76,32 +83,48 @@ class MainActivity : AppCompatActivity() {
 
         if (ParticipantWithdrawalManager.collectionMustRemainStopped(this)) {
             ParticipantWithdrawalManager.resumePending(this)
-            setupNavigation(savedInstanceState)
+            setupNavigation()
             selectTab(R.id.nav_settings)
             return
         }
 
-        val enrolled = try {
-            enrollmentSettings.isEnrolled()
-        } catch (error: LocalStoreRecoveryRequiredException) {
-            startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
-            finish()
-            return
-        }
-        if (!enrolled) {
-            DeviceUnlockMonitoringService.stopService(applicationContext)
-            startActivity(Intent(this, Enrollment::class.java).apply {
-                data = intent.data
-                action = intent.action
-            })
-            return
-        }
+        // On MAIN, isEnrolled() answers from the gate's published snapshot, which is false until
+        // hydration after a cold start (e.g. an OEM process kill). Route from the authoritative
+        // Room-backed read instead, off the main thread.
+        lifecycleScope.launch {
+            val enrolled = try {
+                withContext(Dispatchers.IO) { enrollmentSettings.isEnrolledOrThrow() }
+            } catch (error: LocalStoreRecoveryRequiredException) {
+                startActivity(LocalStoreRecoveryActivity.intent(this@MainActivity, error.recoveryReason))
+                finish()
+                return@launch
+            } catch (error: CancellationException) {
+                throw error // Destroyed mid-read (e.g. rotation): the new instance decides.
+            } catch (error: RuntimeException) {
+                Log.e("MainActivity", "Enrollment read failed", error)
+                false
+            }
+            if (!enrolled) {
+                DeviceUnlockMonitoringService.stopService(applicationContext)
+                startActivity(Intent(this@MainActivity, Enrollment::class.java).apply {
+                    data = intent.data
+                    action = intent.action
+                })
+                return@launch
+            }
+            enrollmentConfirmed = true
 
-        requestExactAlarmPermissionIfNeeded()
+            // The read may finish after onSaveInstanceState (Home pressed mid-read); fragment
+            // commits must wait until the Activity is started again.
+            lifecycle.withStarted {
+                requestExactAlarmPermissionIfNeeded()
 
-        startEnrolledServices()
-        setupNavigation(savedInstanceState)
-        handleSelectTabExtra(intent)
+                startEnrolledServices()
+                setupNavigation()
+                handleSelectTabExtra(intent)
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resumeEnrolled()
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -116,7 +139,7 @@ class MainActivity : AppCompatActivity() {
         if (tab != 0) selectTab(tab)
     }
 
-    private fun setupNavigation(savedInstanceState: Bundle?) {
+    private fun setupNavigation() {
         bottomNav = findViewById(R.id.mainBottomNav)
         bottomNav.setOnItemSelectedListener { item ->
             val fragment = when (item.itemId) {
@@ -128,7 +151,8 @@ class MainActivity : AppCompatActivity() {
             showFragment(fragment)
             true
         }
-        if (savedInstanceState == null) {
+        // Not keyed on savedInstanceState: a recreation can arrive before any tab was committed.
+        if (supportFragmentManager.findFragmentById(R.id.mainFragmentContainer) == null) {
             bottomNav.selectedItemId = R.id.nav_overview
         }
     }
@@ -236,11 +260,15 @@ class MainActivity : AppCompatActivity() {
         ) {
             OemBackgroundGuidanceDialog().show(supportFragmentManager, "oemBackgroundGuidance")
         }
-        if (::enrollmentSettings.isInitialized && enrollmentSettings.isEnrolled()) {
-            maybeTriggerForegroundSync()
-            routeToAcknowledgmentIfPending()
-            maybeAskNotificationsOnce()
+        if (::enrollmentSettings.isInitialized && (enrollmentConfirmed || enrollmentSettings.isEnrolled())) {
+            resumeEnrolled()
         }
+    }
+
+    private fun resumeEnrolled() {
+        maybeTriggerForegroundSync()
+        routeToAcknowledgmentIfPending()
+        maybeAskNotificationsOnce()
     }
 
     /**
@@ -269,7 +297,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun routeToAcknowledgmentIfPending() {
-        if (ackRouteAttempted || !enrollmentSettings.isEnrolled()) return
+        if (ackRouteAttempted || !(enrollmentConfirmed || enrollmentSettings.isEnrolled())) return
         lifecycleScope.launch {
             val pending = withContext(Dispatchers.IO) {
                 try {
@@ -281,9 +309,26 @@ class MainActivity : AppCompatActivity() {
             }
             if (pending.modules.isNotEmpty() && !ackRouteAttempted) {
                 ackRouteAttempted = true
+                accessRouteAttempted = true // Data Sharing also shows the missing-access rows.
                 // A module is awaiting a per-module decision — land the participant on the Data
                 // Sharing tab to review it. No bulk "I agree": each module is decided individually
                 // there (the old all-at-once acknowledgment screen is retired).
+                selectTab(R.id.nav_data_sharing)
+                return@launch
+            }
+            if (accessRouteAttempted) return@launch
+            val accessMissing = withContext(Dispatchers.IO) {
+                try {
+                    activeModuleAccessMissing(applicationContext)
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Failed to read module access status", e)
+                    false
+                }
+            }
+            if (accessMissing && !accessRouteAttempted) {
+                accessRouteAttempted = true
+                // An accepted module is inert until its OS access (e.g. Usage Access, which
+                // enrollment defers to Data Sharing) is granted — land there so it is requested.
                 selectTab(R.id.nav_data_sharing)
             }
         }

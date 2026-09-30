@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.ui
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -34,6 +35,7 @@ import com.openlattice.chronicle.collection.state.CollectionConsentCopy
 import com.openlattice.chronicle.collection.state.localizedLabel
 import com.openlattice.chronicle.collection.state.localizedConsentTemplate
 import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
+import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.CollectionStateMachine
 import com.openlattice.chronicle.collection.state.CollectionModulePhase
 import com.openlattice.chronicle.collection.state.CollectionModuleState
@@ -108,7 +110,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             while (true) {
                 val snapshot = DashboardDataRepository.load(requireContext())
                 capabilities = computeCapabilities(snapshot.collectionModules, environment)
-                permissionStatus = computePermissionStatus(snapshot.collectionModules, environment)
+                permissionStatus = activeModulePermissionStatus(snapshot.collectionModules, environment)
                 view?.let { bindAll(it, snapshot) }
                 delay(DASHBOARD_REFRESH_MS)
             }
@@ -143,42 +145,6 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             list.addView(moduleRow(moduleId, byId[moduleId]))
         }
         bindPausedBanner(view, snapshot.collectionModules)
-    }
-
-    /**
-     * Off-main-thread snapshot of which permissions the currently ACTIVE modules still need. Runtime
-     * grant checks are cheap but the Health Connect query suspends, so this runs on IO. A module is
-     * only counted once it is ACTIVE (accepted + study-enabled) — we never prompt for data the
-     * participant hasn't agreed to share.
-     */
-    private fun computePermissionStatus(
-        states: List<CollectionModuleState>,
-        environment: CapabilityEnvironment,
-    ): PermissionStatus {
-        val active = states.filter { it.phase == CollectionModulePhase.ACTIVE }.map { it.moduleId }
-        val missingRuntime = ModulePermissions.runtimePermissionsFor(active, environment.sdkInt)
-            .filterNot(environment.grantedRuntimePermissions::contains)
-        val needUsageAccess = ModulePermissions.needsKind(active, PermissionKind.USAGE_ACCESS) &&
-            !environment.usageAccessGranted
-        val needHealthConnect = BuildConfig.HAS_HEALTH_CONNECT &&
-            ModulePermissions.needsHealthConnect(active) &&
-            environment.healthConnectAvailable && !environment.healthConnectGranted
-        val notificationAccessModules = active
-            .filter { ModulePermissions.needsKind(listOf(it), PermissionKind.NOTIFICATION_LISTENER) }
-            .toSet()
-        val needNotificationListener = notificationAccessModules.isNotEmpty() &&
-            !environment.notificationListenerEnabled
-        val needAccessibility = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
-            ModulePermissions.needsKind(active, PermissionKind.ACCESSIBILITY) &&
-            !environment.accessibilityEnabled
-        return PermissionStatus(
-            missingRuntime,
-            needHealthConnect,
-            needUsageAccess,
-            needNotificationListener,
-            needAccessibility,
-            notificationAccessModules,
-        )
     }
 
     /**
@@ -519,7 +485,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             val snapshot = DashboardDataRepository.load(requireContext())
             val environment = loadCapabilityEnvironment()
             capabilities = computeCapabilities(snapshot.collectionModules, environment)
-            permissionStatus = computePermissionStatus(snapshot.collectionModules, environment)
+            permissionStatus = activeModulePermissionStatus(snapshot.collectionModules, environment)
             view?.let { bindAll(it, snapshot) }
             // Accepting a required module may newly need an OS permission — ask right away.
             if (accepted.isNotEmpty() && locallyApplied) {
@@ -688,7 +654,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             val snapshot = DashboardDataRepository.load(requireContext())
             val environment = loadCapabilityEnvironment()
             capabilities = computeCapabilities(snapshot.collectionModules, environment)
-            permissionStatus = computePermissionStatus(snapshot.collectionModules, environment)
+            permissionStatus = activeModulePermissionStatus(snapshot.collectionModules, environment)
             view?.let { bindAll(it, snapshot) }
             // Turning a module on may need an OS permission — ask now rather than make the
             // participant hunt for the affordance.
@@ -702,20 +668,6 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                 ).show()
             }
         }
-    }
-
-    /** Missing-permission status for the active modules (see [computePermissionStatus]). */
-    private data class PermissionStatus(
-        val missingRuntime: List<String>,
-        val needHealthConnect: Boolean,
-        val needUsageAccess: Boolean = false,
-        val needNotificationListener: Boolean = false,
-        val needAccessibility: Boolean = false,
-        val notificationAccessModules: Set<CollectionModuleId> = emptySet(),
-    ) {
-        val hasMissing: Boolean
-            get() = missingRuntime.isNotEmpty() || needHealthConnect || needUsageAccess ||
-                needNotificationListener || needAccessibility
     }
 
     private fun computeCapabilities(
@@ -935,6 +887,61 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
     }
 }
+
+/** Missing-permission status for the active modules (see [activeModulePermissionStatus]). */
+internal data class PermissionStatus(
+    val missingRuntime: List<String>,
+    val needHealthConnect: Boolean,
+    val needUsageAccess: Boolean = false,
+    val needNotificationListener: Boolean = false,
+    val needAccessibility: Boolean = false,
+    val notificationAccessModules: Set<CollectionModuleId> = emptySet(),
+) {
+    val hasMissing: Boolean
+        get() = missingRuntime.isNotEmpty() || needHealthConnect || needUsageAccess ||
+            needNotificationListener || needAccessibility
+}
+
+/**
+ * Which permissions the currently ACTIVE modules still need. A module is only counted once it is
+ * ACTIVE (accepted + study-enabled) — we never prompt for data the participant hasn't agreed to
+ * share. Shared by Data Sharing (the "Review access" rows), Overview and MainActivity routing.
+ */
+internal fun activeModulePermissionStatus(
+    states: List<CollectionModuleState>,
+    environment: CapabilityEnvironment,
+): PermissionStatus {
+    val active = states.filter { it.phase == CollectionModulePhase.ACTIVE }.map { it.moduleId }
+    val missingRuntime = ModulePermissions.runtimePermissionsFor(active, environment.sdkInt)
+        .filterNot(environment.grantedRuntimePermissions::contains)
+    val needUsageAccess = ModulePermissions.needsKind(active, PermissionKind.USAGE_ACCESS) &&
+        !environment.usageAccessGranted
+    val needHealthConnect = BuildConfig.HAS_HEALTH_CONNECT &&
+        ModulePermissions.needsHealthConnect(active) &&
+        environment.healthConnectAvailable && !environment.healthConnectGranted
+    val notificationAccessModules = active
+        .filter { ModulePermissions.needsKind(listOf(it), PermissionKind.NOTIFICATION_LISTENER) }
+        .toSet()
+    val needNotificationListener = notificationAccessModules.isNotEmpty() &&
+        !environment.notificationListenerEnabled
+    val needAccessibility = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
+        ModulePermissions.needsKind(active, PermissionKind.ACCESSIBILITY) &&
+        !environment.accessibilityEnabled
+    return PermissionStatus(
+        missingRuntime,
+        needHealthConnect,
+        needUsageAccess,
+        needNotificationListener,
+        needAccessibility,
+        notificationAccessModules,
+    )
+}
+
+/** Blocking store + grant read; call off the main thread. True when an ACTIVE module lacks its access. */
+internal fun activeModuleAccessMissing(context: Context): Boolean = activeModulePermissionStatus(
+    CollectionLoopStore.of(context).loadAll().values.toList(),
+    CollectionCapabilityResolver.snapshot(context),
+).hasMissing
 
 internal fun healthConnectReconsentMessage(
     recordTypes: Set<HealthConnectRecordType>,
