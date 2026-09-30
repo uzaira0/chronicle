@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.serialization
 
+import com.openlattice.chronicle.collection.AndroidUploadDiagnosticEvent
 import com.openlattice.chronicle.collection.CollectionAcknowledgment
 import com.openlattice.chronicle.collection.BatteryChargingState
 import com.openlattice.chronicle.collection.CollectionDataDisposition
@@ -10,6 +11,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 import java.time.OffsetDateTime
 
 /**
@@ -44,6 +46,25 @@ class ChronicleJsonWireFormatTest {
         assertFalse(json.contains("USAGE_EVENTS"))
         assertFalse(json.contains("SENSOR_ACCELEROMETER"))
         assertFalse(json.contains("BATTERY_TELEMETRY"))
+    }
+
+    @Test
+    fun uploadDiagnosticDaySerializesAsIsoDate() {
+        val adapter = ChronicleJson.moshi.adapter(AndroidUploadDiagnosticEvent::class.java)
+        val event = AndroidUploadDiagnosticEvent(
+            id = "7b0d4c52-3f3e-4a8e-9a55-2f5f2a0e6c11",
+            day = LocalDate.parse("2026-09-30"),
+            moduleFamily = "USAGE_LIFECYCLE",
+            issueCode = "TIMEOUT",
+            count = 1,
+            firstOccurredAt = OffsetDateTime.parse("2026-09-30T12:00:00Z"),
+            lastOccurredAt = OffsetDateTime.parse("2026-09-30T12:00:00Z"),
+        )
+
+        val json = adapter.toJson(event)
+
+        assertTrue(json, json.contains("\"day\":\"2026-09-30\""))
+        assertEquals(event, adapter.fromJson(json))
     }
 
     @Test

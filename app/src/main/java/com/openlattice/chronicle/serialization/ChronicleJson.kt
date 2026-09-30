@@ -29,6 +29,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.apache.olingo.commons.api.edm.FullQualifiedName
 import java.lang.reflect.Type
 import java.lang.reflect.ParameterizedType
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
 
@@ -104,6 +105,14 @@ private class PlatformValueJsonAdapters {
 
     @FromJson
     fun offsetDateTimeFromJson(value: String): OffsetDateTime = OffsetDateTime.parse(value)
+
+    // ISO-8601 date, as the server's Jackson reads it. Moshi refuses to reflect over platform
+    // classes, so without this every upload-diagnostics batch failed to encode.
+    @ToJson
+    fun localDateToJson(value: LocalDate): String = value.toString()
+
+    @FromJson
+    fun localDateFromJson(value: String): LocalDate = LocalDate.parse(value)
 
     @ToJson
     fun uuidToJson(value: UUID): String = value.toString()
