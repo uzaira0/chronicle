@@ -21,6 +21,10 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordForExpectedOwner
 import com.openlattice.chronicle.collection.state.ResearchErasureFence
 import java.util.concurrent.ThreadLocalRandom
 
@@ -81,9 +85,16 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
         val origin = ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)
         if (!origin.isCurrent()) return
         val appContext = context.applicationContext
+        val owner = ResearchPersistenceGate.captureOwner(appContext)
         lifecycleExecutor.execute {
             try {
-                origin.persist { recordAsync(appContext, observations(), origin) }
+                val result = origin.persistResult { recordAsync(appContext, observations(), origin) }
+                if (result == CollectionPersistenceResult.STORAGE_UNAVAILABLE) {
+                    // Low storage refused before the observations were taken; take them now only to
+                    // count the loss (broadcast mappings are pure; the state sampler self-gates).
+                    recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                        LocalOperationalIssue.COLLECTION_GATE_DROPPED, observations().size)
+                }
             } catch (error: Exception) {
                 Log.w(TAG, "Lifecycle observation deferred after storage failure", error)
             }
@@ -114,9 +125,10 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
         val appContext = context.applicationContext
         val floor = ResearchPersistenceGate.observationScope(appContext, CollectionModuleId.DEVICE_LIFECYCLE)?.second ?: Long.MAX_VALUE
         val admittedEvents = events.filter { it.timestamp.toInstant().toEpochMilli() >= floor }
+        val owner = ResearchPersistenceGate.captureOwner(appContext)
         lifecycleExecutor.execute {
             try {
-                origin.persist {
+                val result = origin.persistResult {
                 if (LifecycleWorkerMigration.USE_MODULE_MANAGER_LIFECYCLE_PATH) {
                     // Phase 5B module path: route through the sanctioned LifecycleEventSink.
                     // A ModuleResult.Failed is logged + recorded in module diagnostics by
@@ -126,6 +138,12 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
                     // Default path: the legacy inline direct writer — the regression baseline.
                     recordNow(appContext, admittedEvents)
                 }
+                }
+                if (result == CollectionPersistenceResult.STORAGE_UNAVAILABLE) {
+                    // Low storage refused these captured events and nothing retries them: count
+                    // the loss for the enrollment that observed them (battery-sink parity).
+                    recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                        LocalOperationalIssue.COLLECTION_GATE_DROPPED, admittedEvents.size)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to persist lifecycle events ${events.joinToString { it.interactionType }}", e)

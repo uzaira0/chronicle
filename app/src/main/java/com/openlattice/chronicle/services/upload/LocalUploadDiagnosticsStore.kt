@@ -191,16 +191,21 @@ class LocalUploadDiagnosticsStore(private val persistence: LocalUploadDiagnostic
         if (count > 0) recordRedacted(moduleFamily, issue.name, day, occurredAt, count = count)
     }
 
-    /** Stable event IDs make a retry after a process death safe before its watermark commits. */
+    /**
+     * Stable event IDs make a retry after a process death safe before its watermark commits.
+     * [ownerScope] (`studyId:participantId`) is the enrollment that observed the event; when this
+     * store now belongs to a different enrollment the event is dropped, never re-attributed.
+     */
     fun recordOperationalOnce(
         id: String,
         moduleFamily: LocalUploadModuleFamily,
         issue: LocalOperationalIssue,
         occurredAt: OffsetDateTime,
+        ownerScope: String? = null,
     ) = withMutationLease {
         val day = occurredAt.atZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDate().toString()
         if (persistence is RoomUploadDiagnosticsPersistence) {
-            persistence.recordOnce(id, moduleFamily.name, issue.name, day, occurredAt.toString())
+            persistence.recordOnce(id, moduleFamily.name, issue.name, day, occurredAt.toString(), ownerScope)
         } else {
             val old = persistence.load()
             if (old.none { it.id == id }) persistence.save(old + LocalUploadIssueBucket(
@@ -450,8 +455,10 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
         }
     }
 
-    fun recordOnce(id: String, family: String, issue: String, day: String, occurredAt: String) = writeIfCurrentOwner {
+    fun recordOnce(id: String, family: String, issue: String, day: String, occurredAt: String,
+                   ownerScope: String? = null) = writeIfCurrentOwner {
         val scope = owner ?: return@writeIfCurrentOwner
+        if (ownerScope != null && ownerScope != "${scope.study}:${scope.participant}") return@writeIfCurrentOwner
         db.uploadDiagnosticDao().insertIfAbsent(UploadDiagnosticEntity(
             id = id, studyId = scope.study, participantId = scope.participant,
             deviceId = scope.device, enrollmentEpoch = scope.epoch,

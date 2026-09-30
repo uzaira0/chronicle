@@ -111,6 +111,8 @@ internal object StorageAdmission {
                 LocalUploadDiagnosticsStore.of(context).recordOperationalOnce(
                     episodeId, LocalUploadModuleFamily.LOCAL_STORE,
                     LocalOperationalIssue.COLLECTION_PAUSED_STORAGE, OffsetDateTime.parse(occurredAt),
+                    // A replacement enrollment may own the store by now; never charge it this episode.
+                    ownerScope = scope,
                 )
                 synchronized(this) {
                     if (prefs.getString(SCOPE, null) == scope && prefs.getString(EPISODE_ID, null) == episodeId &&
