@@ -95,6 +95,11 @@
 -if class com.openlattice.chronicle.android.AndroidSensorSample
 -keep class com.openlattice.chronicle.android.AndroidSensorSample { *; }
 
+# Moshi's Kotlin adapter loads each property type by its source name from kotlin.Metadata, so an
+# enum field of a kept wire class must keep its class name (BatterySample.chargingState broke every
+# battery upload). keepnames still lets the play flavor shrink unused enums out.
+-keepnames enum com.openlattice.chronicle.** { *; }
+
 # Gson round-trips NotificationDetails through PendingIntent extras; an alarm set by one build
 # and delivered after an update must still parse, so field names cannot depend on the build.
 -keep class com.openlattice.chronicle.services.notifications.NotificationDetails { <fields>; <init>(...); }

@@ -91,6 +91,22 @@ for cls in "${dtos[@]}" "${gson_classes[@]}" "${persisted_classes[@]}"; do
   fi
 done
 
+# Moshi's Kotlin adapter resolves each property type by its source name through kotlin.Metadata,
+# so a kept class with a field of a renamed type (an enum, typically) fails at runtime with
+# ClassNotFoundException. Static fields (companions, constants, synthetic $ entries) are not
+# serialized and are skipped. Generic element types are erased in the mapping and not covered here.
+checked="$(printf '%s\n' "${dtos[@]}" "${gson_classes[@]}" "${persisted_classes[@]}")"
+renamed_types="$(awk -v checked="$checked" '
+    BEGIN { n = split(checked, c, "\n"); for (i = 1; i <= n; i++) want[c[i]] = 1 }
+    /^[^ #]/ { split($0, p, " -> "); cls = p[1]; sub(/:$/, "", p[2]); if (p[1] != p[2]) renamed[p[1]] = p[2]; next }
+    want[cls] && $0 !~ /\(/ && $0 ~ / -> / { split($0, p, " -> "); n = split(p[1], a, " "); if (a[n] == "Companion" || a[n] ~ /^[$]/ || a[n] ~ /^[A-Z0-9_]+$/) next; t = a[1]; sub(/(\[\])+$/, "", t); fields[cls " " t] = 1 }
+    END { for (k in fields) { split(k, f, " "); if (f[2] in renamed) print f[1] ": " f[2] " -> " renamed[f[2]] } }
+  ' "$mapping" | sort)"
+if [[ -n "$renamed_types" ]]; then
+  printf 'ERROR: reflective wire classes reference types renamed by R8:\n%s\n' "$renamed_types" >&2
+  failures=$((failures + 1))
+fi
+
 if (( failures > 0 )); then
   exit 1
 fi
