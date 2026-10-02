@@ -10,6 +10,12 @@
 
 Full notes per release are in the monorepo `CHANGELOG.md`.
 
+- versionCode 67, `2026.10.02-internal.open.1` (release 2026.10.2): an accepted module without its Android access
+  (accessibility, notification listener, usage access, Health Connect) is reported to the server; losing access that was
+  granted (accessibility after force-stop) also gives one "Action needed" notification per loss; a dialog asks to allow
+  background data when it is restricted; Overview says "Device offline" without a validated network; a Health Connect
+  read that never started no longer fails the module; a step counter's first value is stamped at registration, not at
+  the last step.
 - versionCode 66, `2026.10.01-internal.open.1` (release 2026.10.1): minimum Android version raised from 6.0 to 8.0
   (API 26). A build that supports Android 6 carries its own copy of `java.time`, which the app's JSON reader cannot
   handle: from versionCode 55 on, enrollment from a link crashed the app on every device. Upload diagnostics are sent again (their
