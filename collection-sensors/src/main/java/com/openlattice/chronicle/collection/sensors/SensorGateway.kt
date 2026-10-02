@@ -148,8 +148,20 @@ public class AndroidSensorGateway(
     private val appContext = context.applicationContext
     private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
-    /** Builds a [SensorEventListener] that forwards each event to the sink as a sample. */
-    private fun sampleListener(throttleContinuous: Boolean, origin: CollectionPersistenceGuard) = object : SensorEventListener {
+    /**
+     * Builds a [SensorEventListener] that forwards each event to the sink as a sample. The first
+     * event, when older than [notBeforeNanos], is stamped at [notBeforeNanos]: on registration an
+     * on-change sensor replays its last value with the time it last changed (a step counter's last
+     * step, possibly before enrollment). That value still holds at registration, so it is observed
+     * then. Later events keep their own time.
+     */
+    private fun sampleListener(
+        throttleContinuous: Boolean,
+        origin: CollectionPersistenceGuard,
+        notBeforeNanos: Long = Long.MIN_VALUE,
+    ) = object : SensorEventListener {
+        private var replayFloor = notBeforeNanos
+
         override fun onSensorChanged(event: SensorEvent) {
             val sensorType = SensorTypeMapping.fromAndroidType(event.sensor.type) ?: return
             if (throttleContinuous) {
@@ -158,11 +170,13 @@ public class AndroidSensorGateway(
                 continuousRetainedSamples.merge(sensorType, 1L, Long::plus)
             }
             if (!origin.isCurrent()) return
+            val timestamp = maxOf(event.timestamp, replayFloor)
+            replayFloor = Long.MIN_VALUE
             listener.onCapturedSample(
                 sensorType,
                 event.values.copyOf(),
                 event.accuracy,
-                wallClockTimestamp(event.timestamp),
+                wallClockTimestamp(timestamp),
                 origin,
             )
         }
@@ -249,7 +263,7 @@ public class AndroidSensorGateway(
         val sensor = sensorManager.getDefaultSensor(androidType) ?: return false
         val origin = captureAdmission(sensorType)
         if (!origin.isCurrent()) return false
-        val registeredListener = sampleListener(throttleContinuous = false, origin)
+        val registeredListener = sampleListener(throttleContinuous = false, origin, SystemClock.elapsedRealtimeNanos())
         if (!sensorManager.registerListener(registeredListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)) {
             return false
         }
