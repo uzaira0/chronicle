@@ -451,6 +451,7 @@
     <string name="server_health_no_status">No upload status yet</string>
     <string name="server_health_waiting">Study server waiting for upload status</string>
     <string name="server_health_healthy">Study server healthy</string>
+    <string name="server_health_offline">Device offline. Study server not reachable; uploads resume when a network is available</string>
     <string name="health_status_healthy">Healthy</string>
     <string name="health_status_degraded">Degraded</string>
     <string name="health_status_unhealthy">Unhealthy</string>

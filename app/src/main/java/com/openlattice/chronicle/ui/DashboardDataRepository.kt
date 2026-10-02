@@ -2,6 +2,8 @@ package com.openlattice.chronicle.ui
 
 import android.content.Context
 import android.hardware.SensorManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorType
@@ -136,7 +138,7 @@ object DashboardDataRepository {
                 CollectionLoopStore.of(appContext).loadAll().values.toList()
             }.getOrDefault(emptyList()),
             sensors = loadSensorSummary(appContext, db),
-            serverHealth = loadServerHealth(appContext, servers),
+            serverHealth = loadServerHealth(appContext, servers, hasValidatedInternet(appContext)),
             localUploadIssues = diagnostics.orEmpty(),
             localUploadDiagnosticsAvailable = diagnostics != null,
             workSchedulingAvailable = !com.openlattice.chronicle.WorkSchedulingStatus.unavailable,
@@ -251,9 +253,10 @@ object DashboardDataRepository {
             .toSet()
     }
 
-    private fun loadServerHealth(
+    internal fun loadServerHealth(
         context: Context,
         servers: List<UploadServerEntity>,
+        online: Boolean,
     ): ServerHealthSummary {
         if (servers.isEmpty()) {
             return ServerHealthSummary(0, context.getString(R.string.uploads_none_configured))
@@ -262,6 +265,9 @@ object DashboardDataRepository {
         if (enabled.isEmpty()) {
             return ServerHealthSummary(servers.size, context.getString(R.string.server_health_all_disabled))
         }
+        // Failure counters move only when an upload runs, and uploads wait for a network, so
+        // offline the counters still read as healthy. Say what is known instead.
+        if (!online) return ServerHealthSummary(servers.size, context.getString(R.string.server_health_offline))
         val unhealthy = enabled.filter {
             val health = it.healthStatus()
             health != ServerHealthStatus.HEALTHY && health != ServerHealthStatus.UNKNOWN
@@ -277,6 +283,13 @@ object DashboardDataRepository {
             else -> context.getString(R.string.server_health_healthy)
         }
         return ServerHealthSummary(servers.size, message)
+    }
+
+    private fun hasValidatedInternet(context: Context): Boolean {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val capabilities = manager.activeNetwork?.let(manager::getNetworkCapabilities) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     private fun latestSuccess(server: UploadServerEntity): String? =
