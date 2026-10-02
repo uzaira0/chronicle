@@ -337,6 +337,20 @@ class EnrollmentSettings(private val context: Context) {
         )
     }
 
+    fun toggleBackgroundDataDialog(enable: Boolean) {
+        settings
+            .edit()
+            .putBoolean(context.getString(R.string.disable_background_data_dialog), enable)
+            .apply()
+    }
+
+    fun isBackgroundDataDialogEnabled(): Boolean {
+        return settings.getBoolean(
+            context.getString(R.string.disable_background_data_dialog),
+            true
+        )
+    }
+
     fun closeDb() {
         // Singleton DB — no close needed
     }

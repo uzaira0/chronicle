@@ -1,6 +1,7 @@
 package com.openlattice.chronicle
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.os.Bundle
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
@@ -86,6 +87,19 @@ class MainActivityColdStartRoutingTest {
         }
         val fragments = controller.get().supportFragmentManager.fragments
         assertEquals(1, fragments.count { it.tag == "batteryExemption" })
+    }
+
+    @Test fun restrictedBackgroundDataIsShownToEnrolledParticipants() {
+        TestStores.install(context, enrolled = true)
+        EnrollmentSettings(context).toggleBatteryOptimizationDialog(false)
+        EnrollmentSettings(context).toggleHibernationExemptionDialog(false)
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        shadowOf(connectivity).setRestrictBackgroundStatus(ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED)
+
+        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        settle()
+
+        assertTrue(activity.supportFragmentManager.findFragmentByTag("backgroundDataRestricted") != null)
     }
 
     @Test fun exactAlarmSettingsOpenOnlyOnFirstLaunch() {

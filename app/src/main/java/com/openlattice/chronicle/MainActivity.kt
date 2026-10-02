@@ -3,6 +3,7 @@ package com.openlattice.chronicle
 import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -41,7 +42,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val FOREGROUND_SYNC_INTERVAL = 60_000L
-private val EXEMPTION_DIALOG_TAGS = listOf("batteryExemption", "hibernationExemption", "oemBackgroundGuidance")
+private val EXEMPTION_DIALOG_TAGS =
+    listOf("batteryExemption", "hibernationExemption", "backgroundDataRestricted", "oemBackgroundGuidance")
 
 class MainActivity : AppCompatActivity() {
 
@@ -123,7 +125,10 @@ class MainActivity : AppCompatActivity() {
                 startEnrolledServices()
                 setupNavigation()
                 handleSelectTabExtra(intent)
-                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resumeEnrolled()
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    showNextExemptionDialog()
+                    resumeEnrolled()
+                }
             }
         }
     }
@@ -219,6 +224,13 @@ class MainActivity : AppCompatActivity() {
                 NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
         }.getOrDefault(true)
 
+    /** Background data off, or Data Saver on without an exemption. Fails open, like the check above. */
+    private fun isBackgroundDataRestricted(): Boolean =
+        runCatching {
+            val connectivity = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivity.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+        }.getOrDefault(false)
+
     private fun requestExactAlarmPermissionIfNeeded() {
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
@@ -243,19 +255,30 @@ class MainActivity : AppCompatActivity() {
             ParticipantWithdrawalManager.resumePending(this)
             return
         }
+        showNextExemptionDialog()
+        if (::enrollmentSettings.isInitialized && (enrollmentConfirmed || enrollmentSettings.isEnrolled())) {
+            resumeEnrolled()
+        }
+    }
+
+    /**
+     * Shows the first background-collection prompt that applies. Runs on every resume and again once
+     * the enrollment read confirms: on a cold start the first resume comes before it, so the
+     * enrolled-only prompts would otherwise wait for the next resume.
+     */
+    private fun showNextExemptionDialog() {
+        if (!::enrollmentSettings.isInitialized) return
         // A permission prompt or settings page pauses and resumes this activity; without the tag
-        // check each return stacked another copy of a dialog that was still open.
-        val exemptionDialogOpen = EXEMPTION_DIALOG_TAGS.any { supportFragmentManager.findFragmentByTag(it) != null }
-        if (exemptionDialogOpen) {
-            // One dialog at a time; the next one in the chain shows after this one is dismissed.
-        } else if (::enrollmentSettings.isInitialized &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+        // check each return stacked another copy of a dialog that was still open. One dialog at a
+        // time; the next one in the chain shows after this one is dismissed.
+        if (EXEMPTION_DIALOG_TAGS.any { supportFragmentManager.findFragmentByTag(it) != null }) return
+        val enrolled = enrollmentConfirmed || enrollmentSettings.isEnrolled()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             !hasIgnoreBatteryOptimization(this) &&
             enrollmentSettings.isBatteryOptimizationDialogEnabled()
         ) {
             BatteryOptimizationExemptionDialog().show(supportFragmentManager, "batteryExemption")
-        } else if (::enrollmentSettings.isInitialized &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
             !isExemptFromAppHibernation() &&
             enrollmentSettings.isHibernationExemptionDialogEnabled()
         ) {
@@ -263,15 +286,13 @@ class MainActivity : AppCompatActivity() {
             // months without UI opens — the normal state for a passive collection device.
             // One dialog at a time: this chains behind the battery prompt.
             AppHibernationExemptionDialog().show(supportFragmentManager, "hibernationExemption")
-        } else if (::enrollmentSettings.isInitialized &&
-            enrollmentSettings.isEnrolled() &&
+        } else if (enrolled && isBackgroundDataRestricted() && enrollmentSettings.isBackgroundDataDialogEnabled()) {
+            BackgroundDataRestrictionDialog().show(supportFragmentManager, "backgroundDataRestricted")
+        } else if (enrolled &&
             OemBackgroundGuidance.matches(Build.MANUFACTURER) &&
             enrollmentSettings.isOemGuidanceDialogEnabled()
         ) {
             OemBackgroundGuidanceDialog().show(supportFragmentManager, "oemBackgroundGuidance")
-        }
-        if (::enrollmentSettings.isInitialized && (enrollmentConfirmed || enrollmentSettings.isEnrolled())) {
-            resumeEnrolled()
         }
     }
 

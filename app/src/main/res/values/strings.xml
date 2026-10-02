@@ -83,6 +83,9 @@
     <string name="hibernation_exemption">If this device goes unused for a few months, Android pauses Chronicle and removes its permissions, which permanently stops study data collection. Please open the app settings and turn OFF \"Pause app activity if unused\" (on some devices: \"Remove permissions if app is unused\").</string>
     <string name="disable_hibernation_exemption_dialog">disable_hibernation_exemption_dialog</string>
     <string name="disable_oem_guidance_dialog" translatable="false">disable_oem_guidance_dialog</string>
+    <string name="background_data_restricted_header">Allow Background Data</string>
+    <string name="background_data_restricted">Background data is off for Chronicle. On mobile data, Android blocks Chronicle\'s uploads, so study data stays on this device. Please open the app settings and turn ON \"Background data\" (on some devices: \"Allow background data usage\").</string>
+    <string name="disable_background_data_dialog" translatable="false">disable_background_data_dialog</string>
     <string name="oem_background_guidance_title">Allow Chronicle to run in the background</string>
     <string name="oem_background_guidance_body">On %1$s phones, additional settings can stop study data collection. Allow autostart for Chronicle, then set its battery use to No restrictions. Open settings to find these options; names may vary on your phone.</string>
     <string name="oem_background_guidance_open_settings">Open settings</string>
