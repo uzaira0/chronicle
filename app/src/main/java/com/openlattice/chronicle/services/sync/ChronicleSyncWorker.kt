@@ -25,6 +25,7 @@ import com.openlattice.chronicle.services.upload.LEGACY_SENSOR_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.services.release.scheduleMinimalPlayArtifactBoundary
 import com.openlattice.chronicle.services.upload.LEGACY_USAGE_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.services.upload.UPLOAD_NETWORK_CONSTRAINT
+import com.openlattice.chronicle.services.upload.recordCollectionAccessLoss
 import com.openlattice.chronicle.services.upload.recordRecentProcessExits
 import com.openlattice.chronicle.services.upload.runCombinedUpload
 import com.openlattice.chronicle.services.usage.USAGE_WORK_NAME
@@ -79,6 +80,9 @@ class ChronicleSyncWorker(context: Context, params: WorkerParameters) : Worker(c
             Log.i(TAG, "Collection module health: ${CollectionModules.moduleHealthSummary(applicationContext)}")
             // Crash/ANR counts since the last run go out with the upload diagnostics below.
             recordRecentProcessExits(applicationContext)
+            // An accepted module whose Android access was removed (e.g. accessibility on force-stop)
+            // collects nothing; report it to the server and tell the participant once per episode.
+            recordCollectionAccessLoss(applicationContext)
 
             // Refresh the per-module collection settings + acknowledgment/gate state on every
             // coordinated sync (collection loop closure). This is the ACTIVE periodic sync path;

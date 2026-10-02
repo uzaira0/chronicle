@@ -261,6 +261,7 @@
     <string name="notif_changed_required">A data type the study collects is now required and can no longer be turned off in the app. It keeps collecting — see Data Sharing.</string>
     <string name="notif_changed_optional">A data type the study collects is now optional — you may turn it off in Data Sharing if you prefer. It keeps collecting unless you do.</string>
     <string name="notif_collection_updated">Data collection updated</string>
+    <string name="notif_access_missing">Chronicle cannot collect a data type you accepted because its Android access is turned off. Open the app and go to Data Sharing to turn it back on.</string>
     <string name="notif_option_off">A data collection option was turned off. No action needed.</string>
     <string name="orientation_action_title">Set up data collection</string>
     <string name="orientation_step">Step %1$d of %2$d - %3$s: %4$s</string>

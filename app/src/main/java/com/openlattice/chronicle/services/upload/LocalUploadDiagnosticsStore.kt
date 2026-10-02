@@ -90,7 +90,7 @@ enum class LocalOperationalIssue {
     LOCAL_WRITE_FAILED, LOCAL_SHUTDOWN_DROPPED, COLLECTION_GATE_DROPPED,
     MODULE_POLICY_ERASED, DISTRIBUTION_POLICY_ERASED,
     DIRECT_BOOT_CAPACITY_DROPPED, DIRECT_BOOT_CORRUPT_RECORD,
-    COLLECTION_PAUSED_STORAGE,
+    COLLECTION_PAUSED_STORAGE, COLLECTION_ACCESS_MISSING,
 }
 
 /** Count non-replayable sink refusals and failed writes. */
@@ -130,10 +130,12 @@ internal val V104_SERVER_ISSUE_CODES = setOf(
 internal val LEGACY_SERVER_MODULE_FAMILIES = setOf("USAGE_LIFECYCLE", "BATTERY", "DEVICE_TELEMETRY")
 private val V104_SERVER_MODULE_FAMILIES = LEGACY_SERVER_MODULE_FAMILIES + setOf("SENSOR", "APP_RUNTIME")
 private val V106_SERVER_ISSUE_CODES = setOf("SENSOR_AGE_EXPIRED", "SENSOR_CAPACITY_DROPPED", "USAGE_QUEUE_EVICTED")
+private val V113_SERVER_ISSUE_CODES = setOf("COLLECTION_ACCESS_MISSING")
 
-/** Oldest server migration that accepts this bucket: 0 = V99, 1 = V104, 2 = V106, 3 = V107. */
+/** Oldest server migration that accepts this bucket: 0 = V99, 1 = V104, 2 = V106, 3 = V107, 4 = V113. */
 internal fun serverTier(bucket: LocalUploadIssueBucket): Int = when {
     bucket.moduleFamily in LEGACY_SERVER_MODULE_FAMILIES && bucket.issue in LEGACY_SERVER_ISSUE_CODES -> 0
+    bucket.issue in V113_SERVER_ISSUE_CODES -> 4
     bucket.moduleFamily !in V104_SERVER_MODULE_FAMILIES -> 3
     bucket.issue in LEGACY_SERVER_ISSUE_CODES || bucket.issue in V104_SERVER_ISSUE_CODES -> 1
     bucket.issue in V106_SERVER_ISSUE_CODES -> 2
