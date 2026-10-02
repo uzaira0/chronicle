@@ -96,6 +96,7 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
     override fun read(): List<HealthMetricReading> = readAdmitted()
 
     private fun readAdmitted(): List<HealthMetricReading> {
+        readScope = null
         val configuredRecordTypes = runCatching { HealthConnectScopeStore.of(appContext).read() }
             .onFailure { Log.e(TAG, "Health Connect scope is unavailable; reading nothing", it) }
             .getOrDefault(emptySet())
@@ -143,6 +144,10 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
     }
 
     override fun acknowledgeRead() {
+        // An early-return read (no scope, client or grant) never reached the checkpoint, so there
+        // is nothing to acknowledge; guarding a null scope would refuse, fail the module and back
+        // off the whole worker. A window retired by erasure still has its scope and is refused.
+        if (readScope == null) return
         com.openlattice.chronicle.collection.state.ResearchPersistenceGate.withReadLease {
             val module = com.openlattice.chronicle.collection.CollectionModuleId.HEALTH_CONNECT
             val origin = com.openlattice.chronicle.collection.state.ResearchPersistenceGate

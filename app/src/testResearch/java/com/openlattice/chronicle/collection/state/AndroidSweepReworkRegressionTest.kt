@@ -404,6 +404,14 @@ class AndroidSweepReworkRegressionTest {
         assertEquals("AcceptedActivity", stored.activityClass)
     }
 
+    @Test fun healthReadWithoutGrantedTypesAcknowledgesWithoutRefusal() {
+        stopOnPersistenceWorker { fence.installEnrollment(owner) }
+        HealthConnectScopeStore.of(context).replace(emptySet())
+        val source = AndroidHealthMetricSource(context)
+        assertTrue(source.read().isEmpty())
+        source.acknowledgeRead()
+    }
+
     @Test fun legacyHealthCheckpointIsAdoptedBeyondDefaultBackfill() {
         val previous = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(3)
         val checkpoint = context.getSharedPreferences("chronicle_health_connect", Context.MODE_PRIVATE)
