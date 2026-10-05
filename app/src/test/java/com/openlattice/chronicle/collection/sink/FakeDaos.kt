@@ -116,6 +116,9 @@ class FakeSensorSampleDao : SensorSampleDao {
         }
     }
 
+    override fun getOldestExcludingTypes(limit: Int, excludedTypes: List<String>): List<SensorSampleEntry> =
+        rows.values.filter { it.sensorType !in excludedTypes }.sortedWith(compareBy({ it.timestamp }, { it.id })).take(limit)
+
     override fun getOldest(limit: Int): List<SensorSampleEntry> =
         rows.values.sortedWith(compareBy({ it.timestamp }, { it.id })).take(limit)
 

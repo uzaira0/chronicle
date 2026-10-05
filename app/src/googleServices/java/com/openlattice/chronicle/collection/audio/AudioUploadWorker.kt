@@ -146,12 +146,13 @@ class AudioUploadWorkerDelegate(
         plainUpload: (RestrictedChronicleStudyApi, UUID, UploadServerEntity, List<D>) -> Unit,
         label: String,
     ): Int {
+        if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db).allows(payloadType)) return 0
         val pending = getOldest(AUDIO_UPLOAD_MAX_BATCH)
         if (pending.isEmpty()) return 0
 
         var malformed = 0
         val validIds = mutableListOf<String>()
-        val events = pending.mapNotNull { entry ->
+        val converted = pending.mapNotNull { entry ->
             try {
                 toDto(entry).also { validIds += idOf(entry) }
             } catch (e: Exception) {

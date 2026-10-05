@@ -96,6 +96,8 @@ internal class InteractionUploadWorkerDelegate(
 
     /** @return 1 when the active study server failed this run, otherwise 0. */
     fun execute(): Int {
+        if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db)
+                .allows(com.openlattice.chronicle.collection.CollectionModuleId.INTERACTION_EVENTS)) return 0
         val dao = db.interactionSampleDao()
         val serverDao = db.uploadServerDao()
         val servers = listOfNotNull(serverDao.getEnabledServer())

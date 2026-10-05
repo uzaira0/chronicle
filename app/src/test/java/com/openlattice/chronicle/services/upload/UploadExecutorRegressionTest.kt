@@ -66,6 +66,34 @@ class UploadExecutorRegressionTest {
         ),
     )))
 
+    @Test fun heldUsageInMixedQueueIsRetainedWhileActiveLifecycleUploads() {
+        val usage = JsonSerializer.deserializeQueueEntry(validEntry(1).data).single() as ExtractedUsageEvent
+        val lifecycle = usage.copy(appPackageName = com.openlattice.chronicle.constants.ANDROID_SYSTEM_PACKAGE,
+            interactionType = com.openlattice.chronicle.constants.INTERACTION_BATTERY_CHARGING, user = "")
+        db.collectionModuleStateDao().upsertAll(listOf(
+            com.openlattice.chronicle.storage.CollectionModuleStateEntity("usage_events", false, "ACCEPTED", 0, false, 2, null, "hold_pending"),
+            com.openlattice.chronicle.storage.CollectionModuleStateEntity("device_lifecycle", true, "ACCEPTED", 0, false, 2, null, null)))
+        db.queueEntryData().insertEntry(QueueEntry(1_001, 1, JsonSerializer.serializeQueueEntry(listOf(usage, lifecycle))))
+        executor().uploadForServer(server)
+        assertEquals(listOf(1), usagePosts)
+        assertEquals(0L, cursor().first)
+        val retained = db.queueEntryData().getNextEntries(10)
+        assertEquals(1, retained.size)
+        assertEquals(listOf(usage), JsonSerializer.deserializeQueueEntry(retained.single().data))
+        executor().uploadForServer(db.uploadServerDao().getById(server.id)!!)
+        assertEquals("held-only retry must not send or acknowledge", listOf(1), usagePosts)
+        db.openHelper.writableDatabase.execSQL("UPDATE collection_module_state SET serverEnabled = 1 WHERE moduleId = 'usage_events'")
+        executor().uploadForServer(db.uploadServerDao().getById(server.id)!!)
+        assertEquals(listOf(1, 1), usagePosts)
+        assertEquals(1_001L, cursor().first)
+        db.collectionModuleStateDao().upsertAll(listOf(com.openlattice.chronicle.storage.CollectionModuleStateEntity(
+            "battery_telemetry", false, "ACCEPTED", 0, false, 2, null, "hold_pending")))
+        db.batterySampleDao().insertAll(listOf(com.openlattice.chronicle.storage.BatterySampleEntry(
+            "held-battery", "2026-10-01T00:00:00Z", "UTC", 50, "CHARGING", "USB", 250, 4000, "GOOD")))
+        assertEquals(0, com.openlattice.chronicle.collection.battery.BatteryUploadWorkerDelegate(context, db).execute())
+        assertEquals(1, db.batterySampleDao().count())
+    }
+
     @Test
     fun fullyQuarantinedBatchAdvancesWithoutSubmittingAnEmptyRequest() {
         db.queueEntryData().insertEntry(QueueEntry(2_000L, 7L, "not json".toByteArray()))

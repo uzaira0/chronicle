@@ -145,6 +145,7 @@ class ExpansionUploadWorkerDelegate(
         plainUpload: (UUID, UploadServerEntity, List<D>) -> Unit,
         label: String,
     ): Int {
+        if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db).allows(payloadType)) return 0
         val pending = getOldest(EXPANSION_UPLOAD_MAX_BATCH)
         if (pending.isEmpty()) return 0
 

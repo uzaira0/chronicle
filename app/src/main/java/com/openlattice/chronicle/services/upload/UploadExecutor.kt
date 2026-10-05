@@ -49,6 +49,19 @@ class UploadExecutor(
         val apiKey = server.apiKey
         val studyApi = studyApiFor(server)
         val queue = chronicleDb.queueEntryData()
+        val disposition = UploadDispositionPolicy(chronicleDb)
+        var heldBeforeCursor = false
+        var safeTimestamp = server.lastUploadedTimestamp
+        var safeId = server.lastUploadedQueueId
+        fun retainHeldRows(entries: List<com.openlattice.chronicle.storage.QueueEntry>, held: Map<com.openlattice.chronicle.storage.QueueEntry, ByteArray>) {
+            entries.forEach { entry ->
+                val retained = held[entry]
+                if (retained == null) queue.deleteEntry(entry)
+                else chronicleDb.openHelper.writableDatabase.execSQL(
+                    "UPDATE dataQueue SET data = ? WHERE writeTimestamp = ? AND id = ?",
+                    arrayOf(retained, entry.writeTimestamp, entry.id))
+            }
+        }
 
         Log.i(UPLOAD_EXECUTOR_TAG, "Starting upload for server '${server.name}' (authMode=${server.authMode})")
 
@@ -78,13 +91,25 @@ class UploadExecutor(
         while (nextEntries.isNotEmpty()) {
             limiter.acquire()
             val w = com.google.common.base.Stopwatch.createStarted()
+            val heldRows = linkedMapOf<com.openlattice.chronicle.storage.QueueEntry, ByteArray>()
             val data = nextEntries.flatMap { queueEntry ->
                 val sourceId = "${queueEntry.writeTimestamp}:${queueEntry.id}"
-                val queueData = try {
+                val originalData = try {
                     JsonSerializer.deserializeQueueEntry(queueEntry.data)
                 } catch (_: IOException) {
                     null
                 }
+                if (disposition.sharedHeld.isNotEmpty() && originalData == null) {
+                    // Untagged legacy/corrupt data cannot prove it excludes a held module.
+                    heldRows[queueEntry] = queueEntry.data
+                    return@flatMap emptyList<ChronicleSample>()
+                }
+                val heldData = originalData.orEmpty().filter { sample ->
+                    disposition.sharedHeld.isNotEmpty() && (sample !is ExtractedUsageEvent || disposition.holds(sample))
+                }
+                if (heldData.isNotEmpty()) heldRows[queueEntry] = JsonSerializer.serializeQueueEntry(heldData)
+                val queueData = originalData?.filter { it !in heldData }
+                if (queueData?.isEmpty() == true && queueEntry in heldRows) return@flatMap emptyList<ChronicleSample>()
                 if (queueData == null) {
                     Log.w(UPLOAD_EXECUTOR_TAG, "Error deserializing. Attempting legacy deserializer")
                     val rawItems = runCatching {
@@ -155,11 +180,18 @@ class UploadExecutor(
                 compareBy<com.openlattice.chronicle.storage.QueueEntry> { it.writeTimestamp }
                     .thenBy { it.id }
             )
+            heldBeforeCursor = heldBeforeCursor || heldRows.isNotEmpty()
             if (data.isEmpty()) {
                 // Every omitted item is durably quarantined above; a failed quarantine throws.
-                check(chronicleDb.uploadServerDao().advanceUsageCursor(
-                    server.id, maxQueueCursor.writeTimestamp, maxQueueCursor.id,
-                ) == 1)
+                chronicleDb.runInTransaction {
+                    if (!heldBeforeCursor) {
+                        check(chronicleDb.uploadServerDao().advanceUsageCursor(
+                            server.id, maxQueueCursor.writeTimestamp, maxQueueCursor.id) == 1)
+                        safeTimestamp = maxQueueCursor.writeTimestamp
+                        safeId = maxQueueCursor.id
+                    }
+                    if (disposition.sharedHeld.isNotEmpty()) retainHeldRows(nextEntries, heldRows)
+                }
                 cursorTimestamp = maxQueueCursor.writeTimestamp
                 cursorId = maxQueueCursor.id
                 nextEntries = queue.getEntriesAfter(cursorTimestamp, cursorId, BATCH_SIZE)
@@ -183,11 +215,17 @@ class UploadExecutor(
                     chronicleDb.runInTransaction {
                         check(chronicleDb.uploadServerDao().recordUsageUploadSuccess(
                             server.id, OffsetDateTime.now().toString(),
-                            maxQueueCursor.writeTimestamp, maxQueueCursor.id, data.size,
+                            if (heldBeforeCursor) safeTimestamp else maxQueueCursor.writeTimestamp,
+                            if (heldBeforeCursor) safeId else maxQueueCursor.id, data.size,
                         ) == 1)
                         val statsDao = chronicleDb.uploadStatsDao()
                         statsDao.insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
                         statsDao.incrementUsageCount(server.id, today, data.size)
+                        if (disposition.sharedHeld.isNotEmpty()) retainHeldRows(nextEntries, heldRows)
+                        if (!heldBeforeCursor) {
+                            safeTimestamp = maxQueueCursor.writeTimestamp
+                            safeId = maxQueueCursor.id
+                        }
                     }
                 } catch (error: Exception) {
                     Log.e(UPLOAD_EXECUTOR_TAG, "Server accepted usage batch but local cursor/stat commit failed", error)

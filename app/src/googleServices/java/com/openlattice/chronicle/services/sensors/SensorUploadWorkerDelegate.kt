@@ -261,9 +261,10 @@ class SensorUploadWorkerDelegate internal constructor(
         }.toMutableMap()
         var statsFailureCount = 0
 
+        val heldTypes = com.openlattice.chronicle.services.upload.UploadDispositionPolicy(chronicleDb).heldSensorTypes
         val result = drainSensorBatches(
             enabledDestinations = servers,
-            loadOldest = { limit -> dao.getOldest(limit) },
+            loadOldest = { limit -> dao.getOldestExcludingTypes(limit, heldTypes) },
             isAcknowledged = { server, sampleIds ->
                 dao.countDeliveriesForServer(
                     server.id, server.sensorDeliveryGeneration, sampleIds,

@@ -16,6 +16,9 @@ interface SensorSampleDao {
     @Query("SELECT * FROM sensor_samples ORDER BY timestamp ASC, id ASC LIMIT :limit")
     fun getOldest(limit: Int): List<SensorSampleEntry>
 
+    @Query("SELECT * FROM sensor_samples WHERE sensorType NOT IN (:excludedTypes) ORDER BY timestamp ASC, id ASC LIMIT :limit")
+    fun getOldestExcludingTypes(limit: Int, excludedTypes: List<String>): List<SensorSampleEntry>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insertAll(samples: List<SensorSampleEntry>)
 
