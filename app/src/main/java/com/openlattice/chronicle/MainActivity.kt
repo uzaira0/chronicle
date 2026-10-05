@@ -1,6 +1,5 @@
 package com.openlattice.chronicle
 
-import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -120,7 +119,6 @@ class MainActivity : AppCompatActivity() {
             // The read may finish after onSaveInstanceState (Home pressed mid-read); fragment
             // commits must wait until the Activity is started again.
             lifecycle.withStarted {
-                requestExactAlarmPermissionIfNeeded()
 
                 startEnrolledServices()
                 setupNavigation()
@@ -230,22 +228,6 @@ class MainActivity : AppCompatActivity() {
             val connectivity = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             connectivity.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
         }.getOrDefault(false)
-
-    private fun requestExactAlarmPermissionIfNeeded() {
-        if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        val alarmManager = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        // Asked once, ever: reminders fall back to inexact alarms, and opening this settings page on
-        // every launch kept the participant from reaching the app.
-        val prefs = getSharedPreferences("main_activity_prefs", Context.MODE_PRIVATE)
-        if (!alarmManager.canScheduleExactAlarms() && !prefs.getBoolean("exact_alarm_asked", false)) {
-            prefs.edit().putBoolean("exact_alarm_asked", true).apply()
-            Log.e(javaClass.name, "Exact alarm permission not granted")
-            DeviceSettingsNavigator.open(this, Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            })
-        }
-    }
 
     override fun onResume() {
         super.onResume()

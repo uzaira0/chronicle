@@ -31,7 +31,7 @@ class NotificationPermissionActivity : AppCompatActivity() {
             doMainActivity(this, intent)
             finish()
         } else {
-            //TODO: Inform researchers that user blocked notifications for their study
+            updateViewForUserAbort()
             Log.e(Enrollment::class.java.name, "Unable to send notifications!")
         }
     }
@@ -93,6 +93,11 @@ class NotificationPermissionActivity : AppCompatActivity() {
     private fun updateViewForUserAbort() {
         val permissionsText = findViewById<TextView>(R.id.notificationPermissionsText)
         permissionsText.text = getString(R.string.notification_permissions_required)
+        openSettingsBtn.setOnClickListener {
+            val settingsIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, applicationContext.packageName)
+            startActivityForResult(DeviceSettingsNavigator.resolvedIntent(this, settingsIntent), 1)
+        }
     }
 
     /**

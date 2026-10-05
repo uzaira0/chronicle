@@ -56,5 +56,26 @@ class DataSharingRefreshAuditTest {
         controller.destroy()
         Unit
     }
-
+    @Test fun permanentlyDeniedRuntimeAccessOpensPackageSettingsWithoutRequestLoop() {
+        TestStores.install(context, enrolled = true)
+        context.getSharedPreferences("runtime_permission_requests", Context.MODE_PRIVATE).edit()
+            .putBoolean(ModulePermissions.ACTIVITY_RECOGNITION, true).commit()
+        val settingsIntent = android.content.Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(android.net.Uri.parse("package:${context.packageName}"))
+        @Suppress("DEPRECATION")
+        val packageShadow = shadowOf(context.packageManager)
+        packageShadow.addResolveInfoForIntent(settingsIntent, android.content.pm.ResolveInfo().apply {
+            activityInfo = android.content.pm.ActivityInfo().apply { packageName = "android"; name = "Settings" }
+        })
+        val controller = Robolectric.buildActivity(Host::class.java).create()
+        val host=controller.get();val fragment=DataSharingFragment()
+        host.supportFragmentManager.beginTransaction().replace(android.R.id.content, fragment).commitNow()
+        DataSharingFragment::class.java.getDeclaredField("permissionStatus").apply { isAccessible = true }
+            .set(fragment, PermissionStatus(listOf(ModulePermissions.ACTIVITY_RECOGNITION), false))
+        DataSharingFragment::class.java.getDeclaredMethod("requestMissingPermissions").apply { isAccessible = true }.invoke(fragment)
+        val intent = shadowOf(host).nextStartedActivity
+        assertNotNull("permanent denial needs an app settings route",intent)
+        assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, intent?.action)
+        assertEquals("package:${context.packageName}",intent?.dataString)
+        controller.destroy()
+    }
 }

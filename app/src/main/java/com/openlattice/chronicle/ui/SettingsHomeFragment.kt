@@ -165,9 +165,25 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         view.findViewById<MaterialButton>(R.id.privacyPolicyButton).setOnClickListener {
             ExternalLinks.openHttps(requireContext(), getString(R.string.platform_privacy_policy_url))
         }
+        view.findViewById<MaterialButton>(R.id.reminderTimingButton).apply {
+            visibility = if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS && Build.VERSION.SDK_INT >= 31)
+                View.VISIBLE else View.GONE
+            setOnClickListener { showReminderTimingOptions() }
+        }
         view.findViewById<MaterialButton>(R.id.studyPrivacyPolicyButton).setOnClickListener {
             activeStudyPrivacyUrl?.let { url -> ExternalLinks.openHttps(requireContext(), url) }
         }
+    }
+
+    private fun showReminderTimingOptions() {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.reminder_timing_title)
+            .setMessage(R.string.reminder_timing_optional)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.reminder_timing_review) { _, _ ->
+                DeviceSettingsNavigator.open(requireContext(), Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                    .setData(android.net.Uri.parse("package:${requireContext().packageName}")))
+            }.show()
     }
 
     private fun setIdentifyUserEnabled(enabled: Boolean) {

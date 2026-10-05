@@ -193,8 +193,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             list.add(
                 affordanceRow(
                     getString(R.string.ds_permissions_needed),
-                    getString(R.string.ds_grant_access),
-                    getString(R.string.ds_grant_access_cd),
+                    getString(if (permanentlyDeniedRuntime()) R.string.ds_open_app_settings else R.string.ds_grant_access),
+                    getString(if (permanentlyDeniedRuntime()) R.string.ds_open_app_settings else R.string.ds_grant_access_cd),
                 ) { requestMissingPermissions() },
             )
         }
@@ -259,6 +259,13 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
      * launched from the runtime request's callback; if only Health Connect is missing it launches
      * directly. The Settings-based special accesses are handled by their own affordance rows.
      */
+    private fun permanentlyDeniedRuntime(): Boolean {
+        val requested = requireContext().getSharedPreferences("runtime_permission_requests", Context.MODE_PRIVATE)
+        return permissionStatus.missingRuntime.any {
+            requested.getBoolean(it, false) && !shouldShowRequestPermissionRationale(it)
+        }
+    }
+
     private fun requestMissingPermissions() {
         if (permissionStatus.needUsageAccess) {
             confirmUsageAccessDisclosure()
@@ -267,7 +274,15 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val runtime = permissionStatus.missingRuntime
         pendingHealthConnectRequest = permissionStatus.needHealthConnect
         when {
-            runtime.isNotEmpty() -> runtimePermissionLauncher.launch(runtime.toTypedArray())
+            runtime.isNotEmpty() && permanentlyDeniedRuntime() -> DeviceSettingsNavigator.open(
+                requireContext(), Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(android.net.Uri.parse("package:${requireContext().packageName}")),
+            )
+            runtime.isNotEmpty() -> {
+                check(requireContext().getSharedPreferences("runtime_permission_requests", Context.MODE_PRIVATE)
+                    .edit().apply { runtime.forEach { putBoolean(it, true) } }.commit())
+                runtimePermissionLauncher.launch(runtime.toTypedArray())
+            }
             pendingHealthConnectRequest -> launchHealthConnect()
         }
     }

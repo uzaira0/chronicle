@@ -23,6 +23,7 @@ import org.robolectric.shadows.ShadowAlarmManager
  * isEnrolled() says false. MainActivity must route from the authoritative off-main read and open
  * the dashboard, not the enrollment screen.
  */
+@Suppress("DEPRECATION")
 @RunWith(RobolectricTestRunner::class)
 class MainActivityColdStartRoutingTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -102,7 +103,7 @@ class MainActivityColdStartRoutingTest {
         assertTrue(activity.supportFragmentManager.findFragmentByTag("backgroundDataRestricted") != null)
     }
 
-    @Test fun exactAlarmSettingsOpenOnlyOnFirstLaunch() {
+    @Test fun exactAlarmAccessIsOptionalAndOfferedOnlyInReminderContext() {
         TestStores.install(context, enrolled = true)
         ShadowAlarmManager.setCanScheduleExactAlarms(false)
         val settingsActions = setOf(
@@ -117,7 +118,27 @@ class MainActivityColdStartRoutingTest {
             (generateSequence { app.nextStartedActivity } + generateSequence { shadowOf(activity).nextStartedActivity })
                 .count { it.action in settingsActions }
         }
-        assertEquals(1, opened)
+        assertEquals(0, opened)
+        val controller = Robolectric.buildActivity(com.openlattice.chronicle.ui.DataSharingRefreshAuditTest.Host::class.java).create()
+        val host = controller.get()
+        val fragment = com.openlattice.chronicle.ui.SettingsHomeFragment()
+        host.supportFragmentManager.beginTransaction().replace(android.R.id.content, fragment).commitNow()
+        controller.start().visible()
+        try {
+            val expected = android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                .setData(android.net.Uri.parse("package:${context.packageName}"))
+            shadowOf(context.packageManager).addResolveInfoForIntent(expected, android.content.pm.ResolveInfo().apply {
+                activityInfo = android.content.pm.ActivityInfo().apply { packageName = "android"; name = "Settings" }
+            })
+            fragment.requireView().findViewById<android.view.View>(R.id.reminderTimingButton).performClick()
+            val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            assertTrue(dialog.findViewById<android.widget.TextView>(android.R.id.message)!!.text.contains("approximate"))
+            dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            val started = shadowOf(host).nextStartedActivity
+            assertEquals(expected.action, started.action)
+            assertEquals(expected.data, started.data)
+        } finally { controller.stop().destroy() }
     }
 
     @Test fun recreationWithBundleButNoFragmentSelectsDefaultTab() {
