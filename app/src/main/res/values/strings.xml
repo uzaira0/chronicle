@@ -484,6 +484,7 @@
 Your withdrawal request is pending. Data collection has stopped.</string>
     <string name="participation_status_withdrawal_pending">Withdrawal pending — data collection stopped</string>
     <string name="server_health_withdrawal_pending">Your withdrawal request is pending. Data collection has stopped.</string>
+    <string name="reminder_public_message">Open Chronicle to view your reminder.</string>
     <string name="collection_paused_storage">Collection is paused because device storage is low. Free some space to resume. Your queued data is retained.</string>
     <string name="cap_capture_retry">Capture is temporarily unavailable. Chronicle will retry; review Android access in Data Sharing.</string>
     <string name="upload_terminal_blocked">Upload is blocked by the study server. Contact the study team; queued data is retained.</string>

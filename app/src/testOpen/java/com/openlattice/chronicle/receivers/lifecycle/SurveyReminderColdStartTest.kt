@@ -85,7 +85,16 @@ class SurveyReminderColdStartTest {
             .getStringExtra(SURVEY_ENROLLMENT_SCOPE))
     }
 
-
+    @Test fun postedSurveyHasGenericPrivateLockScreenVersion() {
+        coldStartReminderIsPostedOnceAuthorizationPublishes()
+        val notification = shadowOf(context.getSystemService(NotificationManager::class.java)).allNotifications.single()
+        assertEquals(android.app.Notification.VISIBILITY_PRIVATE, notification.visibility)
+        assertTrue("public lock-screen version required", notification.publicVersion != null)
+        val publicText = notification.publicVersion.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString() +
+            notification.publicVersion.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
+        assertTrue(publicText.contains("Chronicle"))
+        assertTrue(!publicText.contains("Check-in") && !publicText.contains("localhost") && !publicText.contains("form"))
+    }
 
     /** Fix 4: an alarm whose request code a sync retired meanwhile posts nothing. */
     @Test fun retiredRequestCodeIsNotPosted() {

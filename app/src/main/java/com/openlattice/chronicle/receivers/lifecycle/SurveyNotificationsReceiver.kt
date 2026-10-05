@@ -102,6 +102,13 @@ class SurveyNotificationsReceiver : BroadcastReceiver() {
                 .setSmallIcon(R.drawable.ic_stat_notification)
                 .setColor(ContextCompat.getColor(context, R.color.colorPrimary))
                 // Standard template: Android 12+ clips custom RemoteViews layouts to ~48dp.
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_stat_notification)
+                    .setContentTitle(context.getString(R.string.app_name))
+                    .setContentText(context.getString(R.string.reminder_public_message))
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .build())
                 .setContentTitle(notification.title)
                 .setContentText(notification.message)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(notification.message))

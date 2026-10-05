@@ -202,7 +202,7 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
         enrollmentSettings.setAwarenessNotificationsEnabled(notificationsEnabled)
 
         Log.i(javaClass.name, "Participation status: $participationStatus")
-        Log.i(javaClass.name, "Study questionnaires: $studyQuestionnaires")
+        Log.i(javaClass.name, "Study questionnaire count: ${studyQuestionnaires.size}")
         Log.i(javaClass.name, "Notification enabled: $notificationsEnabled")
 
         // Legacy device-id enrollments cannot obtain device-bound participant access codes.

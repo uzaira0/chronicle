@@ -109,5 +109,23 @@ class RuntimeOperationsAuditTest {
         assertTrue(resumed.collection.active>0);assertFalse(resumed.collection.message.contains("storage",ignoreCase=true));assertEquals(1,db.queueEntryData().getSize())
         Unit
     }
-
+    @Test fun questionnaireSchedulingLogsOnlyCountsAndRedactedIdentifiers() = onPersistenceWorker {
+        AuditStores.install(context,true);init()
+        val worker=NotificationsWorker(context,auditWorkerParameters())
+        val sentinel="UNIQUE_PRIVATE_QUESTIONNAIRE_PROMPT_AND_CHOICE"
+        val api=Proxy.newProxyInstance(ChronicleStudyApi::class.java.classLoader,arrayOf(ChronicleStudyApi::class.java)){_,method,_->when(method.name){
+            "getParticipationStatus"->com.openlattice.chronicle.data.ParticipationStatus.ENROLLED
+            "isNotificationsEnabled"->false
+            "getStudyQuestionnaires"->mapOf(UUID.randomUUID() to mapOf(org.apache.olingo.commons.api.edm.FullQualifiedName("synthetic","prompt") to setOf<Any>(sentinel)))
+            else->null
+        }} as ChronicleStudyApi
+        fun set(name:String,value:Any){worker.javaClass.getDeclaredField(name).apply{isAccessible=true}.set(worker,value)}
+        val settings=com.openlattice.chronicle.preferences.EnrollmentSettings(context)
+        set("enrollmentSettings",settings);set("studyId",settings.getStudyId());set("participantId",settings.getParticipantId());set("chronicleApi",api)
+        ShadowLog.clear()
+        worker.javaClass.getDeclaredMethod("workHelper").apply{isAccessible=true}.invoke(worker)
+        val logs=ShadowLog.getLogs().joinToString("\n"){it.msg}
+        assertFalse(logs,logs.contains(sentinel));assertTrue(logs.contains("questionnaire count: 1",ignoreCase=true));assertTrue(logs.contains("requestCode"))
+        Unit
+    }
 }
