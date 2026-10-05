@@ -29,7 +29,8 @@ class OverviewFragment : Fragment(R.layout.fragment_overview) {
             }
             while (true) {
                 val snapshot = DashboardDataRepository.load(requireContext())
-                val accessNeeded = activeModulePermissionStatus(snapshot.collectionModules, environment).hasMissing
+                val accessNeeded = snapshot.participationStop == null &&
+                    activeModulePermissionStatus(snapshot.collectionModules, environment).hasMissing
                 view?.let { bind(it, snapshot, accessNeeded) }
                 delay(DASHBOARD_REFRESH_MS)
             }
@@ -46,7 +47,7 @@ class OverviewFragment : Fragment(R.layout.fragment_overview) {
         view.findViewById<TextView>(R.id.overviewStudyId).text =
             getString(R.string.overview_study, snapshot.studyId)
         view.findViewById<TextView>(R.id.overviewParticipantId).text =
-            getString(R.string.overview_participant, snapshot.participantId)
+            getString(snapshot.participationStop?.participant ?: R.string.overview_participant, snapshot.participantId)
         view.findViewById<TextView>(R.id.overviewLastUpload).text =
             snapshot.lastUpload
         view.findViewById<TextView>(R.id.overviewLatestTimestamp).text =

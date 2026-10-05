@@ -360,10 +360,18 @@ object ResearchPersistenceGate {
         var applied = false
         stop {
             val fence = ResearchErasureFence(context)
-            if (!isSameActiveOwner(context, expected) || fence.settingsGeneration() != responseGeneration) return@stop
+            // Any status: a paused device must still accept the server's ENROLLED to resume.
+            if (!isSameEnrolledOwner(context, expected) || fence.settingsGeneration() != responseGeneration) return@stop
             val settings = EnrollmentSettings(context)
             val changed = settings.getParticipationStatus() != status
             settings.setParticipationStatus(status)
+            if (status != ParticipationStatus.ENROLLED) {
+                synchronized(com.openlattice.chronicle.services.notifications.REMINDER_SCHEDULE_LOCK) {
+                    settings.getMobileReminderRequestCodes().forEach {
+                        com.openlattice.chronicle.services.notifications.cancelReminderByRequestCode(context, it)
+                    }
+                }
+            }
             if (changed) fence.settingsChanged()
             applied = true
         }
@@ -476,6 +484,10 @@ object ResearchPersistenceGate {
         return isActiveEnrollmentOrThrow(context) && isSameEnrollment(context, expected)
     }
 
+    private fun isSameEnrolledOwner(context: Context, expected: UploadServerEntity): Boolean {
+        return isActiveEnrollmentOrThrow(context, anyParticipationStatus = true) && isSameEnrollment(context, expected)
+    }
+
     private fun isSameEnrollment(context: Context, expected: UploadServerEntity): Boolean {
         val settings = EnrollmentSettings(context)
         if (settings.getStudyId().toString() != expected.studyId ||
@@ -516,11 +528,15 @@ object ResearchPersistenceGate {
         }
     }
 
-    private fun isActiveEnrollmentOrThrow(context: Context, ignoreStorageLatch: Boolean = false): Boolean {
+    private fun isActiveEnrollmentOrThrow(
+        context: Context,
+        ignoreStorageLatch: Boolean = false,
+        anyParticipationStatus: Boolean = false,
+    ): Boolean {
         if (ResearchErasureFence(context).hasPendingErasures()) return false
         if ((!ignoreStorageLatch && persistenceFailureClosed) || !collectionOwnerIsCurrent(context)) return false
         val settings = EnrollmentSettings(context)
-        return settings.getParticipationStatus() == ParticipationStatus.ENROLLED &&
+        return (anyParticipationStatus || settings.getParticipationStatus() == ParticipationStatus.ENROLLED) &&
             settings.isEnrolledOrThrow() &&
             WithdrawalStateStore(context).stateOrThrow() == WithdrawalState.NONE &&
             MinimalPlayArtifactState.isReadyOrThrow(context)
@@ -571,6 +587,14 @@ object ResearchPersistenceGate {
             persist = { result = com.openlattice.chronicle.security.CallDeadline.within(30_000, operation) },
         )
         return if (admitted) checkNotNull(result) else null
+    }
+
+    /** Enrolled on this device and not withdrawn, whatever the server-side participation status. */
+    fun isEnrolledIgnoringStatus(context: Context): Boolean = try {
+        isActiveEnrollmentOrThrow(context.applicationContext, anyParticipationStatus = true)
+    } catch (error: Exception) {
+        Log.e(TAG, "Enrollment check failed", error)
+        false
     }
 
     /** Fail-closed one-active-study predicate shared by callbacks and participant controls. */

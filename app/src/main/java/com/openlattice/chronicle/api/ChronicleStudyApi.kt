@@ -120,6 +120,13 @@ interface ChronicleStudyApi {
         @Body request: CreateParticipantFormAccessCodeRequest,
     ): ParticipantFormAccessCodeResponse
 
+    @GET(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + STATUS_PATH)
+    fun getDeviceParticipationStatus(
+        @Path(STUDY_ID) studyId: UUID,
+        @Path(PARTICIPANT_ID) participantId: String,
+        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
+        @Header("X-Api-Key") apiKey: String,
+    ): ParticipationStatus
 
     @GET(V3_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + VERIFY_PATH)
     fun isKnownParticipant(

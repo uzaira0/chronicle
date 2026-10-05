@@ -40,7 +40,6 @@ import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
 import com.openlattice.chronicle.services.notifications.*
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
 import com.openlattice.chronicle.services.withdrawal.*
-import com.openlattice.chronicle.services.enrollment.EnrollmentMonitoringWorker
 import com.openlattice.chronicle.storage.*
 import java.lang.reflect.Proxy
 import java.time.OffsetDateTime
@@ -164,18 +163,30 @@ class ResearchErasureRegressionTest {
 
     @Test fun enrollmentMonitorCannotApplyRetiredStatusToAReplacementWithTheSameParticipantIds() {
         val expected = owner
-        val worker = EnrollmentMonitoringWorker(context, workerParameters())
-        val applyStatus = worker.javaClass.getDeclaredMethod("persistStatusIfSameActiveEnrollment",
-            ParticipationStatus::class.java, UploadServerEntity::class.java).apply { isAccessible = true }
+        val applyStatus = { status: ParticipationStatus ->
+            ResearchPersistenceGate.applyParticipationStatus(context, expected, fence.settingsGeneration(), status)
+        }
         WithdrawalStateStore(context).setState(WithdrawalState.PENDING)
-        assertFalse(onPersistenceWorker { applyStatus.invoke(worker, ParticipationStatus.ENROLLED, expected) } as Boolean)
+        assertFalse(onPersistenceWorker { applyStatus(ParticipationStatus.ENROLLED) })
         stopOnPersistenceWorker {
             db.uploadServerDao().delete(expected.id)
             db.uploadServerDao().insert(expected.copy(id = 0, createdAt = OffsetDateTime.now().toString()))
             WithdrawalStateStore(context).setState(WithdrawalState.NONE)
         }
-        assertFalse(onPersistenceWorker { applyStatus.invoke(worker, ParticipationStatus.NOT_ENROLLED, expected) } as Boolean)
+        assertFalse(onPersistenceWorker { applyStatus(ParticipationStatus.NOT_ENROLLED) })
         assertEquals(ParticipationStatus.ENROLLED, EnrollmentSettings(context).getParticipationStatus())
+    }
+
+    @Test fun pausedEnrollmentAcceptsTheServerResume() {
+        val apply = { status: ParticipationStatus ->
+            ResearchPersistenceGate.applyParticipationStatus(context, owner, fence.settingsGeneration(), status)
+        }
+        assertTrue(onPersistenceWorker { apply(ParticipationStatus.PAUSED) })
+        assertFalse(ResearchPersistenceGate.isActiveEnrollment(context))
+        assertTrue(ResearchPersistenceGate.isEnrolledIgnoringStatus(context))
+
+        assertTrue(onPersistenceWorker { apply(ParticipationStatus.ENROLLED) })
+        assertTrue(ResearchPersistenceGate.isActiveEnrollment(context))
     }
 
     @Test fun acknowledgedWithdrawalClearsConsentReportsBeforeAnInterruptedDatabaseErasureAndIdentityLast() {
@@ -735,6 +746,77 @@ class ResearchErasureRegressionTest {
             assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
             if (previous == null) cache.remove(key) else cache[key] = previous
         }
+    }
+
+    /**
+     * W-1: a researcher-deleted participant's server answers NOT_ENROLLED on the status read. The
+     * enrollment monitor alone, starting from ENROLLED, applies it and stops collection while keeping
+     * local data; a 401 changes nothing.
+     */
+    @Test fun enrollmentMonitorAloneAppliesServerNotEnrolledButA401ChangesNothing() {
+        val expected = owner.copy(authMode = AUTH_MODE_API_KEY, apiKey = "test-key")
+        db.uploadServerDao().update(expected)
+        onPersistenceWorker { ResearchPersistenceGate.initialize(context) }
+        db.queueEntryData().insertEntry(row())
+
+        var unauthorized = true
+        withStudyApi(expected) { method ->
+            if (unauthorized) throw com.openlattice.chronicle.serialization.ChronicleCallException("GET", "url", "", 401)
+            if (method == "getDeviceParticipationStatus") ParticipationStatus.NOT_ENROLLED else error(method)
+        }.use {
+            val monitor = com.openlattice.chronicle.services.enrollment.EnrollmentMonitoringWorker(context, workerParameters())
+            assertEquals(ListenableWorker.Result.failure(), onPersistenceWorker { monitor.doWork() })
+            assertEquals(ParticipationStatus.ENROLLED, EnrollmentSettings(context).getParticipationStatus())
+            assertTrue("a 401 must not stop collection", ResearchPersistenceGate.isActiveEnrollment(context))
+
+            unauthorized = false
+            assertEquals(ListenableWorker.Result.success(), onPersistenceWorker { monitor.doWork() })
+            assertEquals(ParticipationStatus.NOT_ENROLLED, EnrollmentSettings(context).getParticipationStatus())
+            assertFalse("NOT_ENROLLED stops collection", ResearchPersistenceGate.isActiveEnrollment(context))
+            assertFalse(ResearchPersistenceGate.captureObservation(context, CollectionModuleId.USAGE_EVENTS)
+                .persist { db.queueEntryData().insertEntry(row()) })
+            assertEquals("local data is kept, never erased by a status", 1, db.queueEntryData().getSize())
+        }
+    }
+
+    /** W-1: the reminder read answers NOT_ENROLLED with no forms; NotificationsWorker cancels the armed reminders. */
+    @Test fun serverNotEnrolledReminderReadCancelsArmedReminders() {
+        val expected = owner.copy(authMode = AUTH_MODE_API_KEY, apiKey = "test-key")
+        db.uploadServerDao().update(expected)
+        onPersistenceWorker { ResearchPersistenceGate.initialize(context) }
+        val reminder = NotificationDetails("form", com.openlattice.chronicle.constants.NotificationType.QUESTIONNAIRE,
+            "FREQ=DAILY;BYHOUR=19;BYMINUTE=0;BYSECOND=0", "Check-in", "Tap")
+        EnrollmentSettings(context).setMobileReminderRequestCodes(setOf(reminder.requestCode()))
+        assertNotNull(armReminder(context, reminder,
+            Intent(context, SurveyNotificationsReceiver::class.java).setAction(SURVEY_NOTIFICATION_ACTION)))
+        val alarms = shadowOf(context.getSystemService(AlarmManager::class.java))
+        assertEquals(1, alarms.scheduledAlarms.size)
+
+        withStudyApi(expected) { method ->
+            if (method == "getMobileReminderSchedule") {
+                com.openlattice.chronicle.participantaccess.MobileReminderConfiguration(ParticipationStatus.NOT_ENROLLED, emptyList())
+            } else {
+                error(method)
+            }
+        }.use {
+            assertEquals(ListenableWorker.Result.success(),
+                onPersistenceWorker { NotificationsWorker(context, workerParameters()).doWork() })
+            assertTrue("NOT_ENROLLED cancels armed reminders", alarms.scheduledAlarms.isEmpty())
+            assertTrue(EnrollmentSettings(context).getMobileReminderRequestCodes().isEmpty())
+        }
+    }
+
+    /** Serves [answer] for every ChronicleStudyApi call to [server] until closed. */
+    private fun withStudyApi(server: UploadServerEntity, answer: (String) -> Any): AutoCloseable {
+        val apiType = com.openlattice.chronicle.api.ChronicleStudyApi::class.java
+        val api = Proxy.newProxyInstance(apiType.classLoader, arrayOf(apiType)) { _, method, _ -> answer(method.name) }
+            as com.openlattice.chronicle.api.ChronicleStudyApi
+        @Suppress("UNCHECKED_CAST")
+        val cache = com.openlattice.chronicle.services.upload.UploadWorker::class.java.getDeclaredField("studyApiCache")
+            .apply { isAccessible = true }.get(null) as MutableMap<String, com.openlattice.chronicle.api.ChronicleStudyApi>
+        val key = server.url + "|" + com.openlattice.chronicle.utils.Utils.mobileSigningSecretFingerprint(server.mobileSigningSecretOverride)
+        val previous = cache.put(key, api)
+        return AutoCloseable { if (previous == null) cache.remove(key) else cache[key] = previous }
     }
 
     @Suppress("UNCHECKED_CAST")

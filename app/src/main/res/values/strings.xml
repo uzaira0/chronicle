@@ -244,6 +244,12 @@
     <string name="settings_open_notification_settings">Open notification settings</string>
     <string name="overview_study">Study\n%1$s</string>
     <string name="overview_participant">Participant\n%1$s\nOne active study</string>
+    <string name="overview_participant_ended">Participant\n%1$s\nThe study team ended your participation. Data collection has stopped.</string>
+    <string name="overview_participant_paused">Participant\n%1$s\nThe study team paused your participation. Data collection is paused until they resume it.</string>
+    <string name="participation_status_ended">Stopped — the study team ended your participation</string>
+    <string name="participation_status_paused">Paused by the study team</string>
+    <string name="server_health_not_enrolled">Not enrolled: the study server no longer accepts data from this device</string>
+    <string name="server_health_participation_paused">Uploads paused by the study team</string>
     <string name="overview_latest_timestamp">Latest usage/lifecycle timestamp\n%1$s</string>
     <string name="overview_collection_status">Collection status\n%1$s</string>
     <string name="overview_collection_status_review">Collection status\n%1$s\n\nTap to review in Data Sharing →</string>
@@ -473,6 +479,11 @@
     </plurals>
     <string name="upload_diagnostics_unavailable">Upload diagnostics are unavailable. They will be retried when storage recovers.</string>
     <string name="work_scheduling_unavailable">Uploads could not be scheduled. Restart Chronicle after storage recovers.</string>
+    <string name="overview_participant_withdrawal_pending">Participant
+%1$s
+Your withdrawal request is pending. Data collection has stopped.</string>
+    <string name="participation_status_withdrawal_pending">Withdrawal pending — data collection stopped</string>
+    <string name="server_health_withdrawal_pending">Your withdrawal request is pending. Data collection has stopped.</string>
     <string name="collection_paused_storage">Collection is paused because device storage is low. Free some space to resume. Your queued data is retained.</string>
     <string name="cap_capture_retry">Capture is temporarily unavailable. Chronicle will retry; review Android access in Data Sharing.</string>
     <string name="upload_terminal_blocked">Upload is blocked by the study server. Contact the study team; queued data is retained.</string>

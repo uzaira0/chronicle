@@ -90,6 +90,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
      */
     private var permissionStatus = PermissionStatus(emptyList(), needHealthConnect = false)
     private var capabilities: Map<CollectionModuleId, CollectionCapability> = emptyMap()
+    private var participationStop: ParticipationStop? = null
     private var capabilityEnvironment: CapabilityEnvironment? = null
 
     /** Set when a permission request needs Health Connect after the runtime request resolves. */
@@ -148,6 +149,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
     /** Rebinds every section from one snapshot (kept in one place so no surface goes stale). */
     private fun bindAll(view: View, snapshot: DashboardSnapshot) {
+        participationStop = snapshot.participationStop
         bindAppUsage(view, snapshot)
         bindSensors(view, snapshot)
     }
@@ -734,6 +736,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
     private fun statusText(moduleId: CollectionModuleId, state: CollectionModuleState?): String = when {
         state?.serverEnabled != true -> getString(R.string.ds_status_not_collected)
+        participationStop != null -> getString(requireNotNull(participationStop).status)
         capabilities[moduleId]?.canCollectNow == false -> capabilities.getValue(moduleId).message
         state.requiredApplied && state.accepted -> getString(R.string.ds_status_required_collecting)
         state.requiredAndDeclined -> getString(R.string.ds_status_declined_paused)
@@ -874,7 +877,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         moduleId: CollectionModuleId,
         state: CollectionModuleState?,
         isAvailable: Boolean,
-    ): String = sensorCollectionStatusText(state, isAvailable, capabilities[moduleId], ::getString)
+    ): String = sensorCollectionStatusText(state, isAvailable, capabilities[moduleId], ::getString, participationStop)
 
     /** The read-only, study-set sampling rate + duty cycle line for a sensor the study collects. */
     private fun rateDutyLine(sensor: AndroidSensorType, show: Boolean, sensors: SensorDashboardSummary): String {
@@ -1106,9 +1109,11 @@ internal fun sensorCollectionStatusText(
     isAvailable: Boolean,
     capability: CollectionCapability?,
     resolve: (Int) -> String = ::englishSensorStatus,
+    participationStop: ParticipationStop? = null,
 ): String = when {
     !isAvailable -> resolve(R.string.ds_sensor_unavailable)
     state?.serverEnabled != true -> resolve(R.string.ds_status_not_collected)
+    participationStop != null -> resolve(participationStop.status)
     capability?.canCollectNow == false -> capability.message
     state.requiredApplied && state.accepted -> resolve(R.string.ds_status_required_collecting)
     state.requiredAndDeclined -> resolve(R.string.ds_status_declined_paused)
@@ -1129,5 +1134,7 @@ private fun englishSensorStatus(id: Int): String = when (id) {
     R.string.ds_status_required_accept -> "Required — accept above to start sharing."
     R.string.ds_status_on -> "On — collecting"
     R.string.ds_status_off_declined -> "Off — you turned this off"
+    R.string.participation_status_ended -> "Stopped — the study team ended your participation"
+    R.string.participation_status_paused -> "Paused by the study team"
     else -> "Off — turn on to share"
 }

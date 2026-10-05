@@ -13,6 +13,7 @@ import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.serialization.ChronicleCallException
 import com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.completeServerForIdentity
@@ -41,7 +42,8 @@ class EnrollmentMonitoringWorker(
 
     override fun runWork(): Result {
         return try {
-            if (!ResearchPersistenceGate.isActiveEnrollment(applicationContext)) {
+            // Runs while PAUSED too: this worker is how a paused device learns it was resumed.
+            if (!ResearchPersistenceGate.isEnrolledIgnoringStatus(applicationContext)) {
                 Log.i(TAG, "Skipping enrollment monitoring outside an active enrollment")
                 return Result.success()
             }
@@ -60,25 +62,28 @@ class EnrollmentMonitoringWorker(
                 LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_MONITOR_FAILURE, null)
                 return Result.failure()
             }
-            if (!ResearchPersistenceGate.isActiveEnrollment(applicationContext)) {
-                return Result.success()
-            }
-            if (server.authMode == AUTH_MODE_API_KEY) {
-                persistStatusIfSameActiveEnrollment(ParticipationStatus.ENROLLED, server)
-                Log.i(TAG, "Skipping legacy participation status endpoint for API-key enrollment")
-                LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_MONITOR_SUCCESS, null)
-                return Result.success()
-            }
-
             val chronicleApi = UploadWorker.getChronicleStudyApi(
                 server.url,
                 server.mobileSigningSecretOverride,
             )
 
             val generation = com.openlattice.chronicle.collection.state.ResearchErasureFence(applicationContext).settingsGeneration()
-            val participationStatus = ResearchPersistenceGate.runIfExpectedOwner(applicationContext, server) {
+            val participationStatus = if (server.authMode == AUTH_MODE_API_KEY) {
+                try {
+                    chronicleApi.getDeviceParticipationStatus(
+                        studyId,
+                        participantId,
+                        server.sourceDeviceId,
+                        requireNotNull(server.apiKey) { "API-key enrollment is missing its credential" },
+                    )
+                } catch (error: ChronicleCallException) {
+                    // Servers before the device status endpoint: keep collecting, as before.
+                    if (error.code != 404) throw error
+                    ParticipationStatus.ENROLLED
+                }
+            } else {
                 chronicleApi.getParticipationStatus(studyId, participantId) ?: ParticipationStatus.UNKNOWN
-            } ?: return Result.success()
+            }
 
             ResearchPersistenceGate.applyParticipationStatus(applicationContext, server, generation, participationStatus)
 
@@ -92,12 +97,6 @@ class EnrollmentMonitoringWorker(
             Result.failure()
         }
     }
-
-    /** Serializes the final identity/status mutation against withdrawal's stop barrier. */
-    private fun persistStatusIfSameActiveEnrollment(status: ParticipationStatus,
-        expected: com.openlattice.chronicle.storage.UploadServerEntity): Boolean =
-        ResearchPersistenceGate.applyParticipationStatus(applicationContext, expected,
-            com.openlattice.chronicle.collection.state.ResearchErasureFence(applicationContext).settingsGeneration(), status)
 
 }
 

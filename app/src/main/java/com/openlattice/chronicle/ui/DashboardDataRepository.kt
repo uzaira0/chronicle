@@ -12,6 +12,7 @@ import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.CollectionModulePhase
 import com.openlattice.chronicle.collection.state.CollectionModuleState
+import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.preferences.SensorSettings
 import com.openlattice.chronicle.sensors.SensorTypeMapping
@@ -48,7 +49,29 @@ data class DashboardSnapshot(
     val localUploadIssues: List<LocalUploadIssueBucket>,
     val localUploadDiagnosticsAvailable: Boolean = true,
     val workSchedulingAvailable: Boolean = true,
+    val participationStop: ParticipationStop? = null,
 )
+
+/**
+ * The study team ended (NOT_ENROLLED, e.g. the participant was deleted) or paused participation:
+ * nothing collects or uploads. Screens say so instead of module consents, collection counts, or
+ * upload failure counters, which the server's not-enrolled rejections leave behind.
+ */
+enum class ParticipationStop(val participant: Int, val status: Int, val serverHealth: Int) {
+    WITHDRAWAL_PENDING(R.string.overview_participant_withdrawal_pending, R.string.participation_status_withdrawal_pending,
+        R.string.server_health_withdrawal_pending),
+    ENDED(R.string.overview_participant_ended, R.string.participation_status_ended, R.string.server_health_not_enrolled),
+    PAUSED(R.string.overview_participant_paused, R.string.participation_status_paused, R.string.server_health_participation_paused),
+    ;
+
+    companion object {
+        fun of(status: ParticipationStatus): ParticipationStop? = when (status) {
+            ParticipationStatus.NOT_ENROLLED -> ENDED
+            ParticipationStatus.PAUSED -> PAUSED
+            else -> null
+        }
+    }
+}
 
 data class CollectionStatusSummary(
     val active: Int,
@@ -104,6 +127,10 @@ object DashboardDataRepository {
     suspend fun load(context: Context): DashboardSnapshot = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         val enrollment = EnrollmentSettings(appContext)
+        val withdrawal = com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore(appContext).state()
+        val participationStop = if (withdrawal == com.openlattice.chronicle.services.withdrawal.WithdrawalState.PENDING ||
+            withdrawal == com.openlattice.chronicle.services.withdrawal.WithdrawalState.NEEDS_SUPPORT)
+            ParticipationStop.WITHDRAWAL_PENDING else ParticipationStop.of(enrollment.getParticipationStatus())
         val db = ChronicleDb.getInstance(appContext)
         val uploadDashboard = PendingUploadCounter.dashboardSnapshot(appContext, LocalDate.now())
         val servers = listOfNotNull(db.uploadServerDao().getConfiguredServer())
@@ -133,13 +160,15 @@ object DashboardDataRepository {
                 ?: Utils.getLastUpload(appContext),
             latestTimestampUploaded = Utils.getLatestTimestampUploaded(appContext),
             uploads = uploadDashboard,
-            collection = loadCollectionSummary(appContext),
+            collection = participationStop?.let { CollectionStatusSummary(0, 0, 0, appContext.getString(it.status)) }
+                ?: loadCollectionSummary(appContext),
             collectionModules = runCatching {
                 CollectionLoopStore.of(appContext).loadAll().values.toList()
             }.getOrDefault(emptyList()),
             sensors = loadSensorSummary(appContext, db),
-            serverHealth = loadServerHealth(appContext, servers, hasValidatedInternet(appContext),
+            serverHealth = loadServerHealth(appContext, servers, hasValidatedInternet(appContext), participationStop,
                 blockedUploads = servers.any { it.enabled && com.openlattice.chronicle.services.upload.UploadRetryGate.isBlocked(appContext, it, db) }),
+            participationStop = participationStop,
             localUploadIssues = diagnostics.orEmpty(),
             localUploadDiagnosticsAvailable = diagnostics != null,
             workSchedulingAvailable = !com.openlattice.chronicle.WorkSchedulingStatus.unavailable,
@@ -150,7 +179,7 @@ object DashboardDataRepository {
                     name = server.name,
                     url = server.url,
                     enabled = server.enabled,
-                    healthLabel = appContext.getString(if (
+                    healthLabel = appContext.getString(participationStop?.status ?: if (
                         com.openlattice.chronicle.services.upload.UploadRetryGate.isBlocked(appContext, server, db)
                     ) R.string.upload_terminal_blocked else server.healthStatus().labelRes()),
                     lastSuccess = latestSuccess(server),
@@ -263,11 +292,14 @@ object DashboardDataRepository {
         context: Context,
         servers: List<UploadServerEntity>,
         online: Boolean,
+        participationStop: ParticipationStop? = null,
         blockedUploads: Boolean = false,
     ): ServerHealthSummary {
         if (servers.isEmpty()) {
             return ServerHealthSummary(0, context.getString(R.string.uploads_none_configured))
         }
+        // The server rejects a not-enrolled device's uploads; those failures say nothing about its health.
+        participationStop?.let { return ServerHealthSummary(servers.size, context.getString(it.serverHealth)) }
         val enabled = servers.filter { it.enabled }
         if (enabled.isEmpty()) {
             return ServerHealthSummary(servers.size, context.getString(R.string.server_health_all_disabled))
