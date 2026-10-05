@@ -77,6 +77,8 @@
 -keep class com.openlattice.chronicle.participantaccess.MobileReminderConfiguration { *; }
 -keep class com.openlattice.chronicle.participantaccess.MobileReminderForm { *; }
 -keep class com.openlattice.chronicle.participantaccess.ParticipantFormKind { *; }
+-keep class com.openlattice.chronicle.participantaccess.CreateParticipantFormAccessCodeRequest { *; }
+-keep class com.openlattice.chronicle.participantaccess.ParticipantFormAccessCodeResponse { *; }
 -keep class com.openlattice.chronicle.collection.AndroidDataCollectionSetting** { *; }
 -keep class com.openlattice.chronicle.collection.ConsentTrigger { *; }
 -keep class com.openlattice.chronicle.collection.AndroidConnectivityStateEvent { *; }

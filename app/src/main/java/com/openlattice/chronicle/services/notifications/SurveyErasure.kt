@@ -31,5 +31,6 @@ fun eraseSurveyArtifacts(context: Context) {
             it.cancel()
         }
     }
+    clearReminderAlarmState(context)
     check(prefs.edit().remove(MOBILE_REMINDER_REQUEST_CODES).commit()) { "Unable to retire survey alarms" }
 }

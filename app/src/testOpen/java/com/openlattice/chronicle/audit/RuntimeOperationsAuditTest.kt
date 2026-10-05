@@ -79,7 +79,24 @@ class RuntimeOperationsAuditTest {
         }
         context.unregisterReceiver(receiver)
     }
-
+    @Test fun alarmFailureLeavesNoArmedStateAndEligibilityRetriesSuccessfully() = onPersistenceWorker {
+        AuditStores.install(context,true);init()
+        val details=NotificationDetails("form",NotificationType.QUESTIONNAIRE,"FREQ=DAILY","Synthetic","Synthetic",serverUrl="https://localhost",accessCode="a".repeat(40))
+        val settings=com.openlattice.chronicle.preferences.EnrollmentSettings(context)
+        settings.setMobileReminderRequestCodes(setOf(details.requestCode()))
+        val failing=object:ContextWrapper(context){override fun getSystemService(name:String):Any? {
+            if(name==Context.ALARM_SERVICE)throw SecurityException("unique-alarm-sentinel");return super.getSystemService(name)
+        }}
+        val intent=Intent(context,com.openlattice.chronicle.receivers.lifecycle.SurveyNotificationsReceiver::class.java).setAction(SURVEY_NOTIFICATION_ACTION)
+        assertNull(armReminder(failing,details,intent))
+        assertEquals(1,count("APP_RUNTIME","COLLECTION_ACCESS_MISSING"))
+        assertTrue(details.requestCode() in settings.getMobileReminderRequestCodes())
+        assertFalse(context.getSharedPreferences(REMINDER_ALARM_STATE_PREFS,Context.MODE_PRIVATE).contains(details.requestCode().toString()))
+        assertNotNull(armReminder(context,details,intent))
+        assertNull(armReminder(context,details.copy(id="not-registered"),intent))
+        assertEquals(1,count("APP_RUNTIME","COLLECTION_ACCESS_MISSING"))
+        Unit
+    }
     @Test fun lowStorageIsVisibleAndRetainsQueueUntilCapacityRecovers() = onPersistenceWorker {
         AuditStores.install(context,true);init()
         val db=ChronicleDb.getInstance(context);db.queueEntryData().insertEntry(com.openlattice.chronicle.storage.QueueEntry(10,1,byteArrayOf(1,2,3)))

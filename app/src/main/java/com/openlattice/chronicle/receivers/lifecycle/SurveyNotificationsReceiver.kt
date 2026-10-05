@@ -14,13 +14,17 @@ import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import com.openlattice.chronicle.R
+import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.notifications.CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.NOTIFICATION_DETAILS
 import com.openlattice.chronicle.services.notifications.NotificationDetails
+import com.openlattice.chronicle.services.notifications.REMINDER_SCHEDULE_LOCK
+import com.openlattice.chronicle.services.notifications.ReminderLinkActivity
+import com.openlattice.chronicle.services.notifications.SURVEY_ENROLLMENT_SCOPE
 import com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_ACTION
-import com.openlattice.chronicle.utils.Utils.createNotificationTargetUrl
+import com.openlattice.chronicle.services.notifications.armReminder
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 
 class SurveyNotificationsReceiver : BroadcastReceiver() {
@@ -76,46 +80,50 @@ class SurveyNotificationsReceiver : BroadcastReceiver() {
             null
         } ?: return
 
-        // intent to launch survey in browser
-        val targetUrl = runCatching {
-            createNotificationTargetUrl(notification, studyId, participantId)
-        }.getOrElse {
-            Log.w(javaClass.name, "Suppressed reminder without a trusted, device-bound participant link")
-            return
-        }
-        val notifyIntent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl))
-        val pendingIntent: PendingIntent =
-            PendingIntent.getActivity(
-                context,
-                notification.requestCode(),
-                notifyIntent,
-                getPendingIntentMutabilityFlag(PendingIntent.FLAG_UPDATE_CURRENT),
-            )
+        // Held through the post: a sync that retired this code (form removed, rule changed) either
+        // finishes first and nothing is posted, or waits until the post is done.
+        synchronized(REMINDER_SCHEDULE_LOCK) {
+            if (notification.requestCode() !in EnrollmentSettings(context).getMobileReminderRequestCodes()) return
+            armReminder(context, notification, intent, consumedAtMillis = notification.scheduledAtMillis ?: System.currentTimeMillis())
+            // The tap fetches a fresh one-time code: the code in this reminder is revoked at the
+            // next reminder sync. It carries the enrollment scope the alarm was admitted under.
+            val notifyIntent = Intent(context, ReminderLinkActivity::class.java)
+                .putExtra(NOTIFICATION_DETAILS, notificationEntry)
+                .putExtra(SURVEY_ENROLLMENT_SCOPE, intent.getStringExtra(SURVEY_ENROLLMENT_SCOPE))
+            val pendingIntent: PendingIntent =
+                PendingIntent.getActivity(
+                    context,
+                    notification.requestCode(),
+                    notifyIntent,
+                    getPendingIntentMutabilityFlag(PendingIntent.FLAG_UPDATE_CURRENT),
+                )
 
-        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_notification)
-            .setColor(ContextCompat.getColor(context, R.color.colorPrimary))
-            // Standard template: Android 12+ clips custom RemoteViews layouts to ~48dp.
-            .setContentTitle(notification.title)
-            .setContentText(notification.message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(notification.message))
-            .setShowWhen(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH) //support android 7.1
-            .setContentIntent(pendingIntent)
-            .setDefaults(Notification.DEFAULT_VIBRATE)
-            .setAutoCancel(true) // remove when user taps on notification
+            val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_notification)
+                .setColor(ContextCompat.getColor(context, R.color.colorPrimary))
+                // Standard template: Android 12+ clips custom RemoteViews layouts to ~48dp.
+                .setContentTitle(notification.title)
+                .setContentText(notification.message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(notification.message))
+                .setShowWhen(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH) //support android 7.1
+                .setContentIntent(pendingIntent)
+                .setDefaults(Notification.DEFAULT_VIBRATE)
+                // ReminderLinkActivity removes it once the form opens, so a failed tap can be retried.
+                .setAutoCancel(false)
 
-        val notificationSound: Uri =
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        builder.setSound(notificationSound)
+            val notificationSound: Uri =
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            builder.setSound(notificationSound)
 
-        // POST_NOTIFICATIONS (API 33+) is a runtime permission the user may have denied; NotificationManagerCompat.notify
-        // then throws SecurityException. Handle it explicitly (same contract as CollectionLoopCoordinator.notifySafely):
-        // the deep-link survey reminder is best-effort, so a denied permission is logged and swallowed, never crashes the receiver.
-        try {
-            NotificationManagerCompat.from(context).notify(com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_TAG, notification.requestCode(), builder.build())
-        } catch (e: SecurityException) {
-            Log.w(javaClass.name, "Survey notification suppressed (POST_NOTIFICATIONS not granted)", e)
+            // POST_NOTIFICATIONS (API 33+) is a runtime permission the user may have denied; NotificationManagerCompat.notify
+            // then throws SecurityException. Handle it explicitly (same contract as CollectionLoopCoordinator.notifySafely):
+            // the deep-link survey reminder is best-effort, so a denied permission is logged and swallowed, never crashes the receiver.
+            try {
+                NotificationManagerCompat.from(context).notify(com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_TAG, notification.requestCode(), builder.build())
+            } catch (e: SecurityException) {
+                Log.w(javaClass.name, "Survey notification suppressed (POST_NOTIFICATIONS not granted)", e)
+            }
         }
     }
 }

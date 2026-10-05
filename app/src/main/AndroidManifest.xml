@@ -101,6 +101,17 @@
             android:name="com.openlattice.chronicle.collection.state.CollectionOrientationActivity"
             android:exported="false"
             android:label="@string/orientation_action_title" />
+        <activity
+            android:name="com.openlattice.chronicle.services.notifications.ReminderLinkActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
+            android:name=".StudyDisclosureActivity"
+            android:exported="false"
+            android:label="@string/title_study_information" />
         <receiver
             android:name=".receivers.lifecycle.StartOnBoot"
             android:exported="true"

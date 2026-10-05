@@ -252,6 +252,8 @@
     <string name="uploads_none_configured">No upload servers configured</string>
     <string name="reminder_tap_survey">Tap to complete survey</string>
     <string name="reminder_tap_questionnaire">Tap to complete questionnaire</string>
+    <string name="reminder_link_unavailable">Could not open the form. Check your internet connection and tap the reminder again.</string>
+    <string name="reminder_form_unavailable">This form is no longer available.</string>
     <string name="reminder_survey_title">Chronicle Survey</string>
     <string name="notif_required_title">A data type is now required</string>
     <string name="notif_required_text">This study now requires a data type. Open the app and go to Data Sharing to accept it — until you do it isn\'t collected, and declining it pauses all data collection.</string>

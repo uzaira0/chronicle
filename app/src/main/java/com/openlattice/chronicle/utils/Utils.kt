@@ -33,6 +33,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.net.URI
 import java.time.Instant
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.security.MessageDigest
 import java.time.ZoneId
@@ -183,6 +184,14 @@ object Utils {
             uriBuilder
                 .appendQueryParameter("studyId", studyId)
                 .appendQueryParameter("participantId", participantId)
+                .appendQueryParameter(
+                    "date",
+                    notificationDetails.localDate
+                        ?: notificationDetails.scheduledAtMillis
+                        ?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() }
+                        ?.toString()
+                        ?: LocalDate.now().toString(),
+                )
         }
 
         uriBuilder.encodedFragment("accessCode=${Uri.encode(accessCode)}")

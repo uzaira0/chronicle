@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.receivers.lifecycle
 
 import android.app.NotificationManager
+import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.os.Looper
@@ -19,6 +20,7 @@ import com.openlattice.chronicle.services.notifications.SURVEY_ENROLLMENT_SCOPE
 import com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_ACTION
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -47,6 +49,7 @@ class SurveyReminderColdStartTest {
 
         val details = NotificationDetails("form", NotificationType.QUESTIONNAIRE, "FREQ=DAILY", "Check-in",
             "Tap", serverUrl = "https://localhost", accessCode = "b".repeat(40))
+        com.openlattice.chronicle.preferences.EnrollmentSettings(context).setMobileReminderRequestCodes(setOf(details.requestCode()))
         // Robolectric only routes manifest receivers that declare an intent filter; register it.
         androidx.core.content.ContextCompat.registerReceiver(context, SurveyNotificationsReceiver(),
             android.content.IntentFilter(SURVEY_NOTIFICATION_ACTION), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
@@ -63,6 +66,55 @@ class SurveyReminderColdStartTest {
         }
 
         assertEquals(1, notifications.allNotifications.size)
+        val alarms = shadowOf(context.getSystemService(AlarmManager::class.java)).scheduledAlarms
+        assertEquals(1, alarms.size)
+        // Robolectric 4.17 has no getter for the alarm's PendingIntent.
+        @Suppress("DEPRECATION") val alarmOperation = alarms.single().operation
+        val nextReminder = Gson().fromJson(
+            shadowOf(alarmOperation).savedIntent.getStringExtra(NOTIFICATION_DETAILS),
+            NotificationDetails::class.java,
+        )
+        assertTrue(nextReminder.scheduledAtMillis!! > System.currentTimeMillis())
+        // The tap goes through the app for a fresh one-time code, never straight to the posted link.
+        assertEquals(
+            com.openlattice.chronicle.services.notifications.ReminderLinkActivity::class.java.name,
+            shadowOf(notifications.allNotifications.single().contentIntent).savedIntent.component?.className,
+        )
+        // V-9: the tap is checked against the enrollment scope this alarm was admitted under.
+        assertEquals(scope, shadowOf(notifications.allNotifications.single().contentIntent).savedIntent
+            .getStringExtra(SURVEY_ENROLLMENT_SCOPE))
+    }
+
+
+
+    /** Fix 4: an alarm whose request code a sync retired meanwhile posts nothing. */
+    @Test fun retiredRequestCodeIsNotPosted() {
+        TestStores.install(context, enrolled = true,
+            manifestOverrides = mapOf(CollectionModuleId.QUESTIONNAIRE to CollectionModuleSetting(enabled = true)))
+        ResearchPersistenceGate.resetAfterLocalStoreRecovery()
+        val owner = runOffMain {
+            ResearchPersistenceGate.initialize(context)
+            ResearchPersistenceGate.captureOwner(context)!!
+        }
+        val scope = ResearchPersistenceGate.observationScope(context, CollectionModuleId.QUESTIONNAIRE)!!.first
+        val details = NotificationDetails("form", NotificationType.QUESTIONNAIRE, "FREQ=DAILY", "Check-in",
+            "Tap", serverUrl = "https://localhost", accessCode = "b".repeat(40))
+        com.openlattice.chronicle.preferences.EnrollmentSettings(context).setMobileReminderRequestCodes(emptySet())
+        val receiver = SurveyNotificationsReceiver()
+        androidx.core.content.ContextCompat.registerReceiver(context, receiver,
+            android.content.IntentFilter(SURVEY_NOTIFICATION_ACTION), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        context.sendBroadcast(Intent(SURVEY_NOTIFICATION_ACTION).setPackage(context.packageName)
+            .putExtra(SURVEY_ENROLLMENT_SCOPE, scope)
+            .putExtra(NOTIFICATION_DETAILS, Gson().toJson(details))
+            .putExtra(STUDY_ID, owner.studyId)
+            .putExtra(PARTICIPANT_ID, owner.participantId))
+        shadowOf(Looper.getMainLooper()).idle()
+        // The receiver's worker thread finishes its goAsync result once it has decided.
+        org.robolectric.shadow.api.Shadow.extract<org.robolectric.shadows.ShadowBroadcastPendingResult>(
+            shadowOf(receiver).originalPendingResult,
+        ).future.get(8, java.util.concurrent.TimeUnit.SECONDS)
+
+        assertTrue(shadowOf(context.getSystemService(NotificationManager::class.java)).allNotifications.isEmpty())
     }
 
     private fun <T> runOffMain(action: () -> T): T {

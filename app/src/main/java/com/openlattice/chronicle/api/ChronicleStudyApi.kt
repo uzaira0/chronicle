@@ -14,7 +14,9 @@ import com.openlattice.chronicle.crypto.EncryptedEnvelope
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.study.StudyEncryptionSetting
 import com.openlattice.chronicle.study.EnrollmentWithdrawalResponse
+import com.openlattice.chronicle.participantaccess.CreateParticipantFormAccessCodeRequest
 import com.openlattice.chronicle.participantaccess.MobileReminderConfiguration
+import com.openlattice.chronicle.participantaccess.ParticipantFormAccessCodeResponse
 import com.openlattice.chronicle.sources.SourceDevice
 import org.apache.olingo.commons.api.edm.FullQualifiedName
 import retrofit2.http.*
@@ -99,6 +101,25 @@ interface ChronicleStudyApi {
         @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
         @Header("X-Api-Key") apiKey: String,
     ): MobileReminderConfiguration
+
+    @GET(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + "/reminders")
+    fun getMobileReminderSchedule(
+        @Path(STUDY_ID) studyId: UUID,
+        @Path(PARTICIPANT_ID) participantId: String,
+        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
+        @Header("X-Api-Key") apiKey: String,
+    ): MobileReminderConfiguration
+
+    /** Mints one form's code; unlike the reminder manifest it leaves the device's other forms' codes live. */
+    @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + "/form-access-codes")
+    fun createParticipantFormAccessCode(
+        @Path(STUDY_ID) studyId: UUID,
+        @Path(PARTICIPANT_ID) participantId: String,
+        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
+        @Header("X-Api-Key") apiKey: String,
+        @Body request: CreateParticipantFormAccessCodeRequest,
+    ): ParticipantFormAccessCodeResponse
+
 
     @GET(V3_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + VERIFY_PATH)
     fun isKnownParticipant(

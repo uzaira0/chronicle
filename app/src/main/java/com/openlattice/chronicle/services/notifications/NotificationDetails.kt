@@ -10,6 +10,9 @@ data class NotificationDetails(
     val message: String,
     val serverUrl: String? = null,
     val accessCode: String? = null,
+    val scheduledAtMillis: Long? = null,
+    /** The occurrence's ISO local date in the zone it was armed in; a later zone change must not move it. */
+    val localDate: String? = null,
 ) {
     /** Stable across refreshed one-time codes so PendingIntent updates replace old alarms. */
     fun requestCode(): Int = "$id|${type.name}|$recurrenceRule".hashCode()
