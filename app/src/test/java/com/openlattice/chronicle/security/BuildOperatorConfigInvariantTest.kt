@@ -11,7 +11,10 @@ class BuildOperatorConfigInvariantTest {
         val buildFile = locateBuildFile()
         val text = buildFile.readText()
 
-        assertTrue(text.contains("readGeneratedIosConfigValue('MOBILE_SIGNING_SECRET')"))
+        assertFalse(text.contains("readGeneratedIosConfigValue"))
+        assertFalse(text.contains("readDockerEnvValue"))
+        assertTrue(text.contains("environmentVariable('MOBILE_SIGNING_SECRET')"))
+        assertTrue(text.contains("findProperty('mobileSigningSecret')"))
         assertTrue(text.contains("buildConfigField \"String\", \"MOBILE_SIGNING_SECRET\", '\"\"'"))
         assertTrue(text.contains("Transitional compatibility for controlled research deployments only."))
         assertFalse(text.contains("CHRONICLE_TESTPROD"))

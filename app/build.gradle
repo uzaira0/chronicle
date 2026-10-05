@@ -28,60 +28,22 @@ repositories {
     }
 }
 
+def requiresReleaseSigning = gradle.startParameter.taskNames.any { taskName ->
+    def normalized = taskName.toLowerCase(Locale.ROOT)
+    (normalized.contains('release') || normalized.contains('dogfood')) && (
+        normalized.contains('assemble') ||
+        normalized.contains('bundle') ||
+        normalized.contains('package') ||
+        normalized.contains('install')
+    )
+}
+
+
 def signingProperties = new Properties()
 def signingPropertiesFile = file('signing.properties')
-def hasChronicleSigning = signingPropertiesFile.exists()
+def hasChronicleSigning = requiresReleaseSigning && signingPropertiesFile.exists()
 if (hasChronicleSigning) {
     signingProperties.load(new FileInputStream(signingPropertiesFile))
-}
-
-def readEnvFileValue = { File envFile, String key ->
-    if (!envFile.exists()) return null
-    def prefix = "${key}="
-    def line = envFile.readLines().find { raw ->
-        def trimmed = raw.trim()
-        trimmed.startsWith(prefix) && !trimmed.startsWith('#')
-    }
-    if (line == null) {
-        return null
-    }
-    def value = line.substring(prefix.length()).trim()
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.substring(1, value.length() - 1)
-    }
-    return value
-}
-
-def readDockerEnvValue = { String key ->
-    def candidates = [
-        rootProject.file('../docker/.env'),
-        rootProject.file('../methodic/docker/.env'),
-        rootProject.file('../methodic/docker/.env.production'),
-        rootProject.file('../methodic/docker/.env.staging'),
-    ]
-    for (def envFile : candidates) {
-        def value = readEnvFileValue(envFile, key)
-        if (value != null && !value.toString().isBlank()) return value
-    }
-    return null
-}
-
-def readGeneratedIosConfigValue = { String key ->
-    def candidates = [
-        rootProject.file('../chronicle-ios/chronicle/Config/Chronicle.local.xcconfig'),
-        rootProject.file('../methodic/chronicle-ios/chronicle/Config/Chronicle.local.xcconfig'),
-    ]
-    def pattern = ~/^\s*${java.util.regex.Pattern.quote(key)}\s*=\s*(.*?)\s*$/
-    for (def configFile : candidates) {
-        if (!configFile.exists()) continue
-        for (def rawLine : configFile.readLines()) {
-            def matcher = rawLine =~ pattern
-            if (matcher.matches() && !matcher.group(1).isBlank()) {
-                return matcher.group(1).trim()
-            }
-        }
-    }
-    return null
 }
 
 def readOperatorConfigValue = { String envKey, String gradleProperty, String defaultValue ->
@@ -148,16 +110,10 @@ if (!(releaseCandidateId ==~ /[A-Za-z0-9][A-Za-z0-9._-]{0,127}/)) {
 def mobileSigningSecret = ''
 def envMobileSigningSecret = providers.environmentVariable('MOBILE_SIGNING_SECRET').getOrNull()
 def propMobileSigningSecret = project.findProperty('mobileSigningSecret')?.toString()
-def dockerMobileSigningSecret = readDockerEnvValue('MOBILE_SIGNING_SECRET')?.toString()
-def iosConfigMobileSigningSecret = readGeneratedIosConfigValue('MOBILE_SIGNING_SECRET')?.toString()
 if (envMobileSigningSecret != null && !envMobileSigningSecret.isBlank()) {
     mobileSigningSecret = envMobileSigningSecret
 } else if (propMobileSigningSecret != null && !propMobileSigningSecret.isBlank()) {
     mobileSigningSecret = propMobileSigningSecret
-} else if (dockerMobileSigningSecret != null && !dockerMobileSigningSecret.isBlank()) {
-    mobileSigningSecret = dockerMobileSigningSecret
-} else if (iosConfigMobileSigningSecret != null && !iosConfigMobileSigningSecret.isBlank()) {
-    mobileSigningSecret = iosConfigMobileSigningSecret
 }
 
 def isPlaceholderMobileSigningSecret = { String value ->
@@ -169,20 +125,7 @@ def isPlaceholderMobileSigningSecret = { String value ->
         normalized.contains('example')
 }
 
-def requiresMobileSigningSecret = gradle.startParameter.taskNames.any { taskName ->
-    def normalized = taskName.toLowerCase(Locale.ROOT)
-    normalized.contains('research') || normalized.contains('verifymobilesigningsecret')
-}
 
-def requiresReleaseSigning = gradle.startParameter.taskNames.any { taskName ->
-    def normalized = taskName.toLowerCase(Locale.ROOT)
-    (normalized.contains('release') || normalized.contains('dogfood')) && (
-        normalized.contains('assemble') ||
-        normalized.contains('bundle') ||
-        normalized.contains('package') ||
-        normalized.contains('install')
-    )
-}
 
 def normalizedSigningPath = { Object value ->
     value == null ? '' : value.toString().trim().replace('\\', '/').toLowerCase(Locale.ROOT)
@@ -452,11 +395,16 @@ android {
     namespace 'com.openlattice.chronicle'
 }
 
+// JVM debug checks do not need a live deployment secret. Research artifacts always do.
+def requiresMobileSigningSecret = requiresResearchArtifact || gradle.startParameter.taskNames.any {
+    it.toLowerCase(Locale.ROOT).contains('verifymobilesigningsecret')
+}
+
 if (requiresMobileSigningSecret && mobileSigningSecret.isBlank()) {
     throw new GradleException(
         "MOBILE_SIGNING_SECRET is required to build/install Chronicle Android APKs. " +
             "Set env MOBILE_SIGNING_SECRET, Gradle property mobileSigningSecret, " +
-            "or docker/.env MOBILE_SIGNING_SECRET."
+            "both must be supplied explicitly."
     )
 }
 
