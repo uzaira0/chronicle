@@ -126,6 +126,24 @@ class AppNetworkEnrollmentPersistenceTest {
         assertTrue(StatsManager.windows.all { it.first == baseline })
     }
 
+    @Test fun readWithoutUsageAccessKeepsCheckpointUntilAccessReturns() {
+        source.read()
+        source.acknowledgeRead()
+        val last = checkpoint.getLong("last_end_millis", -1)
+        val appOps = context.getSystemService(android.app.AppOpsManager::class.java)
+        val shadow = org.robolectric.Shadows.shadowOf(appOps)
+        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, android.app.AppOpsManager.MODE_IGNORED)
+        StatsManager.windows.clear()
+        Thread.sleep(2)
+        assertTrue(source.read().isEmpty())
+        source.acknowledgeRead()
+        assertTrue("no summary without Usage Access", StatsManager.windows.isEmpty())
+        assertEquals(last, checkpoint.getLong("last_end_millis", -1))
+        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, android.app.AppOpsManager.MODE_ALLOWED)
+        source.read()
+        assertTrue(StatsManager.windows.isNotEmpty() && StatsManager.windows.all { it.first == last })
+    }
+
     @Test fun withdrawalCompletesWithBoundaryWriterWaitingForQueue() {
         assertTrue(ParticipantWithdrawalManager.begin(context))
         val inHttp = java.util.concurrent.CountDownLatch(1)

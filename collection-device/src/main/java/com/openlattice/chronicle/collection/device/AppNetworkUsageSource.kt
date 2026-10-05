@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.collection.device
 
+import android.app.AppOpsManager
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
 import android.content.Context
@@ -99,6 +100,13 @@ public class AndroidAppNetworkUsageSource(
     @Suppress("DEPRECATION") // ConnectivityManager.TYPE_* are the args NetworkStatsManager.querySummary takes.
     @Synchronized
     override fun read(): List<AppNetworkUsageReading> {
+        if (!usageAccessGranted()) {
+            // Without Usage Access the summary holds only this app's own traffic. Acknowledging it
+            // would move the checkpoint past other apps' usage that Android still holds.
+            pendingEndMillis = null
+            pendingEnrollment = null
+            return emptyList()
+        }
         val (scope, enrollmentStart) = enrollment()
         adoptLegacyScope(scope)
         if (prefs.getString(KEY_ENROLLMENT, null) != scope) {
@@ -160,6 +168,14 @@ public class AndroidAppNetworkUsageSource(
     override fun rejectRead() {
         // Keep the exact pending endpoint, including across process death, so a retry reads the
         // identical window and produces the same deterministic sample ids.
+    }
+
+    @Suppress("DEPRECATION") // unsafeCheckOpNoThrow is API 29+; minSdk is 26.
+    private fun usageAccessGranted(): Boolean {
+        val appOps = appContext.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
+        return appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS, appContext.applicationInfo.uid, appContext.packageName,
+        ) == AppOpsManager.MODE_ALLOWED
     }
 
     private fun querySummary(

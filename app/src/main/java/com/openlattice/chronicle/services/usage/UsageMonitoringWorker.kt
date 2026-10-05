@@ -16,6 +16,7 @@ import com.openlattice.chronicle.collection.usage.UsageWorkerMigration
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.data.ParticipationStatus
+import com.openlattice.chronicle.hasUsageSettingPermission
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.sensors.ChronicleSensor
 import com.openlattice.chronicle.sensors.PROPERTY_TYPE_IDS
@@ -70,11 +71,18 @@ internal fun selectedUsageCollectionPath(): UsageCollectionPath =
  *
  * @return true if usage data was collected (or not needed), false on a retryable condition.
  */
-internal fun collectUsage(context: Context): Boolean =
-    when (selectedUsageCollectionPath()) {
+internal fun collectUsage(context: Context): Boolean {
+    // Without Usage Access, queryEvents returns no events. Committing that empty poll moves the
+    // cursor past events Android still holds, so they are never read after access returns.
+    if (!hasUsageSettingPermission(context)) {
+        Log.i(TAG, "Usage Access is off; usage poll skipped, cursor kept")
+        return true
+    }
+    return when (selectedUsageCollectionPath()) {
         UsageCollectionPath.MODULE_GATED -> UsageModuleCollectionDelegate(context).execute()
         UsageCollectionPath.LEGACY_UNGATED -> UsageCollectionDelegate(context).execute()
     }
+}
 
 class UsageMonitoringWorker(context: Context, workerParameters: WorkerParameters) :
     com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {

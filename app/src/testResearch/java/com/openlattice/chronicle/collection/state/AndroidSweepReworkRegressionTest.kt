@@ -2,6 +2,7 @@
 
 package com.openlattice.chronicle.collection.state
 
+import android.app.AppOpsManager
 import android.app.Application
 import android.app.Notification
 import android.app.usage.UsageEvents
@@ -35,6 +36,7 @@ import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.notifications.NotificationListener
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
 import com.openlattice.chronicle.services.usage.UsageModuleCollectionDelegate
+import com.openlattice.chronicle.services.usage.collectUsage
 import com.openlattice.chronicle.sensors.LAST_USAGE_QUERY_TIMESTAMP
 import com.openlattice.chronicle.sensors.USAGE_EVENTS_SENSOR_CHECKPOINT
 import com.openlattice.chronicle.storage.*
@@ -402,6 +404,21 @@ class AndroidSweepReworkRegressionTest {
             .flatMap { JsonSerializer.deserializeQueueEntry(it.data) }
             .filterIsInstance<com.openlattice.chronicle.models.ExtractedUsageEvent>().single()
         assertEquals("AcceptedActivity", stored.activityClass)
+    }
+
+    @Test fun usagePollWithoutUsageAccessKeepsCursorUntilAccessReturns() {
+        assertTrue(UsageModuleCollectionDelegate(context).execute())
+        val scope = ResearchPersistenceGate.observationScope(context, CollectionModuleId.USAGE_EVENTS)!!
+        val cursor = { DaoUsagePollCheckpointStore(db.usagePollCheckpointDao(), scope.first, scope.second).readPreviousPollTimestamp() }
+        val before = cursor()
+        val appOps = context.getSystemService(AppOpsManager::class.java)
+        shadowOf(appOps).setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, AppOpsManager.MODE_IGNORED)
+        Thread.sleep(5)
+        assertTrue(collectUsage(context))
+        assertEquals(before, cursor())
+        shadowOf(appOps).setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, AppOpsManager.MODE_ALLOWED)
+        assertTrue(collectUsage(context))
+        assertTrue(cursor()!! > before!!)
     }
 
     @Test fun healthReadWithoutGrantedTypesAcknowledgesWithoutRefusal() {
