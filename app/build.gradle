@@ -683,7 +683,7 @@ def runtimeComponents = { List<String> configurationNames ->
         .sort()
 }
 
-def writeCycloneDx = { File destination, List<String> coordinates ->
+def writeCycloneDx = { File destination, List<String> coordinates, File artifact = null ->
     def components = coordinates.collect { coordinate ->
         def parts = coordinate.split(':', 3)
         [
@@ -702,6 +702,11 @@ def writeCycloneDx = { File destination, List<String> coordinates ->
         metadata: [component: [type: 'application', name: 'chronicle-android', version: android.defaultConfig.versionName]],
         components: components,
     ]
+    if (artifact != null) {
+        if (!artifact.isFile()) throw new GradleException("Sealed bundle is missing: ${artifact}")
+        sbom.metadata.component.hashes = [[alg: 'SHA-256',
+            content: java.security.MessageDigest.getInstance('SHA-256').digest(artifact.bytes).encodeHex().toString()]]
+    }
     destination.parentFile.mkdirs()
     destination.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(sbom))
     logger.lifecycle("Wrote ${components.size()} components to ${destination}")
@@ -709,12 +714,15 @@ def writeCycloneDx = { File destination, List<String> coordinates ->
 
 tasks.register('generateRuntimeSbom') {
     group = 'verification'
-    description = 'Writes a CycloneDX inventory for all release distribution runtime classpaths.'
+    description = 'Writes a CycloneDX inventory for the selected candidate runtime classpath.'
     dependsOn tasks.named('verifyNoJacksonRuntime')
     def outputFile = layout.buildDirectory.file('reports/security/chronicle-android-runtime.cdx.json')
+    def selectedVariant = providers.gradleProperty('sbomVariant')
+    inputs.property('sbomVariant', selectedVariant.orElse('all-release'))
     outputs.file(outputFile)
     doLast {
-        writeCycloneDx(outputFile.get().asFile, runtimeComponents(releaseRuntimeClasspaths))
+        def names = selectedVariant.isPresent() ? [selectedVariant.get() + 'RuntimeClasspath'] : releaseRuntimeClasspaths
+        writeCycloneDx(outputFile.get().asFile, runtimeComponents(names))
     }
 }
 
@@ -730,7 +738,8 @@ tasks.register('generateRuntimeSbom') {
         )
         outputs.file(outputFile)
         doLast {
-            writeCycloneDx(outputFile.get().asFile, runtimeComponents(["${flavor}ReleaseRuntimeClasspath".toString()]))
+            writeCycloneDx(outputFile.get().asFile, runtimeComponents(["${flavor}ReleaseRuntimeClasspath".toString()]),
+                layout.buildDirectory.file("outputs/bundle/${flavor}Release/app-${flavor}-release.aab").get().asFile)
         }
     }
     tasks.matching { it.name == "bundle${capitalized}Release" }.configureEach { finalizedBy(sbomTask) }

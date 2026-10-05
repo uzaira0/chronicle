@@ -231,6 +231,14 @@ if [[ "$skip_build" -eq 0 ]]; then
 fi
 
 shasum -a 256 "$apk_path" | tee "$output_dir/apk.sha256"
+# Store the candidate's exact variant inventory and sealed hash for owner approval.
+./gradlew :app:generateRuntimeSbom "-PsbomVariant=$variant" | tee "$output_dir/sbom-build.txt"
+version_code="$(sed -n 's/^[[:space:]]*versionCode \([0-9][0-9]*\).*/\1/p' "$ROOT_DIR/app/build.gradle" | head -n 1)"
+version_name="$(sed -n 's/^[[:space:]]*versionName "\([^"]*\)".*/\1/p' "$ROOT_DIR/app/build.gradle" | head -n 1)"
+python3 "$ROOT_DIR/scripts/bind-candidate-sbom.py" \
+  "$ROOT_DIR/app/build/reports/security/chronicle-android-runtime.cdx.json" \
+  "$apk_path" "$output_dir" "$variant" "$version_code" "$version_name"
+
 "$ROOT_DIR/scripts/verify-android-16kb-native-libs.sh" --release-abis-only "$apk_path" | tee "$output_dir/verify-apk-16kb.txt"
 
 find_apksigner() {

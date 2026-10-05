@@ -16,9 +16,11 @@ class BuildGateContractTest {
                     "'researchReleaseRuntimeClasspath', 'openReleaseRuntimeClasspath']",
             ),
         )
-        // verifyNoJacksonRuntime and generateRuntimeSbom both read the shared list.
+        // Runtime verification covers the shared list; the SBOM can select one candidate variant.
         assertTrue(appGradle.contains("def forbidden = releaseRuntimeClasspaths"))
-        assertTrue(appGradle.contains("runtimeComponents(releaseRuntimeClasspaths)"))
+        assertTrue(appGradle.contains("selectedVariant.orElse('all-release')"))
+        assertTrue(appGradle.contains(" : releaseRuntimeClasspaths"))
+        assertTrue(appGradle.contains("runtimeComponents(names)"))
     }
 
     @Test
