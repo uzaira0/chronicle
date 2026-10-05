@@ -157,6 +157,13 @@ abstract class ChronicleDb : RoomDatabase() {
                 try {
                     encryptedDb.execSQL("ATTACH DATABASE '${oldDbFile.absolutePath}' AS plaintext KEY ''")
                     encryptedDb.execSQL("SELECT sqlcipher_export('main', 'plaintext')")
+                    // sqlcipher_export copies schema and rows but not user_version. At 0 Room takes its
+                    // create path, skips the migrations from the plaintext schema and fails validation.
+                    val schemaVersion = encryptedDb.rawQuery("PRAGMA plaintext.user_version", emptyArray()).use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getInt(0) else 0
+                    }
+                    check(schemaVersion > 0) { "Plaintext database has no schema version" }
+                    encryptedDb.execSQL("PRAGMA main.user_version = $schemaVersion")
                     encryptedDb.execSQL("DETACH DATABASE plaintext")
                     encryptedDb.rawQuery("PRAGMA integrity_check", emptyArray()).use { cursor ->
                         check(cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)) {

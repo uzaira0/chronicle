@@ -5,6 +5,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -57,6 +58,29 @@ class ChronicleDbMigrationTest {
                 assertEquals("device-a", cursor.getString(2))
                 assertEquals(2, cursor.getInt(3))
             }
+        }
+    }
+
+    /** W-2: the SQLCipher conversion keeps the plaintext schema version, so Room migrates the copy. */
+    @Test
+    fun plaintextDatabaseAtAnOlderSchemaIsEncryptedThenMigrated() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        ChronicleDb.resetAfterVerifiedRecoveryBundle(context)
+        helper.createDatabase("chronicle", 28).apply {
+            insertConfiguredServer(this)
+            execSQL("INSERT INTO upload_stats (serverId, date, usageEventsUploaded, sensorSamplesUploaded, batterySamplesUploaded, usageUploadFailures, sensorUploadFailures, batteryUploadFailures) VALUES (1, '2026-01-01', 2, 0, 0, 1, 0, 0)")
+            close()
+        }
+        try {
+            val db = ChronicleDb.getInstance(context).openHelper.writableDatabase
+            assertEquals(29, db.version)
+            db.query("SELECT usageEventsUploaded FROM upload_stats").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(2, cursor.getInt(0))
+            }
+            assertFalse(context.getDatabasePath("chronicle").exists())
+        } finally {
+            ChronicleDb.resetAfterVerifiedRecoveryBundle(context)
         }
     }
 
