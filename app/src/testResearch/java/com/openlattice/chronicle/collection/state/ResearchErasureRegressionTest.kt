@@ -629,8 +629,12 @@ class ResearchErasureRegressionTest {
         val reader = AndroidHealthMetricSource::class.java.getDeclaredField("readCoordinator")
             .apply { isAccessible = true }.get(source) as HealthMetricReadCoordinator
         reader.read<String>(System.currentTimeMillis()) { _, _ -> listOf("old-record") }
+        val pendingIds = source.javaClass.getDeclaredField("pendingSeen").apply { isAccessible = true }
+        pendingIds.set(source, setOf("synthetic-pending-record"))
         eraseAndReaccept(CollectionModuleId.HEALTH_CONNECT)
-        assertThrows(IllegalStateException::class.java) { source.acknowledgeRead() }
+        // The retired pending read is already cleared; acknowledgement is a no-op.
+        source.acknowledgeRead()
+        assertEquals(emptySet<String>(), pendingIds.get(source))
         assertFalse(sourcePrefs.contains("last_end_millis"))
         reader.read<String>(System.currentTimeMillis() + 1_000) { start, _ ->
             assertEquals(fence.floor(CollectionModuleId.HEALTH_CONNECT), start)

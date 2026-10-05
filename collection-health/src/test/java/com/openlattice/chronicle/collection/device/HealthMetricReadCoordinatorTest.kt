@@ -77,12 +77,12 @@ class HealthMetricReadCoordinatorTest {
     @Test
     fun rejectedWindowCanBeRetriedWithoutAdvancingCheckpoint() {
         val checkpoint = FakeCheckpoint(2_000)
-        val coordinator = HealthMetricReadCoordinator(checkpoint)
+        val coordinator = HealthMetricReadCoordinator(checkpoint, overlapMillis = 1_000)
 
         coordinator.read<String>(5_000) { _, _ -> listOf("first") }
         coordinator.reject()
         val retried = coordinator.read(6_000) { start, end ->
-            assertEquals(2_000L, start)
+            assertEquals(1_000L, start)
             assertEquals(6_000L, end)
             listOf("retry")
         }

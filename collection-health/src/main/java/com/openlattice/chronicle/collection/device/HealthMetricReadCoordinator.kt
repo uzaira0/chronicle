@@ -16,6 +16,7 @@ public class HealthMetricReadCoordinator(
     private val checkpoint: HealthMetricCheckpoint,
     private val defaultBackfillMillis: Long = DEFAULT_HEALTH_BACKFILL_MILLIS,
     private val consentScope: () -> Pair<String, Long>? = { null },
+    private val overlapMillis: Long = DEFAULT_HEALTH_BACKFILL_MILLIS,
 ) {
     private var pendingEndMillis: Long? = null
     private var pendingScope: Pair<String, Long>? = null
@@ -33,7 +34,9 @@ public class HealthMetricReadCoordinator(
         try {
             val scope = consentScope()
             val previous = checkpoint.read()
-            val startMillis = maxOf(scope?.second ?: Long.MIN_VALUE, previous ?: (nowMillis - defaultBackfillMillis))
+            if (previous != null && previous >= nowMillis) return emptyList()
+            val startMillis = maxOf(scope?.second ?: Long.MIN_VALUE,
+                previous?.minus(overlapMillis) ?: (nowMillis - defaultBackfillMillis))
             if (startMillis >= nowMillis) return emptyList()
             val records = readWindow(startMillis, nowMillis)
             val current = consentScope()

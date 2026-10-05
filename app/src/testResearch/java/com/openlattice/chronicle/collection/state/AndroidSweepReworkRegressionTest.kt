@@ -419,7 +419,7 @@ class AndroidSweepReworkRegressionTest {
         stopOnPersistenceWorker { fence.installEnrollment(owner) }
         val source = AndroidHealthMetricSource(context)
         val reader = source.javaClass.getDeclaredField("readCoordinator").apply { isAccessible = true }.get(source) as HealthMetricReadCoordinator
-        reader.read<String>(System.currentTimeMillis()) { start, _ -> assertEquals(previous, start); emptyList() }
+        reader.read<String>(System.currentTimeMillis()) { start, _ -> assertEquals(previous - TimeUnit.DAYS.toMillis(1), start); emptyList() }
         source.rejectRead()
         assertEquals(ResearchPersistenceGate.observationScope(context, CollectionModuleId.HEALTH_CONNECT)!!.first,
             checkpoint.getString("consent_scope", null))
