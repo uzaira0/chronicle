@@ -754,3 +754,22 @@ tasks.named('check').configure {
     dependsOn tasks.named('verifyNoJacksonRuntime')
     dependsOn tasks.named('verifyPublicRestrictedDependencyBoundary')
 }
+
+// Store flavors only: open and research are sideload/dogfood/internal-test builds without a store listing.
+['play', 'amazon'].each { flavor ->
+    def policyTask = tasks.register("verify${flavor.capitalize()}ApprovedPlatformPolicy") {
+        group = 'verification'
+        def policy = file("src/${flavor}/assets/platform-policy/${flavor}.txt")
+        def approval = rootProject.file("store/${flavor}/platform-policy-approved.sha256")
+        doLast {
+            if (!policy.isFile() || !approval.isFile() || policy.text.trim().isEmpty()) {
+                throw new GradleException("Owner-approved platform policy text and digest are required for ${flavor}")
+            }
+            def digest = java.security.MessageDigest.getInstance('SHA-256').digest(policy.bytes).encodeHex().toString()
+            if (approval.text.trim() != digest) throw new GradleException("Platform policy approval digest does not match ${flavor}")
+        }
+    }
+    tasks.matching { task ->
+        task.name ==~ /(?i)(assemble|bundle|package|install)${flavor}(Release|Dogfood)/
+    }.configureEach { dependsOn(policyTask) }
+}

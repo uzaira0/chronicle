@@ -60,6 +60,7 @@ internal fun notificationAccessControlVisible(restrictedResearchPermissions: Boo
 class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     private lateinit var settings: EnrollmentSettings
     private var activeStudyPrivacyUrl: String? = null
+    private var activeStudyWithdrawalUrl: String? = null
     private var refreshingControls: Boolean = false
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -163,7 +164,10 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             startActivity(Intent(requireContext(), LicensesActivity::class.java))
         }
         view.findViewById<MaterialButton>(R.id.privacyPolicyButton).setOnClickListener {
-            ExternalLinks.openHttps(requireContext(), getString(R.string.platform_privacy_policy_url))
+            startActivity(Intent(requireContext(), com.openlattice.chronicle.PlatformPolicyActivity::class.java))
+        }
+        view.findViewById<MaterialButton>(R.id.studyWithdrawalSettingsButton).setOnClickListener {
+            activeStudyWithdrawalUrl?.let { url -> ExternalLinks.openHttps(requireContext(), url) }
         }
         view.findViewById<MaterialButton>(R.id.reminderTimingButton).apply {
             visibility = if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS && Build.VERSION.SDK_INT >= 31)
@@ -431,6 +435,16 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                 copy = requireContext().copyResolver(),
             )
         activeStudyPrivacyUrl = snapshot.servers.firstOrNull()?.privacyPolicyUrl
+        activeStudyWithdrawalUrl = snapshot.servers.firstOrNull()?.withdrawalUrl
+        view.findViewById<MaterialButton>(R.id.studyWithdrawalSettingsButton).apply {
+            visibility = if (activeStudyWithdrawalUrl == null) View.GONE else View.VISIBLE
+            isEnabled = activeStudyWithdrawalUrl != null
+        }
+        view.findViewById<TextView>(R.id.studyPolicyEffectiveAt).apply {
+            val effective = snapshot.servers.firstOrNull()?.policyEffectiveAt
+            visibility = if (effective == null) View.GONE else View.VISIBLE
+            text = effective?.let { getString(R.string.study_policy_effective_at, it) }
+        }
         view.findViewById<MaterialButton>(R.id.studyPrivacyPolicyButton).apply {
             visibility = if (activeStudyPrivacyUrl == null) View.GONE else View.VISIBLE
             isEnabled = activeStudyPrivacyUrl != null

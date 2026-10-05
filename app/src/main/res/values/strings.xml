@@ -489,6 +489,10 @@ Your withdrawal request is pending. Data collection has stopped.</string>
     <string name="collection_paused_storage">Collection is paused because device storage is low. Free some space to resume. Your queued data is retained.</string>
     <string name="cap_capture_retry">Capture is temporarily unavailable. Chronicle will retry; review Android access in Data Sharing.</string>
     <string name="upload_terminal_blocked">Upload is blocked by the study server. Contact the study team; queued data is retained.</string>
+    <string name="platform_policy_title">Platform privacy policy</string>
+    <string name="platform_policy_unavailable">The platform privacy policy is currently unavailable. Contact your study team for help.</string>
+    <string name="study_withdrawal_options">Study withdrawal information</string>
+    <string name="study_policy_effective_at">Policy effective date: %1$s</string>
     <string name="reminder_timing_title">Reminder timing</string>
     <string name="reminder_timing_optional">Reminders work with approximate timing. You can optionally allow exact alarms to improve delivery timing.</string>
     <string name="reminder_timing_review">Review alarm access</string>

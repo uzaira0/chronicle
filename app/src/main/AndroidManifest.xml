@@ -112,6 +112,8 @@
             android:name=".StudyDisclosureActivity"
             android:exported="false"
             android:label="@string/title_study_information" />
+        <activity android:name=".PlatformPolicyActivity" android:exported="false"
+            android:label="@string/platform_policy_title" />
         <receiver
             android:name=".receivers.lifecycle.StartOnBoot"
             android:exported="true"

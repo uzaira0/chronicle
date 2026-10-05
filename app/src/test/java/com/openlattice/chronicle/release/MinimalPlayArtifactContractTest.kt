@@ -239,15 +239,15 @@ class MinimalPlayArtifactContractTest {
         listOf("withdrawFromStudyButton", "withdrawalStatus", "Withdraw from study").forEach {
             assertFalse("Settings still expose participant withdrawal: $it", settingsLayout.contains(it))
         }
-        listOf("studyWithdrawalButton", "Withdrawal information").forEach {
-            assertFalse("Disclosure still exposes participant withdrawal: $it", disclosureLayout.contains(it))
-        }
+        // The supplied study policy is an external information link, not an in-app erasure action.
+        assertTrue(disclosureLayout.contains("studyWithdrawalButton"))
+        assertTrue(settingsLayout.contains("studyWithdrawalSettingsButton"))
         listOf("confirmWithdrawal()", "ParticipantWithdrawalManager.begin").forEach {
             assertFalse("Settings still initiate participant withdrawal: $it", settingsFragment.contains(it))
         }
-        listOf("studyWithdrawalButton", "EXTRA_WITHDRAWAL_URL").forEach {
-            assertFalse("Disclosure still initiates participant withdrawal: $it", disclosureActivity.contains(it))
-        }
+        assertFalse(disclosureActivity.contains("ParticipantWithdrawalManager"))
+        assertTrue(disclosureActivity.contains("withdrawalUrl?.let(::openHttps)"))
+        assertTrue(disclosureActivity.contains("EXTRA_WITHDRAWAL_URL"))
         assertTrue(policy.contains("To withdraw from Chronicle collection, uninstall the app"))
         assertTrue(policy.contains("no in-app withdrawal or server-deletion control"))
     }

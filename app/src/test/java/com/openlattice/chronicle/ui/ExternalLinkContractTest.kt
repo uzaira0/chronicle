@@ -25,7 +25,8 @@ class ExternalLinkContractTest {
     @Test
     fun privacyAndConsentLinksUseTheGuardedOpener() {
         assertFalse(settings.contains("privacy.resolveActivity"))
-        assertTrue(settings.contains("ExternalLinks.openHttps(requireContext(), getString(R.string.platform_privacy_policy_url))"))
+        assertFalse(settings.contains("getString(R.string.platform_privacy_policy_url)"))
+        assertTrue(settings.contains("PlatformPolicyActivity::class.java"))
         assertTrue(settings.contains("ExternalLinks.openHttps(requireContext(), url)"))
         assertTrue(disclosure.contains("ExternalLinks.openHttps(this, url)"))
     }

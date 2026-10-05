@@ -52,6 +52,7 @@ data class StudyDisclosureCopy(
     val body: String,
     val privacyPolicyUrl: String,
     val consentDocumentUrl: String?,
+    val withdrawalUrl: String? = null,
 ) {
     /** Section headings of the disclosure body. Defaults are the tested English; the activity passes resources. */
     data class Labels(
@@ -70,6 +71,7 @@ data class StudyDisclosureCopy(
         val benefits: String = "Expected benefits",
         val useAndSharing: String = "Use and sharing",
         val retention: String = "Retention and deletion",
+        val effectiveAt: (String) -> String = { "Policy effective date: $it" },
         val version: (String) -> String = { "Disclosure version: $it" },
         val nonChoiceDisclosure: (CollectionModuleId) -> String? = NON_CHOICE_MODULE_DISCLOSURES::get,
     ) {
@@ -88,6 +90,7 @@ data class StudyDisclosureCopy(
                 benefits = context.getString(R.string.disclosure_benefits),
                 useAndSharing = context.getString(R.string.disclosure_use_sharing),
                 retention = context.getString(R.string.disclosure_retention),
+                effectiveAt = { context.getString(R.string.study_policy_effective_at, it) },
                 version = { context.getString(R.string.disclosure_version, it) },
                 nonChoiceDisclosure = { moduleId ->
                     nonChoiceModuleDisclosureRes(moduleId)?.let(context::getString)
@@ -137,10 +140,12 @@ data class StudyDisclosureCopy(
                     appendLine(labels.retention)
                     appendLine(policy.retentionAndDeletion)
                     appendLine()
+                    appendLine(labels.effectiveAt(policy.effectiveAt.toString()))
                     append(labels.version(policy.version))
                 },
                 privacyPolicyUrl = policy.privacyPolicyUrl,
                 consentDocumentUrl = policy.consentDocumentUrl,
+                withdrawalUrl = policy.withdrawalUrl,
             )
         }
     }
@@ -166,6 +171,13 @@ class StudyDisclosureActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.studyDisclosureBody).text = body
         findViewById<MaterialButton>(R.id.studyPrivacyButton).setOnClickListener { openHttps(privacyUrl) }
 
+        val withdrawalUrl = intent.getStringExtra(EXTRA_WITHDRAWAL_URL)?.takeIf { url ->
+            runCatching { URI(url).let { it.scheme == "https" && !it.host.isNullOrBlank() && it.rawUserInfo == null } }.getOrDefault(false)
+        }
+        findViewById<MaterialButton>(R.id.studyWithdrawalButton).apply {
+            visibility = if (withdrawalUrl == null) View.GONE else View.VISIBLE
+            setOnClickListener { withdrawalUrl?.let(::openHttps) }
+        }
         val consentUrl = intent.getStringExtra(EXTRA_CONSENT_URL)
         findViewById<MaterialButton>(R.id.studyConsentDocumentButton).apply {
             visibility = if (consentUrl == null) View.GONE else View.VISIBLE
@@ -190,6 +202,7 @@ class StudyDisclosureActivity : AppCompatActivity() {
         private const val EXTRA_BODY = "study_disclosure_body"
         private const val EXTRA_PRIVACY_URL = "study_privacy_url"
         private const val EXTRA_CONSENT_URL = "study_consent_url"
+        private const val EXTRA_WITHDRAWAL_URL = "study_withdrawal_url"
 
         fun intent(context: Context, preview: EnrollmentPreviewResponse): Intent {
             val copy = StudyDisclosureCopy.from(preview, StudyDisclosureCopy.Labels.fromResources(context))
@@ -197,6 +210,7 @@ class StudyDisclosureActivity : AppCompatActivity() {
                 putExtra(EXTRA_TITLE, copy.title)
                 putExtra(EXTRA_BODY, copy.body)
                 putExtra(EXTRA_PRIVACY_URL, copy.privacyPolicyUrl)
+                copy.withdrawalUrl?.let { putExtra(EXTRA_WITHDRAWAL_URL, it) }
                 copy.consentDocumentUrl?.let { putExtra(EXTRA_CONSENT_URL, it) }
             }
         }

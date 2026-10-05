@@ -121,6 +121,8 @@ data class UploadServerSummary(
     val researchContact: String? = null,
     val privacyPolicyUrl: String? = null,
     val disclosureVersion: String? = null,
+    val withdrawalUrl: String? = null,
+    val policyEffectiveAt: String? = null,
 )
 
 object DashboardDataRepository {
@@ -200,6 +202,8 @@ object DashboardDataRepository {
                     researchContact = disclosure?.participantPolicy?.researchContact,
                     privacyPolicyUrl = disclosure?.participantPolicy?.privacyPolicyUrl,
                     disclosureVersion = disclosure?.participantPolicy?.version,
+                    withdrawalUrl = disclosure?.participantPolicy?.withdrawalUrl,
+                    policyEffectiveAt = disclosure?.participantPolicy?.effectiveAt?.toString(),
                 )
             },
         )

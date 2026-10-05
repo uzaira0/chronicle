@@ -147,6 +147,14 @@
             android:text="@string/settings_active_privacy_policy"
             android:visibility="gone" />
 
+        <TextView android:id="@+id/studyPolicyEffectiveAt"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:textColor="@color/chronicle_text_primary" android:visibility="gone" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/studyWithdrawalSettingsButton"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/study_withdrawal_options" android:visibility="gone" />
         <com.google.android.material.button.MaterialButton
             android:id="@+id/reminderTimingButton"
             style="@style/Widget.MaterialComponents.Button.TextButton"
@@ -159,7 +167,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="@string/settings_bcm_compliance" />
+            android:text="@string/platform_policy_title" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/openSourceLicensesButton"

@@ -107,7 +107,8 @@ class PlaySettingsSummaryTest {
         assertFalse(source.contains("fixed to BCM"))
         assertFalse(source.contains("upload server(s) configured"))
         assertFalse(source.contains("each enrolled server"))
-        assertTrue(source.contains("R.string.platform_privacy_policy_url"))
+        assertFalse(source.contains("R.string.platform_privacy_policy_url"))
+        assertTrue(source.contains("PlatformPolicyActivity::class.java"))
         assertTrue(source.contains("studyPrivacyPolicyButton"))
     }
 
