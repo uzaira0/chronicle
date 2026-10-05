@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 
 /*
  * Since database will return sorted elements, we use a list to preserve order, even though items
@@ -22,11 +23,25 @@ interface StorageQueue {
     @Query("SELECT MAX(writeTimestamp) FROM dataQueue")
     fun maxWriteTimestamp(): Long?
     
-    @Insert
-    fun insertEntry( entry: QueueEntry)
+    @Query("SELECT MAX(lastUploadedTimestamp) FROM upload_servers")
+    fun maxUploadedTimestamp(): Long?
+
+    @Transaction
+    fun insertEntry(entry: QueueEntry) = insertEntries(listOf(entry))
+
+    /** Allocate at insertion time, under the same Room write transaction as the batch. */
+    @Transaction
+    fun insertEntries(entries: List<QueueEntry>) {
+        if (entries.isEmpty()) return
+        val first = entries.minOf { it.writeTimestamp }
+        val highWater = listOfNotNull(maxWriteTimestamp(), maxUploadedTimestamp()).maxOrNull()
+        val cursor = monotonicQueueWriteTimestamp(first, highWater)
+        val shift = cursor - first
+        insertAllocatedEntries(entries.map { QueueEntry(it.writeTimestamp + shift, it.id, it.data) })
+    }
 
     @Insert
-    fun insertEntries( entries: List<QueueEntry> )
+    fun insertAllocatedEntries(entries: List<QueueEntry>)
 
     @Delete
     fun deleteEntry( entry : QueueEntry)

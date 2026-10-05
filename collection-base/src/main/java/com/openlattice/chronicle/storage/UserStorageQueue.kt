@@ -30,7 +30,8 @@ interface UserStorageQueue {
     @Delete
     fun deleteEntries( entries : List<UserQueueEntry> )
 
-    @Query("DELETE FROM userQueue WHERE writeTimestamp < :timestamp")
+    /** Retain the latest attribution before the committed poll boundary for the next poll. */
+    @Query("DELETE FROM userQueue WHERE writeTimestamp < (SELECT MAX(writeTimestamp) FROM userQueue WHERE writeTimestamp < :timestamp)")
     fun deleteEntriesWithLowerTimestamp(timestamp: Long)
 
     /**

@@ -89,8 +89,8 @@ internal fun eraseSharedQueueModule(db: ChronicleDb, moduleId: CollectionModuleI
                     )
                     queue.deleteEntry(entry)
                     if (kept.isNotEmpty()) {
-                        queue.insertEntry(QueueEntry(entry.writeTimestamp, entry.id,
-                            JsonSerializer.serializeQueueEntry(ChronicleData(kept))))
+                        queue.insertAllocatedEntries(listOf(QueueEntry(entry.writeTimestamp, entry.id,
+                            JsonSerializer.serializeQueueEntry(ChronicleData(kept)))))
                     }
                 }
             }
