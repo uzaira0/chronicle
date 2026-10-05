@@ -1,6 +1,25 @@
 import unittest, pathlib, os, subprocess, datetime, re, tempfile
 ROOT=pathlib.Path(__file__).resolve().parent.parent; W=pathlib.Path(os.environ['ANDROID_AUDIT_WORK'])
 class ReleaseAudit(unittest.TestCase):
+ def test_A08_gate_variant_and_device_selection_use_bash32_syntax(self):
+  s=(ROOT/'scripts/android-release-candidate-gate.sh').read_text()
+  self.assertNotIn('${build_type_pascal,}',s);self.assertNotIn('mapfile',s);self.assertNotIn('sort -V',s)
+  prefix=s.split('signing_file=')[0]
+  # Stop before any secret, build, device, or host action.
+  prefix=prefix[:prefix.index('mkdir -p')]
+  prefix+='\nprintf "%s %s %s\\n" "$flavor" "$build_type" "$assemble_task"\n'
+  env=dict(os.environ,REPO_PREFLIGHT=str(W/'nonexistent'))
+  for variant in ['playRelease','openDebug','researchReleaseMinified','amazonDogfood']:
+   p=subprocess.run(['bash','-c',prefix,'gate','--variant',variant,'--output-dir',str(W/'test-release')],env=env,capture_output=True,text=True)
+   self.assertEqual(0,p.returncode,p.stderr);self.assertIn(':app:assemble'+variant[0].upper()+variant[1:],p.stdout)
+  start=s.index('    devices=')
+  end=s.index('    serial="${devices[0]}"',start)+len('    serial="${devices[0]}"')
+  block=s[start:end]
+  for count in [0,1,2]:
+   stub='adb() { printf "List of devices attached\\n'+''.join(f'stub-{i} device\\n' for i in range(count))+'"; };\n'
+   p=subprocess.run(['bash','-c','set -euo pipefail\n'+stub+block+'\nprintf "%s" "$serial"'],capture_output=True,text=True)
+   self.assertEqual(0 if count==1 else 2,p.returncode,p.stderr)
+   if count==1:self.assertEqual('stub-0',p.stdout)
  def test_A33_candidate_gate_stores_a_variant_inventory_bound_to_sealed_artifact(self):
   import json, hashlib
   gate=(ROOT/'scripts/android-release-candidate-gate.sh').read_text()

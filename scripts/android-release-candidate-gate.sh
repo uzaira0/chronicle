@@ -106,7 +106,7 @@ else
   echo "Expected play, amazon, research, or open plus Debug, Release, Dogfood, DebugMinified, or ReleaseMinified." >&2
   exit 2
 fi
-build_type="${build_type_pascal,}"
+build_type="$(printf '%s' "${build_type_pascal:0:1}" | tr '[:upper:]' '[:lower:]')${build_type_pascal:1}"
 apk_path="$ROOT_DIR/app/build/outputs/apk/$flavor/$build_type/app-$flavor-$build_type.apk"
 assemble_task=":app:assemble$variant_suffix"
 
@@ -247,7 +247,7 @@ find_apksigner() {
     return
   fi
   local sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
-  find "$sdk_root/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1
+  find "$sdk_root/build-tools" -type f -name apksigner 2>/dev/null | sort | tail -n 1
 }
 
 apksigner_bin="$(find_apksigner)"
@@ -267,7 +267,10 @@ if [[ "$install_apk" -eq 1 ]]; then
     exit 2
   fi
   if [[ -z "$serial" ]]; then
-    mapfile -t devices < <(adb devices | awk 'NR > 1 && $2 == "device" {print $1}')
+    devices=()
+    while IFS= read -r device; do
+      devices[${#devices[@]}]="$device"
+    done < <(adb devices | awk 'NR > 1 && $2 == "device" {print $1}')
     if [[ "${#devices[@]}" -ne 1 ]]; then
       echo "ERROR: expected exactly one attached device for --install, found ${#devices[@]}. Pass --serial." >&2
       adb devices -l >&2
