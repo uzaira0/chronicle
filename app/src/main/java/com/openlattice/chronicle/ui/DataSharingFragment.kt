@@ -392,12 +392,13 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val attention = states.filter { it.requiredButNotAccepted }
         val anyDeclined = attention.any { it.requiredAndDeclined }
         reconcileRows(pendingList, attention.map { attentionRow(it) })
-        if (attention.isEmpty()) {
+        val storagePaused = com.openlattice.chronicle.collection.state.StorageAdmission.isPaused(requireContext())
+        if (attention.isEmpty() && !storagePaused) {
             banner.visibility = View.GONE
             pendingList.visibility = View.GONE
             return
         }
-        banner.text = if (anyDeclined) {
+        banner.text = if (storagePaused) getString(R.string.collection_paused_storage) else if (anyDeclined) {
             val names = moduleNames(attention.filter { it.requiredAndDeclined })
             getString(R.string.ds_paused_declined, names)
         } else {

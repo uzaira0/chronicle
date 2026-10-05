@@ -80,6 +80,17 @@ class RuntimeOperationsAuditTest {
         context.unregisterReceiver(receiver)
     }
 
-
+    @Test fun lowStorageIsVisibleAndRetainsQueueUntilCapacityRecovers() = onPersistenceWorker {
+        AuditStores.install(context,true);init()
+        val db=ChronicleDb.getInstance(context);db.queueEntryData().insertEntry(com.openlattice.chronicle.storage.QueueEntry(10,1,byteArrayOf(1,2,3)))
+        assertFalse(StorageAdmission.allowed(context,0));assertFalse(StorageAdmission.allowed(context,0))
+        val paused=runBlocking { DashboardDataRepository.load(context) }
+        assertEquals(0,paused.collection.active);assertTrue(paused.collection.message.contains("storage",ignoreCase=true))
+        assertEquals(1,count("LOCAL_STORE","COLLECTION_PAUSED_STORAGE"));assertEquals(1,db.queueEntryData().getSize())
+        assertTrue(StorageAdmission.allowed(context,Long.MAX_VALUE))
+        val resumed=runBlocking { DashboardDataRepository.load(context) }
+        assertTrue(resumed.collection.active>0);assertFalse(resumed.collection.message.contains("storage",ignoreCase=true));assertEquals(1,db.queueEntryData().getSize())
+        Unit
+    }
 
 }

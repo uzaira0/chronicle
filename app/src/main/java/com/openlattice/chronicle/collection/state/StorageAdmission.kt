@@ -22,6 +22,7 @@ internal object StorageAdmission {
     private const val SCOPE = "collection_storage_enrollment_scope"
     private const val EPISODE_ID = "collection_storage_pause_episode_id"
     private const val EPISODE_AT = "collection_storage_pause_episode_at"
+    private const val EPISODE_NOTIFIED = "collection_storage_pause_notified"
     private const val EPISODE_RECORDED = "collection_storage_pause_episode_recorded"
     // Sensor callbacks consult this per sample; free space moves slowly, so decide at most this often.
     private const val RECHECK_MS = 30_000L
@@ -31,6 +32,12 @@ internal object StorageAdmission {
     @Volatile private var lastAllowed = false
     @Volatile private var lastCheckedAt = Long.MIN_VALUE
     private var decisionGeneration = 0L
+
+    fun isPaused(context: Context): Boolean {
+        val prefs = EncryptedPrefsHelper.getEncryptedPrefs(context)
+        val scope = "${prefs.getString(STUDY_ID, "")}:${prefs.getString(PARTICIPANT_ID, "")}"
+        return prefs.getString(SCOPE, null) == scope && prefs.getBoolean(PAUSED, false)
+    }
 
     fun shouldPause(usableBytes: Long): Boolean = usableBytes < LOCAL_STORAGE_RESERVE_BYTES
     fun beginsPauseEpisode(wasPaused: Boolean, usableBytes: Long): Boolean =
@@ -91,7 +98,7 @@ internal object StorageAdmission {
                 if (!wasPaused || prefs.getString(EPISODE_ID, null) != episodeId) {
                     check(prefs.edit().putString(SCOPE, scope).putBoolean(PAUSED, true)
                         .putString(EPISODE_ID, episodeId).putString(EPISODE_AT, OffsetDateTime.now().toString())
-                        .putBoolean(EPISODE_RECORDED, false).commit())
+                        .putBoolean(EPISODE_RECORDED, false).putBoolean(EPISODE_NOTIFIED, false).commit())
                 }
             }
             // Keep the episode pending across recovery until its stable-ID diagnostic is acknowledged.
@@ -122,15 +129,21 @@ internal object StorageAdmission {
                 }
             }.onFailure { Log.e("StorageAdmission", "Unable to record storage pause", it) }
         }
+        if (paused && isPaused(context) && !prefs.getBoolean(EPISODE_NOTIFIED, false)) {
+            runCatching {
+                if (notifyStoragePause(context)) check(prefs.edit().putBoolean(EPISODE_NOTIFIED, true).commit())
+            }.onFailure { Log.w("StorageAdmission", "Storage pause notice unavailable", it) }
+        }
         val resumed = synchronized(this) {
             if (decisionGeneration == generation && !paused && prefs.getString(SCOPE, null) == scope &&
                 prefs.getBoolean(PAUSED, false) && prefs.getBoolean(EPISODE_RECORDED, false)) {
                 check(prefs.edit().putString(SCOPE, scope).putBoolean(PAUSED, false)
-                    .remove(EPISODE_ID).remove(EPISODE_AT).remove(EPISODE_RECORDED).commit())
+                    .remove(EPISODE_ID).remove(EPISODE_AT).remove(EPISODE_RECORDED).remove(EPISODE_NOTIFIED).commit())
                 true
             } else false
         }
         if (resumed) {
+            androidx.core.app.NotificationManagerCompat.from(context).cancel(47_005)
             runCatching { DistributionRestrictedRuntime.drainDirectBootSamples(context) }
                 .onFailure { Log.e("StorageAdmission", "Unable to enqueue resumed direct-boot drain", it) }
         }

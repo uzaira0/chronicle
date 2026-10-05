@@ -178,6 +178,9 @@ object DashboardDataRepository {
 
     private fun loadCollectionSummary(context: Context): CollectionStatusSummary {
         return try {
+            if (com.openlattice.chronicle.collection.state.StorageAdmission.isPaused(context)) {
+                return CollectionStatusSummary(0, 0, 0, context.getString(R.string.collection_paused_storage))
+            }
             val states = CollectionLoopStore.of(context).loadAll().values
             if (states.isEmpty()) {
                 CollectionStatusSummary(0, 0, 0, context.getString(R.string.collection_status_waiting))
