@@ -9,6 +9,7 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.collection.lifecycle.LifecycleEventMapper
 import com.openlattice.chronicle.collection.lifecycle.LifecycleWorkerMigration
+import com.openlattice.chronicle.collection.lifecycle.isDuplicateLifecycleEvent
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.preferences.EnrollmentSettings
@@ -49,7 +50,6 @@ const val ACTION_CONNECTIVITY_CHANGE = "android.net.conn.CONNECTIVITY_CHANGE"
 // LifecycleDedupeStore's LIFECYCLE_RECORDER_PREFS_NAME / LIFECYCLE_DEDUPE_WINDOW_MS so
 // the legacy and module paths share one dedupe state and suppress identically.
 private const val RECORDER_PREFS_NAME = "chronicle_lifecycle_recorder"
-private const val DEDUPE_WINDOW_MS = 2_000L
 private val lifecycleExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue())
 
 /**
@@ -224,8 +224,8 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
     private fun shouldPersist(context: Context, event: ExtractedUsageEvent, now: Long): Boolean {
         val prefs = context.getSharedPreferences(RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
         val key = "last:${event.interactionType}:${event.activityClass ?: ""}"
-        val last = prefs.getLong(key, Long.MIN_VALUE)
-        if (last != Long.MIN_VALUE && now - last < DEDUPE_WINDOW_MS) {
+        val last = prefs.getLong(key, Long.MIN_VALUE).takeUnless { it == Long.MIN_VALUE }
+        if (isDuplicateLifecycleEvent(last, now)) {
             return false
         }
         prefs.edit().putLong(key, now).apply()

@@ -39,6 +39,10 @@ public const val LIFECYCLE_RECORDER_PREFS_NAME: String = "chronicle_lifecycle_re
 /** Dedupe window: a repeat of the same lifecycle event within this many millis is dropped. */
 public const val LIFECYCLE_DEDUPE_WINDOW_MS: Long = 2_000L
 
+/** A wall-clock correction into the past starts a new dedupe window. */
+public fun isDuplicateLifecycleEvent(lastSeenMillis: Long?, nowMillis: Long): Boolean =
+    lastSeenMillis != null && nowMillis >= lastSeenMillis && nowMillis - lastSeenMillis < LIFECYCLE_DEDUPE_WINDOW_MS
+
 /**
  * Production [LifecycleDedupeStore] backed by the `chronicle_lifecycle_recorder`
  * shared-preferences file.
@@ -59,8 +63,8 @@ public class PrefsLifecycleDedupeStore(context: Context) : LifecycleDedupeStore 
 
     override fun shouldPersist(event: ExtractedUsageEvent, now: Long): Boolean {
         val key = "last:${event.interactionType}:${event.activityClass ?: ""}"
-        val last = prefs.getLong(key, Long.MIN_VALUE)
-        if (last != Long.MIN_VALUE && now - last < LIFECYCLE_DEDUPE_WINDOW_MS) {
+        val last = prefs.getLong(key, Long.MIN_VALUE).takeUnless { it == Long.MIN_VALUE }
+        if (isDuplicateLifecycleEvent(last, now)) {
             return false
         }
         prefs.edit().putLong(key, now).apply()

@@ -22,6 +22,8 @@ import com.openlattice.chronicle.collection.state.CollectionSettingsSyncWorker
 import com.openlattice.chronicle.services.upload.COMBINED_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.services.upload.CombinedUploadWorker
 import com.openlattice.chronicle.services.upload.LEGACY_SENSOR_UPLOAD_WORK_NAME
+import com.openlattice.chronicle.services.lifecycle.DeviceLifecycleEventRecorder
+import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
 import com.openlattice.chronicle.services.release.scheduleMinimalPlayArtifactBoundary
 import com.openlattice.chronicle.services.upload.LEGACY_USAGE_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.services.upload.UPLOAD_NETWORK_CONSTRAINT
@@ -83,6 +85,12 @@ class ChronicleSyncWorker(context: Context, params: WorkerParameters) : com.open
             // An accepted module whose Android access was removed (e.g. accessibility on force-stop)
             // collects nothing; report it to the server and tell the participant once per episode.
             recordCollectionAccessLoss(applicationContext)
+            // Charging and network changes otherwise reach only the user-identification service's
+            // receiver: Android 8+ does not deliver those broadcasts to manifest receivers. The
+            // sampler records only states that changed, so a poll per sync adds no duplicates.
+            DeviceLifecycleEventRecorder.recordObserved(applicationContext) {
+                DeviceStateSampler(applicationContext).poll()
+            }
 
             // Refresh the per-module collection settings + acknowledgment/gate state on every
             // coordinated sync (collection loop closure). This is the ACTIVE periodic sync path;
