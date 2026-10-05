@@ -42,7 +42,7 @@ public final class StoreReadinessVerifier {
         NodeList sdkNodes = manifest.getElementsByTagName("uses-sdk");
         require(sdkNodes.getLength() == 1, "manifest must contain exactly one uses-sdk element");
         Element sdk = (Element) sdkNodes.item(0);
-        require("23".equals(sdk.getAttributeNS(ANDROID, "minSdkVersion")), "minSdk must be 23");
+        require("26".equals(sdk.getAttributeNS(ANDROID, "minSdkVersion")), "minSdk must be 26");
         require("36".equals(sdk.getAttributeNS(ANDROID, "targetSdkVersion")), "targetSdk must be 36");
 
         Set<String> actual = permissionNames(manifest);

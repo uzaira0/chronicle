@@ -20,6 +20,15 @@ class ReleaseAudit(unittest.TestCase):
    p=subprocess.run(['bash','-c','set -euo pipefail\n'+stub+block+'\nprintf "%s" "$serial"'],capture_output=True,text=True)
    self.assertEqual(0 if count==1 else 2,p.returncode,p.stderr)
    if count==1:self.assertEqual('stub-0',p.stdout)
+ def test_A20_current_sdk_is_accepted_and_stale_target_flavor_are_rejected(self):
+  with tempfile.TemporaryDirectory(dir=W/'tmp') as d:
+   d=pathlib.Path(d); policy=d/'privacy.properties';manifest=d/'manifest.xml'
+   policy.write_text('channel=amazon\npolicy_snapshot='+str(datetime.date.today())+'\ndeclared_permissions=android.permission.INTERNET\ndeletion_request_supported=true\nsold=false\nadvertising=false\n')
+   javac=subprocess.run(['javac','-d',str(d),str(ROOT/'scripts/StoreReadinessVerifier.java')],capture_output=True,text=True);self.assertEqual(0,javac.returncode,javac.stderr)
+   for minimum,target,channel,ok in [(26,36,'amazon',True),(23,36,'amazon',False),(26,35,'amazon',False),(26,36,'play',False)]:
+    manifest.write_text(f'<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.bcm.chronicle"><uses-sdk android:minSdkVersion="{minimum}" android:targetSdkVersion="{target}"/><uses-permission android:name="android.permission.INTERNET"/><application/></manifest>')
+    p=subprocess.run(['java','-cp',str(d),'StoreReadinessVerifier',channel,str(manifest),str(policy)],capture_output=True,text=True)
+    self.assertEqual(ok,p.returncode==0,p.stderr)
  def test_A33_candidate_gate_stores_a_variant_inventory_bound_to_sealed_artifact(self):
   import json, hashlib
   gate=(ROOT/'scripts/android-release-candidate-gate.sh').read_text()
