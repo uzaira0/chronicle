@@ -51,6 +51,42 @@ class DirectBootSampleBufferTest {
     )
 
     @Test
+    fun interruptedDrainAndLiveFileKeepIndependentRecordFraming() {
+        val buffer = buffer()
+        buffer.append(listOf(sample("old")))
+        buffer.drain { refused }
+        FileOutputStream(File(tmp.root, DIRECT_BOOT_DRAINING_FILE_NAME), true).use { it.write(byteArrayOf(0, 0)) }
+        buffer.append(listOf(sample("new")))
+        val recovered = linkedSetOf<String>()
+        val result = buffer.drain { batch ->
+            batch.forEach { recovered += it.id }
+            transferred(batch)
+        }
+        assertEquals(setOf("old", "new"), recovered)
+        assertEquals(1, result.corruptRecordsDropped)
+        assertFalse(result.failed)
+        for (boundary in listOf("write", "sync", "install", "retire")) {
+            val dir = tmp.newFolder(boundary)
+            val faulted = buffer(dir)
+            faulted.append(listOf(sample("old")))
+            faulted.drain { refused }
+            faulted.append(listOf(sample("new")))
+            var fired = false
+            val fault: (String) -> Unit = { step ->
+                if (step == boundary && !fired) { fired = true; throw IllegalStateException("simulated death") }
+            }
+            faulted.javaClass.getDeclaredField("checkpointBoundary").apply { isAccessible = true }.set(faulted, fault)
+            val durableIds = linkedSetOf<String>()
+            try { faulted.drain { batch -> batch.forEach { durableIds += it.id }; transferred(batch) } }
+            catch (_: IllegalStateException) { }
+            assertTrue(boundary, fired)
+            buffer(dir).drain { batch -> batch.forEach { durableIds += it.id }; transferred(batch) }
+            assertEquals(boundary, setOf("old", "new"), durableIds)
+            assertTrue(buffer(dir).isEmpty())
+        }
+    }
+
+    @Test
     fun `append then drain round-trips entries in order and empties the buffer`() {
         val buffer = buffer()
         buffer.append(listOf(sample("a"), sample("b")))

@@ -80,6 +80,8 @@ class DirectBootSampleBuffer(
         val discardedIds: Set<String> = emptySet(),
     )
 
+    private var checkpointBoundary: (String) -> Unit = {}
+
     private val liveFile: File get() = File(dir, DIRECT_BOOT_LIVE_FILE_NAME)
     private val drainingFile: File get() = File(dir, DIRECT_BOOT_DRAINING_FILE_NAME)
 
@@ -198,15 +200,8 @@ class DirectBootSampleBuffer(
         enrollmentCreatedAt: String? = null,
         persist: (List<SensorSampleEntry>) -> DrainTransfer,
     ): DrainResult = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-        // A crashed prior drain leaves a draining file; fold the live file into it so one
-        // pass covers both (order preserved: crashed-drain records precede newer live ones).
-        if (drainingFile.length() > 0L && liveFile.length() > 0L) {
-            FileOutputStream(drainingFile, true).use { out ->
-                FileInputStream(liveFile).use { it.copyTo(out) }
-                out.fd.sync()
-            }
-            liveFile.delete()
-        } else if (liveFile.length() > 0L) {
+        // Drain the interrupted file independently: a partial tail must never frame newer records.
+        if (drainingFile.length() == 0L && liveFile.length() > 0L) {
             if (!liveFile.renameTo(drainingFile)) {
                 return@synchronized DrainResult(0, 0, failed = true)
             }
@@ -256,11 +251,17 @@ class DirectBootSampleBuffer(
                 return@synchronized DrainResult(persisted, corrupt, failed = true)
             }
         }
-        if (retained.isEmpty()) drainingFile.delete()
+        if (retained.isEmpty()) {
+            checkpointBoundary("retire")
+            check(drainingFile.delete()) { "Unable to retire direct-boot drain" }
+        }
         if (persisted > 0 || corrupt > 0) {
             log.info(TAG, "Drained $persisted direct-boot sample(s); $corrupt corrupt record(s) dropped")
         }
-        DrainResult(persisted, corrupt, failed = retained.isNotEmpty())
+        if (retained.isEmpty() && liveFile.length() > 0L) {
+            val next = drain(expectedOwner, enrollmentCreatedAt, persist)
+            DrainResult(persisted + next.persisted, corrupt + next.corruptRecordsDropped, next.failed)
+        } else DrainResult(persisted, corrupt, failed = retained.isNotEmpty())
     }
 
     private fun preserveCorruption(decoded: DecodeResult, retainPayloads: Boolean = true) {
@@ -327,14 +328,17 @@ class DirectBootSampleBuffer(
                             Batch(owner, chunk.map { it.sample }),
                         ).toByteArray(Charsets.UTF_8))
                         check(blob.size in 1..MAX_RECORD_BYTES)
+                        checkpointBoundary("write")
                         output.writeInt(blob.size)
                         output.write(blob)
                     }
                 }
                 output.flush()
                 fos.fd.sync()
+                checkpointBoundary("sync")
             }
         }
+        checkpointBoundary("install")
         check(temp.renameTo(destination)) { "Unable to checkpoint direct-boot drain" }
     }
 
