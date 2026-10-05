@@ -49,16 +49,31 @@ public class SleepActivityReceiver : BroadcastReceiver() {
         val observedElapsed = SystemClock.elapsedRealtimeNanos()
         val pending = goAsync()
         Thread {
+            var owner: com.openlattice.chronicle.storage.UploadServerEntity? = null
+            var observedCount = 0
             try {
                 ResearchPersistenceGate.initialize(appContext)
                 val origin = ResearchPersistenceGate.guardForRegistration(appContext, module, intent.getStringExtra("registration_scope"))
                 if (!origin.isCurrent()) return@Thread
-                val owner = ResearchPersistenceGate.captureOwner(appContext)
+                owner = ResearchPersistenceGate.captureOwner(appContext)
                 val floor = ResearchPersistenceGate.observationScope(appContext, module)?.second ?: Long.MAX_VALUE
+                observedCount = if (module == CollectionModuleId.SLEEP) {
+                    SleepSegmentEvent.extractEvents(intent).count { it.startTimeMillis >= floor } +
+                        SleepClassifyEvent.extractEvents(intent).count { it.timestampMillis >= floor }
+                } else {
+                    ActivityTransitionResult.extractResult(intent)?.transitionEvents?.count {
+                        observedAt - (observedElapsed - it.elapsedRealTimeNanos) / 1_000_000L >= floor
+                    } ?: 0
+                }
                 handle(appContext, intent, origin, owner, floor, observedAt, observedElapsed)
             } catch (e: Exception) {
                 // The broadcast is not redelivered: whatever it carried is lost.
                 Log.e(TAG, "Sleep/activity receive failed", e)
+                com.openlattice.chronicle.services.upload.recordForExpectedOwner(
+                    appContext, owner,
+                    if (module == CollectionModuleId.SLEEP) LocalUploadModuleFamily.SLEEP else LocalUploadModuleFamily.ACTIVITY_RECOGNITION,
+                    com.openlattice.chronicle.services.upload.LocalOperationalIssue.LOCAL_WRITE_FAILED, observedCount,
+                )
             } finally {
                 pending.finish()
             }

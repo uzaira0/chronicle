@@ -87,8 +87,13 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
         val appContext = context.applicationContext
         val owner = ResearchPersistenceGate.captureOwner(appContext)
         lifecycleExecutor.execute {
+            var observedCount = 0
             try {
-                val result = origin.persistResult { recordAsync(appContext, observations(), origin) }
+                val result = origin.persistResult {
+                    val events = observations()
+                    observedCount = events.size
+                    recordAsync(appContext, events, origin)
+                }
                 if (result == CollectionPersistenceResult.STORAGE_UNAVAILABLE) {
                     // Low storage refused before the observations were taken; take them now only to
                     // count the loss (broadcast mappings are pure; the state sampler self-gates).
@@ -96,7 +101,9 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
                         LocalOperationalIssue.COLLECTION_GATE_DROPPED, observations().size)
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Lifecycle observation deferred after storage failure", error)
+                Log.w(TAG, "Lifecycle observation could not be persisted", error)
+                recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                    LocalOperationalIssue.LOCAL_WRITE_FAILED, observedCount)
             }
         }
     }
@@ -146,7 +153,9 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
                         LocalOperationalIssue.COLLECTION_GATE_DROPPED, admittedEvents.size)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to persist lifecycle events ${events.joinToString { it.interactionType }}", e)
+                Log.w(TAG, "Failed to persist lifecycle batch", e)
+                recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
+                    LocalOperationalIssue.LOCAL_WRITE_FAILED, admittedEvents.size)
                 // Surface an unexpected background-executor failure in module diagnostics
                 // too, so it is visible regardless of which path raised it.
                 if (LifecycleWorkerMigration.USE_MODULE_MANAGER_LIFECYCLE_PATH) {
