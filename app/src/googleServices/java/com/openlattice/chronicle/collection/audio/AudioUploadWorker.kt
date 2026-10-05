@@ -37,6 +37,25 @@ private const val AUDIO_UPLOAD_MAX_BATCH = 5000
 private const val AUDIO_UPLOAD_MAX_ATTEMPTS = 5
 
 /**
+ * JSON budget for one request. The server, nginx and Traefik all refuse bodies over 10 MiB, and a
+ * sealed envelope base64-inflates its plaintext by a third, so 4 MiB leaves room for both.
+ */
+internal const val AUDIO_UPLOAD_MAX_JSON_BYTES = 4L * 1024 * 1024
+
+/**
+ * How many leading [events] fit one request of [maxBytes] JSON (always at least one); the rest wait
+ * for the next run. Without it a backlog of long media titles is refused (413) on every retry.
+ */
+internal fun leadingEventsWithin(events: List<*>, maxBytes: Long = AUDIO_UPLOAD_MAX_JSON_BYTES): Int {
+    var bytes = 2L // []
+    events.forEachIndexed { index, event ->
+        bytes += JsonSerializer.serializeToBytes(event, (event as Any)::class.java).size + 1
+        if (bytes > maxBytes) return maxOf(index, 1)
+    }
+    return events.size
+}
+
+/**
  * Periodic [Worker] that uploads the `audio_activity_samples`, `audio_content_samples`, and
  * `notification_activity_samples` buffers to the server (see `docs/SENSING-EXPANSION-DESIGN.md` §4).
  * Rows are produced by [AudioCaptureController] / [com.openlattice.chronicle.services.notifications.NotificationListener].
@@ -154,7 +173,7 @@ class AudioUploadWorkerDelegate(
 
         var malformed = 0
         val validIds = mutableListOf<String>()
-        val events = pending.mapNotNull { entry ->
+        val converted = pending.mapNotNull { entry ->
             try {
                 toDto(entry).also { validIds += idOf(entry) }
             } catch (e: Exception) {
@@ -172,6 +191,9 @@ class AudioUploadWorkerDelegate(
                 null
             }
         }
+        val fitting = leadingEventsWithin(converted)
+        val events = converted.take(fitting)
+        val uploadedIds = validIds.take(fitting)
 
         var failureCount = 0
         for (server in servers) {
@@ -213,7 +235,7 @@ class AudioUploadWorkerDelegate(
             }
         }
 
-        if (failureCount == 0) deleteByIds(validIds)
+        if (failureCount == 0) deleteByIds(uploadedIds)
         Log.i(TAG, "$label upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount
     }
