@@ -605,6 +605,15 @@ class ResearchErasureRegressionTest {
         assertThrows(PendingIntent.CanceledException::class.java) { scheduled.send() }
     }
 
+    @Test fun withdrawalErasureClearsExpansionPullScheduleForTheNextEnrollment() {
+        val schedulePrefs = context.getSharedPreferences("expansion_pull_schedule", Context.MODE_PRIVATE)
+        schedulePrefs.edit().putLong("lastrun_battery_telemetry", System.currentTimeMillis()).commit()
+
+        stopOnPersistenceWorker { eraseResearchSourceState(context) }
+
+        assertTrue(schedulePrefs.all.isEmpty())
+    }
+
     @Test fun initialConsentRetainsReviewedHealthHistoryAndEnrollmentInstallationIsIdempotent() {
         stopOnPersistenceWorker { assertTrue(fence.installEnrollment(owner)); fence.accepted(setOf(CollectionModuleId.HEALTH_CONNECT)) }
         val generation = fence.generation(CollectionModuleId.HEALTH_CONNECT)

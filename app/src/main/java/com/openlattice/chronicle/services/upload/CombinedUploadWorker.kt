@@ -6,7 +6,7 @@ import androidx.work.*
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.battery.BatteryUploadWorkerDelegate
 import com.openlattice.chronicle.collection.battery.BATTERY_UPLOAD_WORK_NAME
-import com.openlattice.chronicle.collection.battery.collectBatterySample
+import com.openlattice.chronicle.collection.battery.collectBatterySampleIfDue
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.collection.upload.COMBINED_UPLOAD_MAX_ATTEMPTS
@@ -119,7 +119,7 @@ private fun runCombinedUploadOwned(context: Context, runAttemptCount: Int): List
             0
         } else {
             try {
-                collectBatterySample(context)
+                collectBatterySampleIfDue(context)
                 BatteryUploadWorkerDelegate(context, chronicleDb).execute()
             } catch (e: Exception) {
                 Log.e(COMBINED_UPLOAD_WORKER_TAG, "Battery upload failed", e)

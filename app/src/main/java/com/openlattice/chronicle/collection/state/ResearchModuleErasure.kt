@@ -7,6 +7,7 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.device.AndroidAppNetworkUsageSource
+import com.openlattice.chronicle.collection.device.ExpansionPullSchedule
 import com.openlattice.chronicle.crypto.EncryptedPayloadType
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.sensors.LAST_USAGE_QUERY_TIMESTAMP
@@ -64,9 +65,14 @@ internal fun eraseResearchSourceState(context: Context) {
     }
     AndroidAppNetworkUsageSource.clearCheckpoint(context)
     DistributionRestrictedRuntime.eraseHealthSource(context)
-    listOf("chronicle_device_state", "chronicle_lifecycle_recorder", "chronicle_process_exit_watermark").forEach {
+    listOf(
+        "chronicle_device_state",
+        "chronicle_lifecycle_recorder",
+        "chronicle_process_exit_watermark",
+    ).forEach {
         checkLocalStoreWrite(context.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit())
     }
+    checkLocalStoreWrite(ExpansionPullSchedule.erase(context))
     checkLocalStoreWrite(EncryptedPrefsHelper.getEncryptedPrefs(context).edit().remove(LAST_USAGE_QUERY_TIMESTAMP).commit())
     com.openlattice.chronicle.services.notifications.eraseSurveyArtifacts(context)
 }

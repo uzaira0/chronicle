@@ -43,4 +43,18 @@ class ExpansionPullScheduleTest {
         val now = last + intervalMs - (tolerance + 60_000L) // a minute before the tolerance window
         assertFalse(ExpansionPullSchedule.dueByElapsed(last, intervalSeconds = 1800, nowMs = now))
     }
+
+    @Test fun futureLastRunAfterClockCorrectionIsDue() {
+        val now = 1_700_000_000_000L
+        val futureLastRun = now + 7 * 24 * 60 * 60 * 1_000L
+
+        assertTrue(ExpansionPullSchedule.dueByElapsed(futureLastRun, intervalSeconds = 3600, nowMs = now))
+    }
+
+    /** Another caller's claim a moment ahead (or a small NTP step back) is not a clock correction. */
+    @Test fun lastRunSlightlyAheadIsNotDue() {
+        val now = 1_700_000_000_000L
+        assertFalse(ExpansionPullSchedule.dueByElapsed(now + 1L, intervalSeconds = 3600, nowMs = now))
+        assertFalse(ExpansionPullSchedule.dueByElapsed(now + tolerance, intervalSeconds = 3600, nowMs = now))
+    }
 }

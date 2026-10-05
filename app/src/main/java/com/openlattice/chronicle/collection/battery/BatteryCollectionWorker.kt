@@ -44,19 +44,9 @@ class BatteryCollectionWorker(context: Context, workerParameters: WorkerParamete
     Worker(context, workerParameters) {
 
     override fun doWork(): Result {
-        // Periodic path: honor the study-configured battery_telemetry collection interval via a
-        // last-run gate (the immediate "upload now" path stays ungated). Not yet due ⇒ no-op success.
-        val schedule = ExpansionPullSchedule(applicationContext)
-        val now = System.currentTimeMillis()
-        if (!schedule.isDue(CollectionModuleId.BATTERY_TELEMETRY, now)) {
-            return Result.success()
-        }
-        return when (val result = collectBatterySample(applicationContext)) {
-            is ModuleResult.Ok -> {
-                schedule.markRan(CollectionModuleId.BATTERY_TELEMETRY, now)
-                Result.success()
-            }
-            is ModuleResult.Skipped -> Result.success()
+        // Not yet due ⇒ no-op success.
+        return when (collectBatterySampleIfDue(applicationContext)) {
+            null, is ModuleResult.Ok, is ModuleResult.Skipped -> Result.success()
             is ModuleResult.Retry -> Result.retry()
             is ModuleResult.Failed -> Result.failure()
         }
@@ -64,10 +54,24 @@ class BatteryCollectionWorker(context: Context, workerParameters: WorkerParamete
 }
 
 /**
- * Takes one battery sample through the same module path used by periodic collection.
- * Combined/immediate sync uses this before battery upload so "upload now" reflects the
- * current battery state instead of waiting for WorkManager's 15-minute periodic window.
+ * Takes one battery sample when the study's battery_telemetry interval has elapsed; null when
+ * not due. The periodic worker and every sync share this gate, so neither path oversamples.
  */
+fun collectBatterySampleIfDue(
+    context: Context,
+    sample: () -> ModuleResult = { collectBatterySample(context) },
+): ModuleResult? {
+    val schedule = ExpansionPullSchedule(context.applicationContext)
+    val claimedAt = schedule.claimIfDue(CollectionModuleId.BATTERY_TELEMETRY) ?: return null
+    var result: ModuleResult? = null
+    try {
+        return sample().also { result = it }
+    } finally {
+        schedule.completeClaim(CollectionModuleId.BATTERY_TELEMETRY, claimedAt, result is ModuleResult.Ok)
+    }
+}
+
+/** Takes one battery sample through the module path, without the interval gate. */
 fun collectBatterySample(context: Context): ModuleResult {
     if (!BatteryCollectionMigration.USE_MODULE_MANAGER_BATTERY_PATH) {
         Log.i(TAG, "Battery collection disabled by USE_MODULE_MANAGER_BATTERY_PATH; skipping")
