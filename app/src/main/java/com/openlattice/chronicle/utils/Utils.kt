@@ -15,6 +15,7 @@ import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.constants.NotificationType
+import com.openlattice.chronicle.security.CallDeadline
 import com.openlattice.chronicle.security.MobileApiSigningInterceptor
 import com.openlattice.chronicle.security.ResponseSizeLimitInterceptor
 import com.openlattice.chronicle.services.notifications.CHANNEL_ID
@@ -248,6 +249,7 @@ object Utils {
         val trustedBaseUrl = normalizeTrustedServerUrl(baseUrl)
             ?: throw IllegalArgumentException("Untrusted Chronicle server URL")
         val httpClientBuilder = OkHttpClient.Builder()
+            .callTimeout(30, TimeUnit.SECONDS)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
@@ -257,6 +259,8 @@ object Utils {
             // a different origin or downgrade it to cleartext HTTP.
             .followRedirects(false)
             .followSslRedirects(false)
+            // Lease and worker scopes can cancel these calls before their overall deadline.
+            .addInterceptor(CallDeadline.interceptor)
             // The server resolves its message table from Accept-Language; this header is not
             // part of the mobile signature canonical string.
             .addInterceptor { chain ->

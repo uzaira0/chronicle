@@ -77,8 +77,8 @@ internal fun collectUsage(context: Context): Boolean =
     }
 
 class UsageMonitoringWorker(context: Context, workerParameters: WorkerParameters) :
-    Worker(context, workerParameters) {
-    override fun doWork(): Result {
+    com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {
+    override fun runWork(): Result {
         return try {
             // Exactly one collection path runs per execution, selected by the Phase 4B migration
             // switch (UsageWorkerMigration.USE_MODULE_MANAGER_USAGE_PATH) — see collectUsage.

@@ -49,7 +49,7 @@ const val SURVEY_NOTIFICATION_ACTION = "SURVEY_NOTIFICATION_ACTION"
 val TAG = NotificationsWorker::class.java.simpleName
 
 class NotificationsWorker(context: Context, workerParameters: WorkerParameters) :
-    Worker(context, workerParameters) {
+    com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {
 
     private lateinit var enrollmentSettings: EnrollmentSettings
     private lateinit var studyId: UUID
@@ -62,7 +62,7 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
 
     private lateinit var chronicleApi: ChronicleStudyApi
 
-    override fun doWork(): Result = try {
+    override fun runWork(): Result = try {
         val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
         val expected = gate.captureOwner(applicationContext)
         if (expected == null) Result.success() else {

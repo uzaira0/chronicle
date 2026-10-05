@@ -45,9 +45,9 @@ private const val EXPANSION_UPLOAD_MAX_ATTEMPTS = 5
  * paths — plaintext, sealed envelope, or fail-closed (retain + retry, never plaintext PHI).
  */
 class ExpansionUploadWorker(context: Context, workerParameters: WorkerParameters) :
-    Worker(context, workerParameters) {
+    com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         return try {
             if (inputData.getBoolean(INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD, false)) {
                 ResearchPersistenceGate.collectForCurrentOwner(applicationContext) {

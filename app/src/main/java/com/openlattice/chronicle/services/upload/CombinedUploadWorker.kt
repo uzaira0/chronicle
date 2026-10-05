@@ -46,9 +46,9 @@ val UPLOAD_NETWORK_CONSTRAINT: Constraints = Constraints.Builder()
  * Delegates to [UploadWorkerDelegate] for usage data and
  * the distribution-owned sensor uploader for restricted research data.
  */
-class CombinedUploadWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+class CombinedUploadWorker(context: Context, params: WorkerParameters) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         return runCombinedUpload(applicationContext, runAttemptCount)
     }
 }

@@ -36,9 +36,9 @@ private const val MAX_RETRY_ATTEMPTS = 5
  * or study settings may have changed between the locked-window collection and this drain,
  * and the persistence chokepoint stays gated exactly like the live runtime's flush.
  */
-class DirectBootDrainWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+class DirectBootDrainWorker(context: Context, params: WorkerParameters) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         val journal = DirectBootDiagnosticsJournal(applicationContext)
         try {
             journal.replay(applicationContext)

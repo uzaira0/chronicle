@@ -60,9 +60,9 @@ private const val BATTERY_UPLOAD_MAX_ATTEMPTS = 5
  *
  */
 class BatteryUploadWorker(context: Context, workerParameters: WorkerParameters) :
-    Worker(context, workerParameters) {
+    com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         return try {
             val result = ResearchPersistenceGate.runIfActive(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(BATTERY_UPLOAD_WORK_NAME)) {

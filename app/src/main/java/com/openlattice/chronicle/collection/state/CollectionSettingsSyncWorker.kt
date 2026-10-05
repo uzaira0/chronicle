@@ -26,9 +26,9 @@ import java.util.concurrent.TimeUnit
 class CollectionSettingsSyncWorker(
     context: Context,
     params: WorkerParameters,
-) : Worker(context, params) {
+) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
 
-    override fun doWork(): Result =
+    override fun runWork(): Result =
         try {
             if (CollectionLoopCoordinator(applicationContext).sync()) Result.success() else Result.retry()
         } catch (e: Exception) {

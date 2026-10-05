@@ -23,7 +23,7 @@ const val UPLOAD_INTERVAL_MIN = 15L
 
 val TAG = UploadWorker::class.java.simpleName
 
-class UploadWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+class UploadWorker(context: Context, params: WorkerParameters) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
 
     companion object {
         private val studyApiCache = ConcurrentHashMap<String, ChronicleStudyApi>()
@@ -44,7 +44,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : Worker(context,
 
     }
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         return try {
             val result = ResearchPersistenceGate.runIfActive(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(LEGACY_USAGE_UPLOAD_WORK_NAME)) {

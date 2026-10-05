@@ -19,9 +19,9 @@ private val TAG = SensorUploadWorker::class.java.simpleName
 private const val SENSOR_UPLOAD_INTERVAL_MIN = 15L
 internal const val LEGACY_SENSOR_UPLOAD_WORK_NAME = "sensor_upload"
 
-class SensorUploadWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+class SensorUploadWorker(context: Context, params: WorkerParameters) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         LocalTelemetry.logEvent(TelemetryEvents.SENSOR_UPLOAD_START, null)
 
         return try {

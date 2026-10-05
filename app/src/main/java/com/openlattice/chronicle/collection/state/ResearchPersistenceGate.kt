@@ -463,7 +463,8 @@ object ResearchPersistenceGate {
     }
 
     /** See [ResearchPersistenceBarrier.withReadLease]; the direct-boot drain holds its buffer lock inside it. */
-    fun <T> withReadLease(block: () -> T): T = barrier.withReadLease(block)
+    fun <T> withReadLease(block: () -> T): T =
+        com.openlattice.chronicle.security.CallDeadline.within(30_000) { barrier.withReadLease(block) }
 
     /** Captured before a non-replayable sample is submitted; never substitutes a later server. */
     fun captureOwner(context: Context): UploadServerEntity? {
@@ -493,7 +494,7 @@ object ResearchPersistenceGate {
         var result: T? = null
         val admitted = barrier.persistIf(
             allowed = { isSameActiveOwner(appContext, expectedOwner) },
-            persist = { result = operation() },
+            persist = { result = com.openlattice.chronicle.security.CallDeadline.within(30_000, operation) },
         )
         return if (admitted) checkNotNull(result) else null
     }
@@ -537,7 +538,7 @@ object ResearchPersistenceGate {
         var result: T? = null
         val admitted = barrier.persistIf(
             allowed = { isActiveEnrollmentOrThrow(appContext) },
-            persist = { result = operation() },
+            persist = { result = com.openlattice.chronicle.security.CallDeadline.within(30_000, operation) },
         )
         return if (admitted) checkNotNull(result) else null
     }
@@ -567,7 +568,7 @@ object ResearchPersistenceGate {
                         expected,
                     )
             },
-            persist = { result = operation() },
+            persist = { result = com.openlattice.chronicle.security.CallDeadline.within(30_000, operation) },
         )
         return if (admitted) checkNotNull(result) else null
     }

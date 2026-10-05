@@ -62,8 +62,8 @@ internal val AUXILIARY_UPLOADS: List<AuxiliaryUploadDescriptor> = buildList {
     ))
 }
 
-class ChronicleSyncWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
-    override fun doWork(): Result {
+class ChronicleSyncWorker(context: Context, params: WorkerParameters) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
+    override fun runWork(): Result {
         if (!RUNNING.compareAndSet(false, true)) {
             Log.w(TAG, "Sync run deferred because another sync run is active")
             return Result.retry()

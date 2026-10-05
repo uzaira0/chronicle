@@ -49,9 +49,9 @@ private const val AUDIO_UPLOAD_MAX_ATTEMPTS = 5
  * state is recorded even between transitions.
  */
 class AudioUploadWorker(context: Context, workerParameters: WorkerParameters) :
-    Worker(context, workerParameters) {
+    com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         return try {
             val result = ResearchPersistenceGate.runIfActive(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(AUDIO_UPLOAD_WORK_NAME)) {

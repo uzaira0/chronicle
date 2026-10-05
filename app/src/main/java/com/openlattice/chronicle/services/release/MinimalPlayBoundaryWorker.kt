@@ -42,8 +42,8 @@ private const val UNIQUE_WORK_NAME = "minimal_play_artifact_boundary"
 class MinimalPlayBoundaryWorker(
     context: Context,
     params: WorkerParameters,
-) : Worker(context, params) {
-    override fun doWork(): Result {
+) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
+    override fun runWork(): Result {
         if (BuildConfig.DISTRIBUTION_CHANNEL !in setOf("PLAY", "AMAZON")) return Result.success()
         return try {
             ResearchPersistenceGate.stop {

@@ -33,13 +33,13 @@ private val TAG = EnrollmentMonitoringWorker::class.java.simpleName
 class EnrollmentMonitoringWorker(
     context: Context,
     workerParameters: WorkerParameters
-) : Worker(context, workerParameters) {
+) : com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {
 
     private lateinit var settings: EnrollmentSettings
     private lateinit var studyId: UUID
     private lateinit var participantId: String
 
-    override fun doWork(): Result {
+    override fun runWork(): Result {
         return try {
             if (!ResearchPersistenceGate.isActiveEnrollment(applicationContext)) {
                 Log.i(TAG, "Skipping enrollment monitoring outside an active enrollment")
