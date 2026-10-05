@@ -60,6 +60,28 @@ import kotlinx.coroutines.withContext
  */
 class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     private var refreshJob: Job? = null
+    private val moduleRows = mutableMapOf<CollectionModuleId, LinearLayout>()
+    private val affordanceRows = mutableMapOf<Pair<String, String>, View>()
+    private val attentionRows = mutableMapOf<Pair<CollectionModuleId, Boolean>, View>()
+
+    override fun onDestroyView() {
+        moduleRows.clear()
+        affordanceRows.clear()
+        attentionRows.clear()
+        super.onDestroyView()
+    }
+
+    private fun reconcileRows(list: LinearLayout, rows: List<View>) {
+        for (index in list.childCount - 1 downTo 0) {
+            if (list.getChildAt(index) !in rows) list.removeViewAt(index)
+        }
+        rows.forEachIndexed { index, row ->
+            if (list.getChildAt(index) !== row) {
+                (row.parent as? android.view.ViewGroup)?.removeView(row)
+                list.addView(row, index)
+            }
+        }
+    }
 
     /**
      * Missing-permission status for the currently ACTIVE modules, computed off the main thread (the
@@ -134,16 +156,17 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
     private fun bindAppUsage(view: View, snapshot: DashboardSnapshot) {
         val list = view.findViewById<LinearLayout>(R.id.appUsageModuleList)
-        list.removeAllViews()
+        val rows = mutableListOf<View>()
         val byId = snapshot.collectionModules.associateBy { it.moduleId }
         // A consent-gated module is inert until the OS grants its permission too — surface a
         // "Grant access" affordance at the top whenever an active module is still missing one
         // (ACTIVITY_RECOGNITION for activity/sleep/step-counter; the Health Connect grant for health;
         // notification access for notifications; the accessibility service for interaction).
-        addPermissionAffordances(list)
+        addPermissionAffordances(rows)
         appUsageModulesToShow(byId).forEach { moduleId ->
-            list.addView(moduleRow(moduleId, byId[moduleId]))
+            rows.add(moduleRow(moduleId, byId[moduleId]))
         }
+        reconcileRows(list, rows)
         bindPausedBanner(view, snapshot.collectionModules)
     }
 
@@ -154,9 +177,9 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
      * because each deep-links to a different system Settings screen and returns no result.
      * No rows are added when every active module already holds its permission.
      */
-    private fun addPermissionAffordances(list: LinearLayout) {
+    private fun addPermissionAffordances(list: MutableList<View>) {
         if (permissionStatus.needUsageAccess) {
-            list.addView(
+            list.add(
                 affordanceRow(
                     getString(R.string.ds_usage_access_needed),
                     getString(R.string.ds_review_access),
@@ -165,7 +188,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             )
         }
         if (permissionStatus.missingRuntime.isNotEmpty() || permissionStatus.needHealthConnect) {
-            list.addView(
+            list.add(
                 affordanceRow(
                     getString(R.string.ds_permissions_needed),
                     getString(R.string.ds_grant_access),
@@ -175,7 +198,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
         if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS && permissionStatus.needNotificationListener) {
             val disclosure = notificationAccessDisclosure(permissionStatus.notificationAccessModules, requireContext().copyResolver())
-            list.addView(
+            list.add(
                 affordanceRow(
                     disclosure.affordanceMessage,
                     getString(R.string.ds_open_settings),
@@ -184,7 +207,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             )
         }
         if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS && permissionStatus.needAccessibility) {
-            list.addView(
+            list.add(
                 affordanceRow(
                     getString(R.string.ds_accessibility_needed),
                     getString(R.string.ds_open_settings),
@@ -196,6 +219,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
     /** A panel with a message and one action button — the shape every permission affordance uses. */
     private fun affordanceRow(message: String, buttonText: String, buttonCd: String, onClick: () -> Unit): View {
+        val key = message to buttonCd
+        affordanceRows[key]?.let { return it }
         val row = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.VERTICAL
             val pad = resources.getDimensionPixelSize(R.dimen.eq_space_4)
@@ -222,6 +247,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                 setOnClickListener { onClick() }
             },
         )
+        affordanceRows[key] = row
         return row
     }
 
@@ -365,7 +391,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val pendingList = view.findViewById<LinearLayout>(R.id.pendingRequiredList)
         val attention = states.filter { it.requiredButNotAccepted }
         val anyDeclined = attention.any { it.requiredAndDeclined }
-        pendingList.removeAllViews()
+        reconcileRows(pendingList, attention.map { attentionRow(it) })
         if (attention.isEmpty()) {
             banner.visibility = View.GONE
             pendingList.visibility = View.GONE
@@ -378,7 +404,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             getString(R.string.ds_now_requires, moduleNames(attention))
         }
         banner.visibility = View.VISIBLE
-        attention.forEach { pendingList.addView(attentionRow(it)) }
+        banner.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         pendingList.visibility = View.VISIBLE
     }
 
@@ -394,6 +420,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val moduleId = state.moduleId
         val moduleLabel = CollectionConsentCopy.localizedLabel(requireContext(), moduleId)
         val isDeclined = state.requiredAndDeclined
+        val key = moduleId to isDeclined
+        attentionRows[key]?.let { return it }
         val row = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -435,6 +463,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             setOnClickListener { onAcceptRequired(moduleId) }
         }
         row.addView(accept)
+        attentionRows[key] = row
         return row
     }
 
@@ -511,7 +540,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val optional = collectedByStudy && !state.requiredApplied
         val isActive = state?.phase == CollectionModulePhase.ACTIVE
 
-        val row = LinearLayout(requireContext()).apply {
+        val row = moduleRows[moduleId] ?: LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val pad = resources.getDimensionPixelSize(R.dimen.eq_space_4)
@@ -525,7 +554,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             ).apply { setMargins(0, topMargin, 0, 0) }
         }
 
-        val label = TextView(requireContext()).apply {
+        val label = (row.getChildAt(0) as? TextView ?: TextView(requireContext())).apply {
             text = getString(R.string.ds_module_row, moduleLabel, statusText(moduleId, state))
             setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
             textSize = 16f
@@ -534,11 +563,12 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             alpha = if (collectedByStudy) 1f else 0.6f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        row.addView(label)
+        if (label.parent == null) row.addView(label)
 
         // Required + not-collected modules show a read-only switch reflecting state; only an
         // optional, study-enabled module is interactive (the participant may turn it on/off).
-        val switch = SwitchMaterial(requireContext()).apply {
+        val switch = (row.getChildAt(1) as? SwitchMaterial ?: SwitchMaterial(requireContext())).apply {
+            setOnCheckedChangeListener(null)
             text = ""
             contentDescription = getString(R.string.ds_module_toggle_cd, moduleLabel)
             minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
@@ -560,7 +590,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             // not fire a spurious decision.
             bindOptionalToggle(switch, moduleId)
         }
-        row.addView(switch)
+        if (switch.parent == null) row.addView(switch)
+        moduleRows[moduleId] = row
         return row
     }
 
@@ -737,7 +768,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             sectionTitle.visibility = View.GONE
             summary.visibility = View.GONE
             list.visibility = View.GONE
-            list.removeAllViews()
+            reconcileRows(list, emptyList())
             return
         }
         sectionTitle.visibility = View.VISIBLE
@@ -753,13 +784,14 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             }
         }
 
-        list.removeAllViews()
+        val rows = mutableListOf<View>()
         // Canonical relevance order (SensorCollectionModules.sensorDisplayOrder) — the same order
         // the enrollment wizard and the web study form present, not an alphabetical scramble.
         supportedSensorModules.forEach { moduleId ->
             val sensor = SensorCollectionModules.sensorTypeOf(moduleId) ?: return@forEach
-            list.addView(sensorModuleRow(sensor, moduleId, byId[moduleId], sensor in available, snapshot.sensors))
+            rows.add(sensorModuleRow(sensor, moduleId, byId[moduleId], sensor in available, snapshot.sensors))
         }
+        reconcileRows(list, rows)
     }
 
     /**
@@ -781,7 +813,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val isActive = state?.phase == CollectionModulePhase.ACTIVE
         val canToggle = optional && isAvailable
 
-        val row = LinearLayout(requireContext()).apply {
+        val row = moduleRows[moduleId] ?: LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val pad = resources.getDimensionPixelSize(R.dimen.eq_space_4)
@@ -795,7 +827,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             ).apply { setMargins(0, topMargin, 0, 0) }
         }
 
-        val label = TextView(requireContext()).apply {
+        val label = (row.getChildAt(0) as? TextView ?: TextView(requireContext())).apply {
             text = getString(
                 R.string.ds_module_row,
                 CollectionConsentCopy.localizedLabel(requireContext(), moduleId),
@@ -809,9 +841,10 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             alpha = if (collectedByStudy && isAvailable) 1f else 0.6f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        row.addView(label)
+        if (label.parent == null) row.addView(label)
 
-        val switch = SwitchMaterial(requireContext()).apply {
+        val switch = (row.getChildAt(1) as? SwitchMaterial ?: SwitchMaterial(requireContext())).apply {
+            setOnCheckedChangeListener(null)
             text = ""
             contentDescription = getString(R.string.ds_sensor_toggle_cd, CollectionConsentCopy.localizedLabel(requireContext(), moduleId))
             minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
@@ -831,7 +864,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             // fire a spurious decision. Reuses the usage-module accept/decline path on this sensor.
             switch.setOnCheckedChangeListener { _, on -> onToggleOptional(moduleId, on, switch) }
         }
-        row.addView(switch)
+        if (switch.parent == null) row.addView(switch)
+        moduleRows[moduleId] = row
         return row
     }
 

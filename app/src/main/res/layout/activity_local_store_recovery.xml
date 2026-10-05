@@ -20,6 +20,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/recovery_title"
+        android:accessibilityHeading="true"
             android:textAppearance="@style/Chronicle.MetricValue" />
 
         <TextView
@@ -49,6 +50,7 @@
 
         <TextView
             android:id="@+id/localStoreRecoveryStatus"
+        android:accessibilityLiveRegion="polite"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"

@@ -38,7 +38,7 @@
             android:layout_marginTop="8dp"
             android:text="@string/data_sharing_intro"
             android:textAppearance="@style/Chronicle.Body"
-            android:alpha="0.8" />
+            android:textColor="@color/chronicle_text_primary" />
 
         <!--
           Shown by DataSharingFragment only when collection is globally paused because the

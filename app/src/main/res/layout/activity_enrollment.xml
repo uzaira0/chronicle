@@ -18,6 +18,7 @@
 
     <TextView
         android:id="@+id/studyIdTextView"
+        android:accessibilityHeading="true"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/study_id"
@@ -145,6 +146,7 @@
 
     <TextView
         android:id="@+id/statusMessage"
+        android:accessibilityLiveRegion="polite"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"

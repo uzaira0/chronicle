@@ -36,7 +36,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="13sp"
-                android:alpha="0.7"
+                android:textColor="@color/chronicle_text_primary"
                 android:paddingBottom="4dp" />
 
             <TextView
@@ -67,11 +67,12 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="13sp"
-                android:alpha="0.82"
+                android:textColor="@color/chronicle_text_primary"
                 android:paddingBottom="16dp" />
 
             <TextView
                 android:id="@+id/orientationTitle"
+        android:accessibilityHeading="true"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="24sp"
@@ -125,7 +126,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="13sp"
-                android:alpha="0.8"
+                android:textColor="@color/chronicle_text_primary"
                 android:paddingBottom="24dp" />
         </LinearLayout>
     </ScrollView>
