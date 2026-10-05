@@ -500,13 +500,16 @@ class Enrollment : AppCompatActivity() {
             }
             // Capability-protected preview validates the invitation without consuming it. It is
             // the authority for identity, policy, and settings; URL text is never consent copy.
-            val preview = try {
-                UploadWorker.getChronicleStudyApi(serverUrl, mobileSigningSecretOverride)
-                    .getEnrollmentPreview(studyId, participantId, accessCode)
+            val previewOutcome = try {
+                EnrollmentPreviewOutcome.Verified(UploadWorker.getChronicleStudyApi(serverUrl, mobileSigningSecretOverride)
+                    .getEnrollmentPreview(studyId, participantId, accessCode))
             } catch (e: Exception) {
                 Log.w(javaClass.canonicalName, "Failed to resolve the enrollment invitation", e)
-                null
+                val status = com.openlattice.chronicle.services.upload.uploadHttpStatus(e)
+                if (status != null && status in 400..499 && status !in setOf(408, 429))
+                    EnrollmentPreviewOutcome.Invalid else EnrollmentPreviewOutcome.Retryable
             }
+            val preview = (previewOutcome as? EnrollmentPreviewOutcome.Verified)?.preview
             val previewMatchesInvitation = preview != null &&
                 preview.manifest.studyId == studyId &&
                 preview.manifest.participantId == participantId &&
@@ -525,7 +528,8 @@ class Enrollment : AppCompatActivity() {
                 submitBtn.isEnabled = true
                 if (preview == null || fetched == null || plan == null) {
                     statusMessageText.text =
-                        getString(R.string.enrollment_invitation_unverified)
+                        getString(if (previewOutcome is EnrollmentPreviewOutcome.Retryable)
+                            R.string.enrollment_preview_unavailable else R.string.enrollment_invitation_unverified)
                     statusMessageText.visibility = View.VISIBLE
                     return@postIfCurrent
                 }

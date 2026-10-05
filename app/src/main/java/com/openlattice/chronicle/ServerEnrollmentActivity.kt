@@ -316,7 +316,7 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                 postIfCurrent {
                     progressBar.visibility = View.INVISIBLE
                     saveBtn.isEnabled = true
-                    statusText.text = getString(R.string.server_connect_failed, e.message)
+                    statusText.text = getString(R.string.server_connect_unavailable)
                     statusText.visibility = View.VISIBLE
                 }
             }
@@ -341,8 +341,9 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                     in 500..599 -> getString(R.string.server_health_offline_http, statusCode)
                     else -> getString(R.string.server_health_degraded_http, statusCode)
                 }
-            }.getOrElse { e ->
-                getString(R.string.server_health_offline_error, e.message ?: e.javaClass.simpleName)
+            }.getOrElse { error ->
+                Log.w("ServerEnrollment", "Server health unavailable", error)
+                getString(R.string.server_health_unavailable)
             }
 
             postIfCurrent {

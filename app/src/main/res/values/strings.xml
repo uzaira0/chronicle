@@ -484,6 +484,10 @@
 Your withdrawal request is pending. Data collection has stopped.</string>
     <string name="participation_status_withdrawal_pending">Withdrawal pending — data collection stopped</string>
     <string name="server_health_withdrawal_pending">Your withdrawal request is pending. Data collection has stopped.</string>
+    <string name="enrollment_preview_unavailable">Unable to reach the study server. Check your connection and try again.</string>
+    <string name="server_connect_unavailable">Unable to connect. Check your connection and try again.</string>
+    <string name="server_health_unavailable">Server unavailable. Check your connection and try again.</string>
+    <string name="ds_capability_unavailable">Access check unavailable. Try again.</string>
     <string name="ds_open_app_settings">Open Chronicle app settings</string>
     <string name="reminder_public_message">Open Chronicle to view your reminder.</string>
     <string name="collection_paused_storage">Collection is paused because device storage is low. Free some space to resume. Your queued data is retained.</string>
