@@ -515,6 +515,16 @@ class CollectionLoopCoordinator(context: Context) {
                 replayPendingErasures()
                 if (!applyRuntimeSettings(UUID.fromString(expected.studyId), fetched.settingsVersion, resolved)) return@stop
                 applyPullIntervals(resolved)
+                val currentStates = store.loadAll().values.filter { it.moduleId in CollectionStateMachine.ACK_GATED_MODULES }
+                val accepted = currentStates.filter { it.accepted }.mapTo(linkedSetOf()) { it.moduleId }
+                val declined = currentStates.filter { it.decision == ParticipantDecision.DECLINED }.mapTo(linkedSetOf()) { it.moduleId }
+                if (accepted.isNotEmpty() || declined.isNotEmpty()) {
+                    CollectionAckRetryQueue.enqueueSettingsVersionOnce(appContext, expected, PendingCollectionAckRecord.from(
+                        server = expected, accepted = accepted, declined = declined,
+                        trigger = ConsentTrigger.SETTINGS_CHANGE, acknowledgedAt = OffsetDateTime.now(),
+                        settingsVersion = fetched.settingsVersion,
+                    ))
+                }
                 MinimalPlayArtifactState.markPolicyCompatible(appContext)
                 updateUserIdentificationService()
                 applied = true

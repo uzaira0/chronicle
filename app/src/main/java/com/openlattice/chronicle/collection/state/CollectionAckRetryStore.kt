@@ -184,6 +184,18 @@ class CollectionAckRetryQueue(
     companion object {
         private val mutationLock = Any()
 
+        /** Queue and applied-version receipt commit together: crash replay cannot duplicate this ack. */
+        internal fun enqueueSettingsVersionOnce(context: Context, server: UploadServerEntity,
+                                               record: PendingCollectionAckRecord) = synchronized(mutationLock) {
+            val prefs = EncryptedPrefsHelper.getEncryptedPrefs(context)
+            val ownerKey = ResearchErasureFence.enrollmentKey(server)
+            val key = "settings_ack_version:" + java.util.UUID.nameUUIDFromBytes(ownerKey.toByteArray())
+            if (prefs.getInt(key, -1) == record.settingsVersion) return@synchronized
+            val pending = of(context).load()
+            check(prefs.edit().putString(PREF_PENDING_COLLECTION_ACKS, JsonSerializer.toJson(pending + record))
+                .putInt(key, requireNotNull(record.settingsVersion)).commit())
+        }
+
         fun of(context: Context): CollectionAckRetryQueue =
             CollectionAckRetryQueue(EncryptedPrefsCollectionAckRetryPersistence(context.applicationContext))
     }
