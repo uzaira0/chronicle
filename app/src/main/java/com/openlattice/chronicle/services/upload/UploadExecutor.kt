@@ -43,6 +43,7 @@ class UploadExecutor(
     private val limiter = RateLimiter.create(10.0)
 
     fun uploadForServer(server: UploadServerEntity) {
+        if (!UploadRetryGate.shouldAttempt(context, server, LocalUploadModuleFamily.USAGE_LIFECYCLE, chronicleDb)) return
         val studyId = UUID.fromString(server.studyId)
         val participantId = server.participantId
         val deviceId = server.sourceDeviceId

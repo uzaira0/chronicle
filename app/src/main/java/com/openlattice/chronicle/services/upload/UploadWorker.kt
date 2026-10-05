@@ -109,6 +109,7 @@ fun handleServerUploadFailure(
     LocalTelemetry.recordException(error)
     LocalUploadDiagnosticsStore.of(context).recordFailure(moduleFamily, error)
 
+    UploadRetryGate.recordFailure(context, server, moduleFamily, error)
     val failures = nextConsecutiveUploadFailureCount(currentFailures)
     // These legacy columns are consumed only as a success/failure marker. Persist a closed code,
     // never exception text: HTTP/library messages can contain the enrolled origin, response text,

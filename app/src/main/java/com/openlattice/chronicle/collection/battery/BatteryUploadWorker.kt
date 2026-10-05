@@ -125,6 +125,8 @@ class BatteryUploadWorkerDelegate(
         }
         val servers = listOf(server)
 
+        if (!com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, server,
+                LocalUploadModuleFamily.BATTERY, db)) return 0
         val pending = dao.getOldest(BATTERY_UPLOAD_MAX_BATCH)
         if (pending.isEmpty()) {
             return 0

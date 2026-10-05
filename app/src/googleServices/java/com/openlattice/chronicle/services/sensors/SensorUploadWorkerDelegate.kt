@@ -247,7 +247,8 @@ class SensorUploadWorkerDelegate internal constructor(
         val diagnostics = runCatching { LocalUploadDiagnosticsStore.of(context) }.getOrNull()
 
         val configuredServers = listOfNotNull(serverDao.getConfiguredServer())
-        val servers = configuredServers.filter { it.enabled }
+        val servers = configuredServers.filter { it.enabled &&
+            com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, LocalUploadModuleFamily.SENSOR, chronicleDb) }
         if (servers.isEmpty()) {
             Log.i(TAG, "No enabled upload servers, skipping sensor upload")
             return 0

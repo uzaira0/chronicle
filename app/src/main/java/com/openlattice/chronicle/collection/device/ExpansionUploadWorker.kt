@@ -146,6 +146,8 @@ class ExpansionUploadWorkerDelegate(
         label: String,
     ): Int {
         if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db).allows(payloadType)) return 0
+        val family = com.openlattice.chronicle.services.upload.UploadRetryGate.familyFor(payloadType)
+        if (servers.any { !com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, family, db) }) return 0
         val pending = getOldest(EXPANSION_UPLOAD_MAX_BATCH)
         if (pending.isEmpty()) return 0
 
@@ -205,6 +207,7 @@ class ExpansionUploadWorkerDelegate(
                 }
             } catch (e: Exception) {
                 failureCount++
+                com.openlattice.chronicle.services.upload.UploadRetryGate.recordFailure(context, server, family, e, db)
                 LocalUploadDiagnosticsStore.of(context).recordFailure(
                     LocalUploadModuleFamily.DEVICE_TELEMETRY,
                     e,

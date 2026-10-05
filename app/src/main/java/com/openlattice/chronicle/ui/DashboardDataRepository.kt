@@ -138,7 +138,8 @@ object DashboardDataRepository {
                 CollectionLoopStore.of(appContext).loadAll().values.toList()
             }.getOrDefault(emptyList()),
             sensors = loadSensorSummary(appContext, db),
-            serverHealth = loadServerHealth(appContext, servers, hasValidatedInternet(appContext)),
+            serverHealth = loadServerHealth(appContext, servers, hasValidatedInternet(appContext),
+                blockedUploads = servers.any { it.enabled && com.openlattice.chronicle.services.upload.UploadRetryGate.isBlocked(appContext, it, db) }),
             localUploadIssues = diagnostics.orEmpty(),
             localUploadDiagnosticsAvailable = diagnostics != null,
             workSchedulingAvailable = !com.openlattice.chronicle.WorkSchedulingStatus.unavailable,
@@ -149,7 +150,9 @@ object DashboardDataRepository {
                     name = server.name,
                     url = server.url,
                     enabled = server.enabled,
-                    healthLabel = appContext.getString(server.healthStatus().labelRes()),
+                    healthLabel = appContext.getString(if (
+                        com.openlattice.chronicle.services.upload.UploadRetryGate.isBlocked(appContext, server, db)
+                    ) R.string.upload_terminal_blocked else server.healthStatus().labelRes()),
                     lastSuccess = latestSuccess(server),
                     usageItemsUploaded = server.usageUploadSuccessCount,
                     usageFailedAttempts = server.usageUploadFailureCount,
@@ -257,6 +260,7 @@ object DashboardDataRepository {
         context: Context,
         servers: List<UploadServerEntity>,
         online: Boolean,
+        blockedUploads: Boolean = false,
     ): ServerHealthSummary {
         if (servers.isEmpty()) {
             return ServerHealthSummary(0, context.getString(R.string.uploads_none_configured))
@@ -264,6 +268,9 @@ object DashboardDataRepository {
         val enabled = servers.filter { it.enabled }
         if (enabled.isEmpty()) {
             return ServerHealthSummary(servers.size, context.getString(R.string.server_health_all_disabled))
+        }
+        if (blockedUploads) {
+            return ServerHealthSummary(servers.size, context.getString(R.string.upload_terminal_blocked))
         }
         // Failure counters move only when an upload runs, and uploads wait for a network, so
         // offline the counters still read as healthy. Say what is known instead.

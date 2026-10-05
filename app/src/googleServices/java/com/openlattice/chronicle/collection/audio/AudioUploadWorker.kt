@@ -147,12 +147,14 @@ class AudioUploadWorkerDelegate(
         label: String,
     ): Int {
         if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db).allows(payloadType)) return 0
+        val family = com.openlattice.chronicle.services.upload.UploadRetryGate.familyFor(payloadType)
+        if (servers.any { !com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, family, db) }) return 0
         val pending = getOldest(AUDIO_UPLOAD_MAX_BATCH)
         if (pending.isEmpty()) return 0
 
         var malformed = 0
         val validIds = mutableListOf<String>()
-        val converted = pending.mapNotNull { entry ->
+        val events = pending.mapNotNull { entry ->
             try {
                 toDto(entry).also { validIds += idOf(entry) }
             } catch (e: Exception) {
@@ -206,6 +208,7 @@ class AudioUploadWorkerDelegate(
                 }
             } catch (e: Exception) {
                 failureCount++
+                com.openlattice.chronicle.services.upload.UploadRetryGate.recordFailure(context, server, family, e, db)
                 Log.e(TAG, "[${server.name}] $label upload failed", e)
             }
         }

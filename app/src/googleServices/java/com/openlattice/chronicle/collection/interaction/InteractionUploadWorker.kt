@@ -100,7 +100,8 @@ internal class InteractionUploadWorkerDelegate(
                 .allows(com.openlattice.chronicle.collection.CollectionModuleId.INTERACTION_EVENTS)) return 0
         val dao = db.interactionSampleDao()
         val serverDao = db.uploadServerDao()
-        val servers = listOfNotNull(serverDao.getEnabledServer())
+        val servers = listOfNotNull(serverDao.getEnabledServer()).filter {
+            com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, LocalUploadModuleFamily.INTERACTION, db) }
 
         if (servers.isEmpty()) {
             Log.i(TAG, "No enabled upload servers; skipping interaction upload")
@@ -165,6 +166,8 @@ internal class InteractionUploadWorkerDelegate(
                 }
             } catch (e: Exception) {
                 failureCount++
+                com.openlattice.chronicle.services.upload.UploadRetryGate.recordFailure(context, server, LocalUploadModuleFamily.INTERACTION, e, db)
+                com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore.of(context).recordFailure(LocalUploadModuleFamily.INTERACTION, e)
                 Log.e(TAG, "[${server.name}] Interaction upload failed", e)
             }
         }
