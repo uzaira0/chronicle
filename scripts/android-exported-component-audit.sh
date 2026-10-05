@@ -23,7 +23,6 @@ allowed = {
     "com.openlattice.chronicle.Enrollment": ("activity", None),
     "com.openlattice.chronicle.HealthConnectRationaleActivity": ("activity", None),
     "com.openlattice.chronicle.ViewPermissionUsageActivity": ("activity-alias", "android.permission.START_VIEW_PERMISSION_USAGE"),
-    "com.openlattice.chronicle.services.notifications.NotificationPermissionListener": ("receiver", None),
     "com.openlattice.chronicle.receivers.lifecycle.StartOnBoot": ("receiver", None),
     "com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver": ("receiver", None),
     "com.openlattice.chronicle.collection.activity.SleepActivityReceiver": ("receiver", None),

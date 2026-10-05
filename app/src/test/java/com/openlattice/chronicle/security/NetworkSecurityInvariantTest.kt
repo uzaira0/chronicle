@@ -135,7 +135,6 @@ class NetworkSecurityInvariantTest {
             setOf(
                 ".MainActivity",
                 ".Enrollment",
-                "com.openlattice.chronicle.services.notifications.NotificationPermissionListener",
                 ".receivers.lifecycle.StartOnBoot",
                 // Direct-boot bridge: exported like StartOnBoot for the system's
                 // LOCKED_BOOT_COMPLETED delivery; guarded by an action check + the

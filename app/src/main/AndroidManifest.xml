@@ -101,17 +101,6 @@
             android:name="com.openlattice.chronicle.collection.state.CollectionOrientationActivity"
             android:exported="false"
             android:label="@string/orientation_action_title" />
-        <activity
-            android:name=".StudyDisclosureActivity"
-            android:exported="false"
-            android:label="@string/title_study_information" />
-        <receiver android:name="com.openlattice.chronicle.services.notifications.NotificationPermissionListener"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.app.action.APP_BLOCK_STATE_CHANGED" />
-            </intent-filter>
-        </receiver>
         <receiver
             android:name=".receivers.lifecycle.StartOnBoot"
             android:exported="true"
