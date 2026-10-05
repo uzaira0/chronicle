@@ -30,6 +30,13 @@ internal fun missingAccessFamilies(status: PermissionStatus): Set<LocalUploadMod
     if (status.needNotificationListener) add(LocalUploadModuleFamily.NOTIFICATION)
     if (status.needUsageAccess) add(LocalUploadModuleFamily.USAGE_LIFECYCLE)
     if (status.needHealthConnect) add(LocalUploadModuleFamily.HEALTH)
+    status.runtimeAccessModules.forEach { module ->
+        when (module) {
+            com.openlattice.chronicle.collection.CollectionModuleId.ACTIVITY_RECOGNITION -> add(LocalUploadModuleFamily.ACTIVITY_RECOGNITION)
+            com.openlattice.chronicle.collection.CollectionModuleId.SLEEP -> add(LocalUploadModuleFamily.SLEEP)
+            else -> add(LocalUploadModuleFamily.SENSOR)
+        }
+    }
 }
 
 /**
@@ -83,6 +90,7 @@ fun recordCollectionAccessLoss(context: Context) {
         val missing = missingAccessFamilies(activeModulePermissionStatus(states, environment))
         // The same check with every grant denied names every family an active module needs.
         val required = missingAccessFamilies(activeModulePermissionStatus(states, environment.copy(
+            grantedRuntimePermissions = emptySet(),
             healthConnectGranted = false, usageAccessGranted = false,
             notificationListenerEnabled = false, accessibilityEnabled = false,
         )))

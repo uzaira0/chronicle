@@ -471,5 +471,6 @@
     </plurals>
     <string name="upload_diagnostics_unavailable">Upload diagnostics are unavailable. They will be retried when storage recovers.</string>
     <string name="work_scheduling_unavailable">Uploads could not be scheduled. Restart Chronicle after storage recovers.</string>
+    <string name="cap_capture_retry">Capture is temporarily unavailable. Chronicle will retry; review Android access in Data Sharing.</string>
     <string name="upload_terminal_blocked">Upload is blocked by the study server. Contact the study team; queued data is retained.</string>
 </resources>

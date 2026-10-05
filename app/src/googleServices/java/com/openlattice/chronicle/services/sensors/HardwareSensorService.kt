@@ -107,6 +107,7 @@ class HardwareSensorService : Service() {
 
     @Volatile
     private lateinit var controller: SensorRuntimeController
+    @Volatile private var foregroundStartFailed = false
     private val lifecycleReceiver = DeviceLifecycleReceiver()
 
     /**
@@ -251,7 +252,15 @@ class HardwareSensorService : Service() {
         // controller already prevents an un-acknowledged sample from being written; this
         // additionally stops the idle foreground service so it isn't running for nothing.
         // A gate read error does not stop the service: executeStartup retries until the read succeeds.
-        startForegroundNotification()
+        try {
+            startForegroundNotification()
+        } catch (error: SecurityException) {
+            rejectForegroundStart(error)
+            return
+        } catch (error: IllegalStateException) {
+            rejectForegroundStart(error)
+            return
+        }
         if (directBootMode) {
             executeStartup {
                 if (!directBootMode) return@executeStartup
@@ -308,6 +317,18 @@ class HardwareSensorService : Service() {
                 stopIdleService()
             }
         }
+    }
+
+    private fun rejectForegroundStart(error: Exception) {
+        foregroundStartFailed = true
+        Log.w(TAG, "Sensor foreground start unavailable", error)
+        val owner = ResearchPersistenceGate.captureOwner(applicationContext)
+        ResearchPersistenceGate.executeAsync {
+            com.openlattice.chronicle.services.upload.recordForExpectedOwner(applicationContext, owner,
+                com.openlattice.chronicle.services.upload.LocalUploadModuleFamily.SENSOR,
+                com.openlattice.chronicle.services.upload.LocalOperationalIssue.COLLECTION_ACCESS_MISSING, 1)
+        }
+        stopIdleService()
     }
 
     private fun stopIdleService() {
@@ -546,6 +567,10 @@ class HardwareSensorService : Service() {
         }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (foregroundStartFailed) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         Log.i(TAG, "Hardware sensor service started")
         // A start while the service is already running means consent or study settings changed
         // the per-sensor set (a Data Sharing toggle / settings sync re-issues startService).

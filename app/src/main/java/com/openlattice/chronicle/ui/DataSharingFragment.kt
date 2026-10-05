@@ -896,6 +896,7 @@ internal data class PermissionStatus(
     val needNotificationListener: Boolean = false,
     val needAccessibility: Boolean = false,
     val notificationAccessModules: Set<CollectionModuleId> = emptySet(),
+    val runtimeAccessModules: Set<CollectionModuleId> = emptySet(),
 ) {
     val hasMissing: Boolean
         get() = missingRuntime.isNotEmpty() || needHealthConnect || needUsageAccess ||
@@ -934,6 +935,10 @@ internal fun activeModulePermissionStatus(
         needNotificationListener,
         needAccessibility,
         notificationAccessModules,
+        active.filterTo(linkedSetOf()) { module ->
+            ModulePermissions.runtimePermissionsFor(listOf(module), environment.sdkInt)
+                .any(missingRuntime::contains)
+        },
     )
 }
 

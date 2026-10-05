@@ -31,6 +31,8 @@ public object SleepActivityCaptureController {
 
     private const val TAG = "SleepActivityCapture"
     private const val REQUEST_CODE = 0xC04E
+    internal var availabilityOverride: (() -> Boolean)? = null
+    internal var registrationOverride: ((CollectionModuleId, PendingIntent) -> com.google.android.gms.tasks.Task<Void>)? = null
 
     /** Activity classes worth transition updates for screen-time research. */
     private val TRACKED_ACTIVITIES = intArrayOf(
@@ -62,7 +64,7 @@ public object SleepActivityCaptureController {
 
     private fun ensureRegistrationAdmitted(context: Context) {
         val appContext = context.applicationContext
-        if (!isAvailable(appContext)) {
+        if (!(availabilityOverride?.invoke() ?: isAvailable(appContext))) {
             Log.i(TAG, "Google Play Services unavailable; sleep/activity registration skipped")
             return
         }
@@ -75,12 +77,24 @@ public object SleepActivityCaptureController {
         // (lint does not follow the hoisted permission check through a helper).
         if (CollectionGate.collects(appContext, CollectionModuleId.ACTIVITY_RECOGNITION) && hasPermission) {
             val pendingIntent = registrationIntent(appContext, CollectionModuleId.ACTIVITY_RECOGNITION) ?: return
+            val origin = ResearchPersistenceGate.captureObservation(appContext, CollectionModuleId.ACTIVITY_RECOGNITION)
+            val owner = ResearchPersistenceGate.captureOwner(appContext)
+            fun completed(success: Boolean) = ResearchPersistenceGate.executeAsync {
+                if (origin.isCurrent()) runCatching {
+                    com.openlattice.chronicle.collection.state.CaptureRegistrationStatus.recordOutcome(
+                        appContext, owner, CollectionModuleId.ACTIVITY_RECOGNITION, success)
+                }.onFailure { Log.w(TAG, "Capture status unavailable", it) }
+            }
             try {
-                client.requestActivityTransitionUpdates(transitionRequest(), pendingIntent)
-                    .addOnFailureListener { Log.w(TAG, "requestActivityTransitionUpdates failed: ${it.javaClass.simpleName}") }
+                (registrationOverride?.invoke(CollectionModuleId.ACTIVITY_RECOGNITION, pendingIntent)
+                    ?: client.requestActivityTransitionUpdates(transitionRequest(), pendingIntent))
+                    .addOnFailureListener { Log.w(TAG, "requestActivityTransitionUpdates failed: ${it.javaClass.simpleName}"); completed(false) }
+                    .addOnSuccessListener { completed(true) }
             } catch (e: SecurityException) {
+                completed(false)
                 Log.w(TAG, "activity transition registration denied (ACTIVITY_RECOGNITION not granted): ${e.javaClass.simpleName}")
             } catch (e: Exception) {
+                completed(false)
                 Log.w(TAG, "activity transition registration threw: ${e.javaClass.simpleName}")
             }
         } else {
@@ -90,12 +104,24 @@ public object SleepActivityCaptureController {
         // sleep
         if (CollectionGate.collects(appContext, CollectionModuleId.SLEEP) && hasPermission) {
             val pendingIntent = registrationIntent(appContext, CollectionModuleId.SLEEP) ?: return
+            val origin = ResearchPersistenceGate.captureObservation(appContext, CollectionModuleId.SLEEP)
+            val owner = ResearchPersistenceGate.captureOwner(appContext)
+            fun completed(success: Boolean) = ResearchPersistenceGate.executeAsync {
+                if (origin.isCurrent()) runCatching {
+                    com.openlattice.chronicle.collection.state.CaptureRegistrationStatus.recordOutcome(
+                        appContext, owner, CollectionModuleId.SLEEP, success)
+                }.onFailure { Log.w(TAG, "Capture status unavailable", it) }
+            }
             try {
-                client.requestSleepSegmentUpdates(pendingIntent, SleepSegmentRequest.getDefaultSleepSegmentRequest())
-                    .addOnFailureListener { Log.w(TAG, "requestSleepSegmentUpdates failed: ${it.javaClass.simpleName}") }
+                (registrationOverride?.invoke(CollectionModuleId.SLEEP, pendingIntent)
+                    ?: client.requestSleepSegmentUpdates(pendingIntent, SleepSegmentRequest.getDefaultSleepSegmentRequest()))
+                    .addOnFailureListener { Log.w(TAG, "requestSleepSegmentUpdates failed: ${it.javaClass.simpleName}"); completed(false) }
+                    .addOnSuccessListener { completed(true) }
             } catch (e: SecurityException) {
+                completed(false)
                 Log.w(TAG, "sleep registration denied (ACTIVITY_RECOGNITION not granted): ${e.javaClass.simpleName}")
             } catch (e: Exception) {
+                completed(false)
                 Log.w(TAG, "sleep registration threw: ${e.javaClass.simpleName}")
             }
         } else {
@@ -114,8 +140,8 @@ public object SleepActivityCaptureController {
             pendingFlags(PendingIntent.FLAG_NO_CREATE))
         if (legacy != null) {
             val client = ActivityRecognition.getClient(appContext)
-            removeActivityTransitionUpdatesSafely(client, legacy)
-            removeSleepUpdatesSafely(client, legacy)
+            removeActivityTransitionUpdatesSafely(appContext, client, legacy)
+            removeSleepUpdatesSafely(appContext, client, legacy)
             legacy.cancel()
         }
     }
@@ -126,8 +152,8 @@ public object SleepActivityCaptureController {
         val pending = pendingIntent(context, module, scope, PendingIntent.FLAG_NO_CREATE)
         if (pending != null) {
             val client = ActivityRecognition.getClient(context)
-            if (module == CollectionModuleId.SLEEP) removeSleepUpdatesSafely(client, pending)
-            else removeActivityTransitionUpdatesSafely(client, pending)
+            if (module == CollectionModuleId.SLEEP) removeSleepUpdatesSafely(context, client, pending)
+            else removeActivityTransitionUpdatesSafely(context, client, pending)
             pending.cancel()
         }
         check(prefs.edit().remove(module.id).commit())
@@ -152,22 +178,41 @@ public object SleepActivityCaptureController {
      * behavior — a revoked permission simply means there is nothing left to remove.
      */
     private fun removeActivityTransitionUpdatesSafely(
+        context: Context,
         client: com.google.android.gms.location.ActivityRecognitionClient,
         pendingIntent: PendingIntent,
     ) {
+        val owner = ResearchPersistenceGate.captureOwner(context)
         try {
-            client.removeActivityTransitionUpdates(pendingIntent)
+            client.removeActivityTransitionUpdates(pendingIntent).addOnFailureListener {
+                recordRemovalFailure(context, owner, CollectionModuleId.ACTIVITY_RECOGNITION)
+            }
         } catch (e: SecurityException) {
+            recordRemovalFailure(context, owner, CollectionModuleId.ACTIVITY_RECOGNITION)
             Log.w(TAG, "removeActivityTransitionUpdates suppressed (ACTIVITY_RECOGNITION not granted): ${e.javaClass.simpleName}")
         }
     }
 
     private fun removeSleepUpdatesSafely(
+        context: Context,
         client: com.google.android.gms.location.ActivityRecognitionClient,
         pendingIntent: PendingIntent,
     ) {
-        runCatching { client.removeSleepSegmentUpdates(pendingIntent) }
-            .onFailure { Log.w(TAG, "removeSleepSegmentUpdates failed: ${it.javaClass.simpleName}") }
+        val owner = ResearchPersistenceGate.captureOwner(context)
+        runCatching { client.removeSleepSegmentUpdates(pendingIntent).addOnFailureListener {
+            recordRemovalFailure(context, owner, CollectionModuleId.SLEEP)
+        } }.onFailure {
+            recordRemovalFailure(context, owner, CollectionModuleId.SLEEP)
+            Log.w(TAG, "removeSleepSegmentUpdates failed: ${it.javaClass.simpleName}")
+        }
+    }
+
+    private fun recordRemovalFailure(context: Context, owner: com.openlattice.chronicle.storage.UploadServerEntity?,
+                                     module: CollectionModuleId) = ResearchPersistenceGate.executeAsync {
+        com.openlattice.chronicle.services.upload.recordForExpectedOwner(context, owner,
+            if (module == CollectionModuleId.SLEEP) com.openlattice.chronicle.services.upload.LocalUploadModuleFamily.SLEEP
+            else com.openlattice.chronicle.services.upload.LocalUploadModuleFamily.ACTIVITY_RECOGNITION,
+            com.openlattice.chronicle.services.upload.LocalOperationalIssue.COLLECTION_ACCESS_MISSING, 1)
     }
 
     private fun transitionRequest(): ActivityTransitionRequest {

@@ -31,6 +31,29 @@ class AccessLossDiagnosticsTest {
 
     private fun accessMissing() = persistence.buckets.filter { it.issue == "COLLECTION_ACCESS_MISSING" }
 
+    @Test fun runtimeGrantLossReportsOnlyActiveActivityAndSleepEpisodesAndRecoveryClosesThem() {
+        val modules = listOf(com.openlattice.chronicle.collection.CollectionModuleId.ACTIVITY_RECOGNITION,
+            com.openlattice.chronicle.collection.CollectionModuleId.SLEEP)
+        val states = modules.map { com.openlattice.chronicle.collection.state.CollectionModuleState(
+            it, true, com.openlattice.chronicle.collection.state.ParticipantDecision.ACCEPTED, 0, false, 1, null, null) }
+        val environment = com.openlattice.chronicle.collection.capability.CapabilityEnvironment(
+            33, com.openlattice.chronicle.collection.capability.DistributionChannel.RESEARCH, true, true, true, true,
+            emptySet(), true, true, restrictedCollectorsCompiledIn = true)
+        val expected = setOf(LocalUploadModuleFamily.ACTIVITY_RECOGNITION, LocalUploadModuleFamily.SLEEP)
+        val missing = missingAccessFamilies(com.openlattice.chronicle.ui.activeModulePermissionStatus(states, environment))
+        assertEquals(expected, missing)
+        recordAccessEpisodes(store, prefs, "s:p", missing, expected, t0)
+        recordAccessEpisodes(store, prefs, "s:p", missing, expected, t0.plusMinutes(1))
+        assertEquals(2, accessMissing().size)
+        val recovered = missingAccessFamilies(com.openlattice.chronicle.ui.activeModulePermissionStatus(states,
+            environment.copy(grantedRuntimePermissions = setOf(com.openlattice.chronicle.collection.permissions.ModulePermissions.ACTIVITY_RECOGNITION))))
+        assertEquals(emptySet<LocalUploadModuleFamily>(), recovered)
+        recordAccessEpisodes(store, prefs, "s:p", recovered, expected, t0.plusMinutes(2))
+        assertEquals(0, prefs.all.keys.count { !it.contains("granted|") })
+        assertEquals(emptySet<LocalUploadModuleFamily>(), missingAccessFamilies(com.openlattice.chronicle.ui.activeModulePermissionStatus(
+            states.map { it.copy(serverEnabled = false) }, environment)))
+    }
+
     @Test
     fun disabledAccessibilityServiceMapsToTheInteractionFamily() {
         assertEquals(interaction, missingAccessFamilies(PermissionStatus(emptyList(), false, needAccessibility = true)))

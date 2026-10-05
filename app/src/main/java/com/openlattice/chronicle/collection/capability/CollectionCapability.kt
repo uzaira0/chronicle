@@ -122,6 +122,7 @@ public data class CapabilityEnvironment(
     // Carried on the environment so a unit test can describe a full-channel device on any
     // flavor; production always reads the build flag.
     val restrictedCollectorsCompiledIn: Boolean = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS,
+    val failedCaptureRegistrations: Set<CollectionModuleId> = emptySet(),
 )
 
 private val ENGLISH_CAPABILITY: CopyResolver = englishCopy(
@@ -139,6 +140,7 @@ private val ENGLISH_CAPABILITY: CopyResolver = englishCopy(
         R.string.cap_device_permission to "Device permission is required",
         R.string.cap_notification_access to "Notification access must be enabled in Settings",
         R.string.cap_accessibility to "Chronicle accessibility access must be enabled",
+        R.string.cap_capture_retry to "Capture is temporarily unavailable. Chronicle will retry; review Android access in Data Sharing.",
         R.string.cap_sleep_collection to "Sleep collection",
         R.string.cap_activity_recognition to "Activity recognition",
     ),
@@ -172,6 +174,7 @@ public object CollectionCapabilityResolver {
             healthConnectGranted = BuildConfig.HAS_HEALTH_CONNECT &&
                 DistributionRestrictedRuntime.healthConnectGranted(appContext),
             usageAccessGranted = hasUsageSettingPermission(appContext),
+            failedCaptureRegistrations = com.openlattice.chronicle.collection.state.CaptureRegistrationStatus.failedModules(appContext),
             grantedRuntimePermissions = activeRuntimePermissions.filterTo(linkedSetOf()) {
                 ContextCompat.checkSelfPermission(appContext, it) == PackageManager.PERMISSION_GRANTED
             },
@@ -252,6 +255,9 @@ public object CollectionCapabilityResolver {
             return CollectionCapability.UserEnablementRequired(s(R.string.cap_usage_access))
         }
 
+        if (moduleId in environment.failedCaptureRegistrations) {
+            return CollectionCapability.ServiceUnavailable(s(R.string.cap_capture_retry))
+        }
         val missingRuntime = ModulePermissions.runtimePermissionsFor(listOf(moduleId), environment.sdkInt)
             .filterNot(environment.grantedRuntimePermissions::contains)
         if (missingRuntime.isNotEmpty()) {
