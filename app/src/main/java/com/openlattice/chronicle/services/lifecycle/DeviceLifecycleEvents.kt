@@ -9,7 +9,6 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.collection.lifecycle.LifecycleEventMapper
 import com.openlattice.chronicle.collection.lifecycle.LifecycleWorkerMigration
-import com.openlattice.chronicle.collection.lifecycle.isDuplicateLifecycleEvent
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.preferences.EnrollmentSettings
@@ -46,10 +45,6 @@ const val INTERACTION_NETWORK_DISCONNECTED = "Network Disconnected"
 const val INTERACTION_LOW_MEMORY = com.openlattice.chronicle.constants.INTERACTION_LOW_MEMORY
 const val ACTION_CONNECTIVITY_CHANGE = "android.net.conn.CONNECTIVITY_CHANGE"
 
-// Dedupe prefs for the legacy inline recordNow path. Kept identical to
-// LifecycleDedupeStore's LIFECYCLE_RECORDER_PREFS_NAME / LIFECYCLE_DEDUPE_WINDOW_MS so
-// the legacy and module paths share one dedupe state and suppress identically.
-private const val RECORDER_PREFS_NAME = "chronicle_lifecycle_recorder"
 private val lifecycleExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue())
 
 /**
@@ -101,9 +96,9 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
                         LocalOperationalIssue.COLLECTION_GATE_DROPPED, observations().size)
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Lifecycle observation could not be persisted", error)
+                Log.e(TAG, "Lifecycle observation could not be persisted: ${error.javaClass.simpleName}")
                 recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
-                    LocalOperationalIssue.LOCAL_WRITE_FAILED, observedCount)
+                    LocalOperationalIssue.LOCAL_WRITE_FAILED, observedCount.coerceAtLeast(1))
             }
         }
     }
@@ -122,12 +117,14 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
         return LifecycleEventMapper.lowMemoryEvent(level, timestampMillis)
     }
 
-    fun recordAsync(context: Context, event: ExtractedUsageEvent?, origin: CollectionPersistenceGuard = ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)) {
+    fun recordAsync(context: Context, event: ExtractedUsageEvent?, origin: CollectionPersistenceGuard = ResearchPersistenceGate.captureObservation(
+        context, CollectionModuleId.DEVICE_LIFECYCLE)) {
         if (event == null) return
         recordAsync(context, listOf(event), origin)
     }
 
-    fun recordAsync(context: Context, events: List<ExtractedUsageEvent>, origin: CollectionPersistenceGuard = ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)) {
+    fun recordAsync(context: Context, events: List<ExtractedUsageEvent>, origin: CollectionPersistenceGuard =
+        ResearchPersistenceGate.captureObservation(context, CollectionModuleId.DEVICE_LIFECYCLE)) {
         if (events.isEmpty()) return
         val appContext = context.applicationContext
         val floor = ResearchPersistenceGate.observationScope(appContext, CollectionModuleId.DEVICE_LIFECYCLE)?.second ?: Long.MAX_VALUE
@@ -135,25 +132,25 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
         val owner = ResearchPersistenceGate.captureOwner(appContext)
         lifecycleExecutor.execute {
             try {
-                val result = origin.persistResult {
-                if (LifecycleWorkerMigration.USE_MODULE_MANAGER_LIFECYCLE_PATH) {
+                val storageUnavailable = if (LifecycleWorkerMigration.USE_MODULE_MANAGER_LIFECYCLE_PATH) {
                     // Phase 5B module path: route through the sanctioned LifecycleEventSink.
                     // A ModuleResult.Failed is logged + recorded in module diagnostics by
                     // persist() itself — async failures are never silently swallowed.
-                    DeviceLifecycleModuleHolder.get(appContext).persist(admittedEvents, origin)
+                    DeviceLifecycleModuleHolder.get(appContext).persist(admittedEvents, origin) is
+                        com.openlattice.chronicle.collection.core.ModuleResult.Retry
                 } else {
                     // Default path: the legacy inline direct writer — the regression baseline.
-                    recordNow(appContext, admittedEvents)
+                    origin.persistResult { recordNow(appContext, admittedEvents) } ==
+                        CollectionPersistenceResult.STORAGE_UNAVAILABLE
                 }
-                }
-                if (result == CollectionPersistenceResult.STORAGE_UNAVAILABLE) {
+                if (storageUnavailable) {
                     // Low storage refused these captured events and nothing retries them: count
                     // the loss for the enrollment that observed them (battery-sink parity).
                     recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
                         LocalOperationalIssue.COLLECTION_GATE_DROPPED, admittedEvents.size)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to persist lifecycle batch", e)
+                Log.e(TAG, "Failed to persist lifecycle batch: ${e.javaClass.simpleName}")
                 recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
                     LocalOperationalIssue.LOCAL_WRITE_FAILED, admittedEvents.size)
                 // Surface an unexpected background-executor failure in module diagnostics
@@ -213,7 +210,7 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
                 )
             },
         ) {
-            db.queueEntryData().insertEntry(entry)
+            persistLifecycleEntries(db, listOf(entry))
             Utils.updateUploadQueueSize(context, db.queueEntryData().getSize())
         }
         if (!persisted) return true
@@ -221,16 +218,8 @@ object DeviceLifecycleEventRecorder : ResearchErasureFence.Companion.Observer {
         return true
     }
 
-    private fun shouldPersist(context: Context, event: ExtractedUsageEvent, now: Long): Boolean {
-        val prefs = context.getSharedPreferences(RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
-        val key = "last:${event.interactionType}:${event.activityClass ?: ""}"
-        val last = prefs.getLong(key, Long.MIN_VALUE).takeUnless { it == Long.MIN_VALUE }
-        if (isDuplicateLifecycleEvent(last, now)) {
-            return false
-        }
-        prefs.edit().putLong(key, now).apply()
-        return true
-    }
+    private fun shouldPersist(context: Context, event: ExtractedUsageEvent, now: Long): Boolean =
+        RoomLifecycleDedupeStore(ChronicleDb.getInstance(context)).shouldPersist(event, now)
 
     fun buildEvent(activityClass: String, interactionType: String, timestampMillis: Long): ExtractedUsageEvent {
         return LifecycleEventMapper.buildEvent(activityClass, interactionType, timestampMillis)

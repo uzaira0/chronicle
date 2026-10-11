@@ -11,7 +11,9 @@ import com.openlattice.chronicle.collection.core.RecordingCollectionLog
 import com.openlattice.chronicle.collection.core.TestContexts
 import com.openlattice.chronicle.collection.sink.FakeStorageQueue
 import com.openlattice.chronicle.collection.sink.LifecycleEventSink
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.models.ExtractedUsageEvent
+import com.openlattice.chronicle.storage.UploadServerEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -40,8 +42,10 @@ class DeviceLifecycleCollectionModuleTest {
         onQueueSize: (Int) -> Unit = {},
         clock: FixedCollectionClock = FixedCollectionClock(50_000L),
         log: com.openlattice.chronicle.collection.core.CollectionLog = NoOpCollectionLog,
+        guard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
+        onLoss: (UploadServerEntity?, String, Int) -> Unit = { _, _, _ -> },
     ) = DeviceLifecycleCollectionModule(
-        sink = LifecycleEventSink(dao, NoOpCollectionLog),
+        sink = LifecycleEventSink(dao, NoOpCollectionLog, guard),
         dedupeStore = dedupe,
         enrolled = enrolled,
         updateQueueSize = onQueueSize,
@@ -50,6 +54,7 @@ class DeviceLifecycleCollectionModuleTest {
         },
         clock = clock,
         log = log,
+        accountLossForOwner = onLoss,
     )
 
     @Test
@@ -134,6 +139,27 @@ class DeviceLifecycleCollectionModuleTest {
         // Crash-recovery parity: a failed lifecycle write must not leave a partial row;
         // the broadcast is simply lost (same as the legacy recorder, which would throw
         // out of recordNow before the queue-size update).
+        assertEquals(0, dao.getSize())
+    }
+
+    @Test
+    fun writeFailureAccountsDeduplicatedLossAfterAdmissionEnds() {
+        val dao = FakeStorageQueue().apply { failNextInsert = true }
+        var admissionDepth = 0
+        var losses = 0
+        val guard = CollectionPersistenceGuard { persist ->
+            admissionDepth++
+            try { persist(); true } finally { admissionDepth-- }
+        }
+        val m = module(dao, dedupe = FakeLifecycleDedupeStore(), guard = guard,
+            onLoss = { _, issue, count ->
+                assertEquals("loss must survive the admission transaction", 0, admissionDepth)
+                assertEquals("LOCAL_WRITE_FAILED", issue)
+                losses += count
+            })
+        val event = event("Battery Low", "android.intent.action.BATTERY_LOW")
+        assertTrue(m.persist(listOf(event, event)) is ModuleResult.Failed)
+        assertEquals(1, losses)
         assertEquals(0, dao.getSize())
     }
 

@@ -145,7 +145,8 @@ class StorageRefusalPersistenceTest {
             ResearchPersistenceGate.guard(context, CollectionModuleId.SENSOR_ACCELEROMETER)),
         scheduler = ManualSensorRuntimeScheduler(executeImmediately = false),
         collectionGate = { true }, log = NoOpCollectionLog,
-        observationAdmission = { ResearchPersistenceGate.captureObservation(context, com.openlattice.chronicle.collection.SensorCollectionModules.moduleFor(it)) },
+        observationAdmission = { ResearchPersistenceGate.captureObservation(context,
+            com.openlattice.chronicle.collection.SensorCollectionModules.moduleFor(it)) },
         reportLoss = { code, count -> losses += code to count },
     ).also { controller ->
         repeat(3) { controller.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f, 2f, 3f), 3) }

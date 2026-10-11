@@ -14,6 +14,8 @@ import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
 import com.openlattice.chronicle.utils.Utils
+import com.openlattice.chronicle.services.lifecycle.RoomLifecycleDedupeStore
+import com.openlattice.chronicle.services.lifecycle.persistLifecycleEntries
 
 /**
  * Holds the single app-scoped [DeviceLifecycleCollectionModule] instance and constructs
@@ -32,7 +34,7 @@ import com.openlattice.chronicle.utils.Utils
  * The seams wired here mirror the legacy `DeviceLifecycleEventRecorder.recordNow`
  * exactly:
  *  - persistence → [LifecycleEventSink] over `ChronicleDb.queueEntryData()`;
- *  - dedupe → [PrefsLifecycleDedupeStore] over the `chronicle_lifecycle_recorder` prefs;
+ *  - dedupe → Room state committed with the queue entry;
  *  - enrollment check → `EnrollmentSettings.getParticipationStatus() == ENROLLED`;
  *  - queue-size update → `Utils.updateUploadQueueSize`.
  *
@@ -59,8 +61,9 @@ public object DeviceLifecycleModuleHolder {
             sink = LifecycleEventSink(
                 db.queueEntryData(),
                 persistenceGuard = ResearchPersistenceGate.guard(appContext, CollectionModuleId.DEVICE_LIFECYCLE),
+                writeEntries = { persistLifecycleEntries(db, it) },
             ),
-            dedupeStore = PrefsLifecycleDedupeStore(appContext),
+            dedupeStore = RoomLifecycleDedupeStore(db),
             enrolled = {
                 EnrollmentSettings(appContext).getParticipationStatus() == ParticipationStatus.ENROLLED &&
                     CollectionGate.collects(appContext, CollectionModuleId.DEVICE_LIFECYCLE)

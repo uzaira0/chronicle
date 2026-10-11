@@ -11,6 +11,7 @@ import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.core.collectionStatus
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.collection.sink.LifecycleEventSink
@@ -148,9 +149,19 @@ public class DeviceLifecycleCollectionModule(
     public fun persist(
         events: List<ExtractedUsageEvent>,
         origin: CollectionPersistenceGuard = sink.captureAdmission(),
-    ): ModuleResult = origin.writeObservation { persistAdmitted(events) }
+    ): ModuleResult {
+        val owner = originOwner()
+        var abandonedCount = 0
+        val result = origin.writeObservation { persistAdmitted(events) { abandonedCount = it } }
+        // The admission transaction has ended; its rollback must not erase the loss diagnostic.
+        if (abandonedCount > 0) {
+            val issue = if (result is ModuleResult.Failed) "LOCAL_WRITE_FAILED" else "COLLECTION_GATE_DROPPED"
+            accountLossForOwner(owner, issue, abandonedCount)
+        }
+        return result
+    }
 
-    private fun persistAdmitted(events: List<ExtractedUsageEvent>): ModuleResult {
+    private fun persistAdmitted(events: List<ExtractedUsageEvent>, abandoned: (Int) -> Unit): ModuleResult {
         val now = clock.nowEpochMs()
         lastRunEpochMs = now
 
@@ -160,8 +171,6 @@ public class DeviceLifecycleCollectionModule(
             lastError = null
             return lastResult
         }
-
-        val owner = originOwner()
 
         if (!enrolled()) {
             log.info(TAG, "Skipping ${events.size} lifecycle event(s): participant is not enrolled")
@@ -207,7 +216,7 @@ public class DeviceLifecycleCollectionModule(
                 lastResult
             }
             is ModuleResult.Failed -> {
-                accountLossForOwner(owner, "LOCAL_WRITE_FAILED", filtered.size)
+                abandoned(filtered.size)
                 lastEventCount = 0
                 lastError = result.redactedMessage
                 lastResult = result
@@ -217,7 +226,7 @@ public class DeviceLifecycleCollectionModule(
             else -> {
                 if (result is ModuleResult.Skipped) {
                     gateRefused(filtered.size)
-                    accountLossForOwner(owner, "COLLECTION_GATE_DROPPED", filtered.size)
+                    abandoned(filtered.size)
                 }
                 lastResult = result
                 result
@@ -240,12 +249,7 @@ public class DeviceLifecycleCollectionModule(
         log.error(TAG, "Async lifecycle event persistence failed on background executor", error)
     }
 
-    override fun status(): CollectionModuleStatus = when (lastResult) {
-        is ModuleResult.Failed -> CollectionModuleStatus.FAILED
-        is ModuleResult.Ok -> CollectionModuleStatus.IDLE
-        is ModuleResult.Retry -> CollectionModuleStatus.DEGRADED
-        is ModuleResult.Skipped -> CollectionModuleStatus.IDLE
-    }
+    override fun status(): CollectionModuleStatus = lastResult.collectionStatus
 
     override fun diagnostics(): CollectionModuleDiagnostics = CollectionModuleDiagnostics(
         moduleId = id,

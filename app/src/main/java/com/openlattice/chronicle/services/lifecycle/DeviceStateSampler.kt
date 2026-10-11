@@ -1,43 +1,37 @@
 package com.openlattice.chronicle.services.lifecycle
 
 import android.content.Context
+import com.openlattice.chronicle.utils.registerSystemBroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.PowerManager
-import androidx.core.content.edit
 import com.openlattice.chronicle.models.ExtractedUsageEvent
-
-private const val PREFS_NAME = "chronicle_device_state"
-private const val KEY_BATTERY_STATE = "battery_state"
-private const val KEY_NETWORK_STATE = "network_state"
-private const val KEY_POWER_SAVE_STATE = "power_save_state"
+import com.openlattice.chronicle.storage.ChronicleDb
 
 class DeviceStateSampler(private val context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun poll(timestampMillis: Long = System.currentTimeMillis()): List<ExtractedUsageEvent> {
         val origin = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.captureObservation(
             context, com.openlattice.chronicle.collection.CollectionModuleId.DEVICE_LIFECYCLE)
         val events = mutableListOf<ExtractedUsageEvent>()
         origin.persist {
-        addChangedState(events, KEY_BATTERY_STATE, batteryState(), timestampMillis)
-        addChangedState(events, KEY_NETWORK_STATE, networkState(), timestampMillis)
-        addChangedState(events, KEY_POWER_SAVE_STATE, powerSaveState(), timestampMillis)
+        addChangedState(events, batteryState(), timestampMillis)
+        addChangedState(events, networkState(), timestampMillis)
+        addChangedState(events, powerSaveState(), timestampMillis)
         }
         return events
     }
 
     private fun addChangedState(
         events: MutableList<ExtractedUsageEvent>,
-        key: String,
         state: LifecycleState,
         timestampMillis: Long
     ) {
-        if (prefs.getString(key, null) == state.dedupeValue) return
-        prefs.edit { putString(key, state.dedupeValue) }
+        val db = ChronicleDb.getInstance(context)
+        if (db.lifecycleStateDao().get(checkNotNull(sampledStateKey(state.activityClass)))?.value == state.activityClass) return
         events.add(
             DeviceLifecycleEventRecorder.buildEvent(
                 activityClass = state.activityClass,
@@ -48,7 +42,7 @@ class DeviceStateSampler(private val context: Context) {
     }
 
     private fun batteryState(): LifecycleState {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val intent = registerSystemBroadcastReceiver(context, null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
@@ -66,7 +60,6 @@ class DeviceStateSampler(private val context: Context) {
         return LifecycleState(
             interactionType = interactionType,
             activityClass = "battery:$bucket:${if (charging) "charging" else "discharging"}",
-            dedupeValue = "$bucket:$charging"
         )
     }
 
@@ -87,7 +80,6 @@ class DeviceStateSampler(private val context: Context) {
         return LifecycleState(
             interactionType = if (connected) INTERACTION_NETWORK_CONNECTED else INTERACTION_NETWORK_DISCONNECTED,
             activityClass = "network:$transport",
-            dedupeValue = transport
         )
     }
 
@@ -97,7 +89,6 @@ class DeviceStateSampler(private val context: Context) {
         return LifecycleState(
             interactionType = if (enabled) INTERACTION_POWER_SAVE_MODE_ON else INTERACTION_POWER_SAVE_MODE_OFF,
             activityClass = "power-save:${if (enabled) "on" else "off"}",
-            dedupeValue = enabled.toString()
         )
     }
 
@@ -106,5 +97,4 @@ class DeviceStateSampler(private val context: Context) {
 private data class LifecycleState(
     val interactionType: String,
     val activityClass: String,
-    val dedupeValue: String
 )

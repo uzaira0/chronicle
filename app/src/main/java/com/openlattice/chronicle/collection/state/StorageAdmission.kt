@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.collection.state
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
 import android.os.SystemClock
 import java.util.concurrent.Executors
@@ -32,6 +33,15 @@ internal object StorageAdmission {
     @Volatile private var lastAllowed = false
     @Volatile private var lastCheckedAt = Long.MIN_VALUE
     private var decisionGeneration = 0L
+
+    fun clear(context: Context) = synchronized(this) {
+        checkLocalStoreWrite(EncryptedPrefsHelper.getEncryptedPrefs(context).edit()
+            .remove(PAUSED).remove(SCOPE).remove(EPISODE_ID).remove(EPISODE_AT)
+            .remove(EPISODE_NOTIFIED).remove(EPISODE_RECORDED).commit())
+        decisionGeneration++
+        lastAllowed = false
+        lastCheckedAt = Long.MIN_VALUE
+    }
 
     fun isPaused(context: Context): Boolean {
         val prefs = EncryptedPrefsHelper.getEncryptedPrefs(context)
@@ -96,7 +106,7 @@ internal object StorageAdmission {
                     .takeIf { wasPaused && !it.isNullOrBlank() }
                     ?: UUID.randomUUID().toString()
                 if (!wasPaused || prefs.getString(EPISODE_ID, null) != episodeId) {
-                    check(prefs.edit().putString(SCOPE, scope).putBoolean(PAUSED, true)
+                    checkLocalStoreWrite(prefs.edit().putString(SCOPE, scope).putBoolean(PAUSED, true)
                         .putString(EPISODE_ID, episodeId).putString(EPISODE_AT, OffsetDateTime.now().toString())
                         .putBoolean(EPISODE_RECORDED, false).putBoolean(EPISODE_NOTIFIED, false).commit())
                 }
@@ -106,7 +116,7 @@ internal object StorageAdmission {
                 runCatching {
                     val episodeId = requireNotNull(prefs.getString(EPISODE_ID, null))
                     val occurredAt = prefs.getString(EPISODE_AT, null) ?: OffsetDateTime.now().toString().also {
-                        check(prefs.edit().putString(EPISODE_AT, it).commit())
+                        checkLocalStoreWrite(prefs.edit().putString(EPISODE_AT, it).commit())
                     }
                     pending = episodeId to occurredAt
                 }.onFailure { Log.e("StorageAdmission", "Unable to record storage pause", it) }
@@ -124,26 +134,26 @@ internal object StorageAdmission {
                 synchronized(this) {
                     if (prefs.getString(SCOPE, null) == scope && prefs.getString(EPISODE_ID, null) == episodeId &&
                         !prefs.getBoolean(EPISODE_RECORDED, false)) {
-                        check(prefs.edit().putBoolean(EPISODE_RECORDED, true).commit())
+                        checkLocalStoreWrite(prefs.edit().putBoolean(EPISODE_RECORDED, true).commit())
                     }
                 }
             }.onFailure { Log.e("StorageAdmission", "Unable to record storage pause", it) }
         }
         if (paused && isPaused(context) && !prefs.getBoolean(EPISODE_NOTIFIED, false)) {
             runCatching {
-                if (notifyStoragePause(context)) check(prefs.edit().putBoolean(EPISODE_NOTIFIED, true).commit())
+                if (notifyStoragePause(context)) checkLocalStoreWrite(prefs.edit().putBoolean(EPISODE_NOTIFIED, true).commit())
             }.onFailure { Log.w("StorageAdmission", "Storage pause notice unavailable", it) }
         }
         val resumed = synchronized(this) {
             if (decisionGeneration == generation && !paused && prefs.getString(SCOPE, null) == scope &&
                 prefs.getBoolean(PAUSED, false) && prefs.getBoolean(EPISODE_RECORDED, false)) {
-                check(prefs.edit().putString(SCOPE, scope).putBoolean(PAUSED, false)
+                checkLocalStoreWrite(prefs.edit().putString(SCOPE, scope).putBoolean(PAUSED, false)
                     .remove(EPISODE_ID).remove(EPISODE_AT).remove(EPISODE_RECORDED).remove(EPISODE_NOTIFIED).commit())
                 true
             } else false
         }
         if (resumed) {
-            androidx.core.app.NotificationManagerCompat.from(context).cancel(47_005)
+            androidx.core.app.NotificationManagerCompat.from(context).cancel(STORAGE_PAUSE_NOTIFICATION_ID)
             runCatching { DistributionRestrictedRuntime.drainDirectBootSamples(context) }
                 .onFailure { Log.e("StorageAdmission", "Unable to enqueue resumed direct-boot drain", it) }
         }

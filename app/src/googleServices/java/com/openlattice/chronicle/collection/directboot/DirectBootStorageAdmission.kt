@@ -8,6 +8,7 @@ import android.util.Log
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
 import java.time.OffsetDateTime
 import java.util.UUID
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 
 /** Pause pre-unlock collection before the bounded encrypted buffer reaches its limit. */
 internal object DirectBootStorageAdmission {
@@ -63,7 +64,7 @@ internal object DirectBootStorageAdmission {
 
     fun clear(context: Context) = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
         val protectedContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) context.createDeviceProtectedStorageContext() else context
-        check(protectedContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        checkLocalStoreWrite(protectedContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().clear().commit()) { "Unable to erase direct-boot storage admission episode" }
         refreshSource = null
         lastCheckedAt = Long.MIN_VALUE
@@ -82,14 +83,14 @@ internal object DirectBootStorageAdmission {
         val owner = journal.currentOwner()?.let(DirectBootSampleBuffer::ownerKey).orEmpty()
         var wasPaused = prefs.getBoolean(PAUSED, false)
         if (wasPaused && (!prefs.contains(EPISODE_OWNER) || prefs.getString(EPISODE_OWNER, null) != owner)) {
-            check(prefs.edit().clear().commit())
+            checkLocalStoreWrite(prefs.edit().clear().commit())
             wasPaused = false
         }
         if (paused) {
             val episodeId = prefs.getString(EPISODE_ID, null)?.takeIf { wasPaused && it.isNotBlank() }
                 ?: UUID.randomUUID().toString()
             if (!wasPaused || prefs.getString(EPISODE_ID, null) != episodeId) {
-                check(prefs.edit().putBoolean(PAUSED, true).putString(EPISODE_ID, episodeId)
+                checkLocalStoreWrite(prefs.edit().putBoolean(PAUSED, true).putString(EPISODE_ID, episodeId)
                     .putString(EPISODE_AT, OffsetDateTime.now().toString())
                     .putString(EPISODE_OWNER, owner)
                     .putBoolean(EPISODE_RECORDED, false).commit())
@@ -98,13 +99,13 @@ internal object DirectBootStorageAdmission {
         if ((paused || wasPaused) && !prefs.getBoolean(EPISODE_RECORDED, false)) {
             val episodeId = requireNotNull(prefs.getString(EPISODE_ID, null))
             val occurredAt = prefs.getString(EPISODE_AT, null) ?: OffsetDateTime.now().toString().also {
-                check(prefs.edit().putString(EPISODE_AT, it).commit())
+                checkLocalStoreWrite(prefs.edit().putString(EPISODE_AT, it).commit())
             }
             journal.record("COLLECTION_PAUSED_STORAGE", 1, episodeId, OffsetDateTime.parse(occurredAt))
-            check(prefs.edit().putBoolean(EPISODE_RECORDED, true).commit())
+            checkLocalStoreWrite(prefs.edit().putBoolean(EPISODE_RECORDED, true).commit())
         }
         if (!paused && wasPaused) {
-            check(prefs.edit().putBoolean(PAUSED, false).remove(EPISODE_ID)
+            checkLocalStoreWrite(prefs.edit().putBoolean(PAUSED, false).remove(EPISODE_ID)
                 .remove(EPISODE_AT).remove(EPISODE_RECORDED).remove(EPISODE_OWNER).commit())
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N ||
                 context.getSystemService(UserManager::class.java)?.isUserUnlocked == true) {

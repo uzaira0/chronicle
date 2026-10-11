@@ -1,5 +1,8 @@
 package com.openlattice.chronicle.collection.state
 
+import android.Manifest
+import android.app.Application
+import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.layout.TestStores
@@ -17,6 +20,8 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 
 /** One low-storage pause is one diagnostic, even across a crash between persisting and recording. */
 @RunWith(RobolectricTestRunner::class)
@@ -26,7 +31,11 @@ class StoragePauseEpisodeTest {
     private val low = LOCAL_STORAGE_RESERVE_BYTES - 1
     private val enough = LOCAL_STORAGE_RESERVE_BYTES
 
-    @Before fun setUp() = TestStores.install(context, enrolled = true)
+    @Before fun setUp() {
+        TestStores.install(context, enrolled = true)
+        ResearchPersistenceGate.resetAfterLocalStoreRecovery()
+        onPersistenceWorker { ResearchPersistenceGate.initialize(context) }
+    }
 
     private fun episodeId() = prefs.getString("collection_storage_pause_episode_id", null)
 
@@ -48,6 +57,20 @@ class StoragePauseEpisodeTest {
 
         assertNotEquals(first, episodeId())
         assertEquals(2, pauses())
+    }
+
+    @Config(sdk = [36])
+    @Test fun noticeDeniedByPermissionIsPostedOnceAfterGrant() {
+        val app = context as Application
+        val posted = { shadowOf(context.getSystemService(NotificationManager::class.java)).allNotifications.size }
+        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertFalse(StorageAdmission.allowed(context, low))
+        assertEquals(0, posted())
+
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertFalse(StorageAdmission.allowed(context, low))
+        assertFalse(StorageAdmission.allowed(context, low))
+        assertEquals(1, posted())
     }
 
     @Test fun episodePersistedBeforeACrashIsRecordedOnce() {

@@ -34,7 +34,8 @@ public class LifecycleEventSink private constructor(
         storageQueue: StorageQueue,
         log: CollectionLog = CollectionLog.LOGCAT,
         persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
-    ) : this(UsageEventSink(storageQueue, log, persistenceGuard))
+        writeEntries: (List<QueueEntry>) -> Unit = storageQueue::insertEntries,
+    ) : this(UsageEventSink(storageQueue, log, persistenceGuard, writeEntries = writeEntries))
 
     public fun captureAdmission(): CollectionPersistenceGuard = delegate.captureAdmission()
 
