@@ -172,7 +172,8 @@ object CollectionConsentCopy {
         CollectionModuleId.INTERACTION_EVENTS to ModuleTemplate(
             label = "Interaction Events",
             whatItCollects = listOf(
-                "Where on the screen you tap, scroll, or move focus: the on-screen bounds of the element you interact with, and a derived screen region",
+                "Where on the screen you tap, scroll, or move focus: the on-screen bounds of the element you interact with, and a derived " +
+                    "screen region",
                 "The kind of element you interact with, and which app is open",
             ),
             whatItDoesNotCollect = listOf(

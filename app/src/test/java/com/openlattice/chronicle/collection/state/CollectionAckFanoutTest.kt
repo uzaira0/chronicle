@@ -67,7 +67,8 @@ class CollectionAckFanoutTest {
             assertEquals(ConsentTrigger.PARTICIPANT_TOGGLE, acknowledgment.trigger)
             assertEquals(acknowledgedAt, acknowledgment.acknowledgedAt)
             assertEquals(7, acknowledgment.settingsVersion)
-            assertEquals("${com.openlattice.chronicle.BuildConfig.VERSION_NAME} (${com.openlattice.chronicle.BuildConfig.VERSION_CODE})", acknowledgment.appVersion)
+            assertEquals("${com.openlattice.chronicle.BuildConfig.VERSION_NAME} (${com.openlattice.chronicle.BuildConfig.VERSION_CODE})",
+                acknowledgment.appVersion)
         }
     }
 
@@ -113,7 +114,7 @@ class CollectionAckFanoutTest {
             acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
             report = { server, _, _ ->
                 attempted += server.id
-                if (server.id == 2L) throw IllegalStateException("server failed")
+                if (server.id == 2L) error("server failed")
             },
             onFailure = { server, _ -> failures += server.id },
         )
@@ -285,7 +286,7 @@ class CollectionAckFanoutTest {
             report = { server, _, acknowledgment ->
                 attempted += server.id
                 assertTrue(acknowledgment.acknowledgedModules.isNotEmpty())
-                if (server.id == 2L) throw IllegalStateException("server failed")
+                if (server.id == 2L) error("server failed")
             },
             onFailure = { server, _ -> failures += server.id },
         )
@@ -294,6 +295,31 @@ class CollectionAckFanoutTest {
         assertEquals(listOf(1L, 2L), attempted)
         assertEquals(listOf(2L), failures)
         assertEquals(setOf(pending[0].stableKey()), result.removedStableKeys)
+    }
+
+    @Test fun failedOlderDecisionDefersNewerDecisionForTheSameEnrollment() {
+        assumeTestServerHostTrusted()
+        val destination = server(1)
+        val accepted = PendingCollectionAckRecord.from(destination,
+            setOf(CollectionModuleId.BATTERY_TELEMETRY), emptySet(), trigger = ConsentTrigger.PARTICIPANT_TOGGLE,
+            acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"))
+        val declined = accepted.copy(acceptedModuleIds = emptyList(),
+            declinedModuleIds = accepted.acceptedModuleIds, acknowledgedAt = "2026-07-02T12:35:56Z")
+        val pending = listOf(accepted, declined)
+        val delivered = mutableListOf<CollectionAcknowledgment>()
+
+        val failed = CollectionLoopCoordinator.retryPendingCollectionAcks(pending, listOf(destination), report = { _, _, ack ->
+            if (ack.acknowledgedModules.isNotEmpty()) throw java.io.IOException("offline")
+            delivered += ack
+        })
+        assertFalse(failed.allAttemptedSucceeded)
+        assertTrue(failed.removedStableKeys.isEmpty())
+        assertTrue(delivered.isEmpty())
+
+        val retry = CollectionLoopCoordinator.retryPendingCollectionAcks(pending, listOf(destination), report = { _, _, ack -> delivered += ack })
+        assertTrue(retry.allAttemptedSucceeded)
+        assertEquals(pending.map { it.toAcknowledgmentOrNull() }, delivered)
+        assertEquals(pending.map { it.stableKey() }.toSet(), retry.removedStableKeys)
     }
 
     @Test

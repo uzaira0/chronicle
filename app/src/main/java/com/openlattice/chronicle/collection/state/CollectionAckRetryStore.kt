@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.collection.state
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
@@ -189,10 +190,13 @@ class CollectionAckRetryQueue(
                                                record: PendingCollectionAckRecord) = synchronized(mutationLock) {
             val prefs = EncryptedPrefsHelper.getEncryptedPrefs(context)
             val ownerKey = ResearchErasureFence.enrollmentKey(server)
-            val key = "settings_ack_version:" + java.util.UUID.nameUUIDFromBytes(ownerKey.toByteArray())
+                // Settings acknowledgment preference key identifies the same enrollment on replay, not a credential.
+                // nosemgrep: chronicle-uuid-from-string
+            val key = "settings_ack_version:" + java.util.UUID.nameUUIDFromBytes(ownerKey.toByteArray(
+                ))
             if (prefs.getInt(key, -1) == record.settingsVersion) return@synchronized
             val pending = of(context).load()
-            check(prefs.edit().putString(PREF_PENDING_COLLECTION_ACKS, JsonSerializer.toJson(pending + record))
+            checkLocalStoreWrite(prefs.edit().putString(PREF_PENDING_COLLECTION_ACKS, JsonSerializer.toJson(pending + record))
                 .putInt(key, requireNotNull(record.settingsVersion)).commit())
         }
 
@@ -222,8 +226,6 @@ private class EncryptedPrefsCollectionAckRetryPersistence(
         } else {
             editor.putString(PREF_PENDING_COLLECTION_ACKS, JsonSerializer.toJson(records))
         }
-        if (!editor.commit()) {
-            throw IllegalStateException("Failed to persist pending collection acknowledgments")
-        }
+        checkLocalStoreWrite(editor.commit()) { "Failed to persist pending collection acknowledgments" }
     }
 }

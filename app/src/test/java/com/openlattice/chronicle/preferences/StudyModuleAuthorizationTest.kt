@@ -4,6 +4,8 @@ import com.openlattice.chronicle.api.EnrollmentPreviewResponse
 import com.openlattice.chronicle.api.MobileEnrollmentManifest
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
+import com.openlattice.chronicle.collection.state.CollectionModuleState
+import com.openlattice.chronicle.collection.state.ParticipantDecision
 import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.storage.UploadServerEntity
 import org.junit.Assert.assertFalse
@@ -13,9 +15,35 @@ import org.junit.Test
 class StudyModuleAuthorizationTest {
 
     @Test
+    fun currentSettingsCanEnableAnEnrollmentDisabledModuleOnlyAfterAcceptance() {
+        val module = CollectionModuleId.USER_IDENTIFICATION
+        val preview = previewWith(module, enabled = false)
+        val server = server(preview)
+        val current = acceptedIdentificationState(preview).copy(decision = ParticipantDecision.UNDECIDED,
+            appliedVersion = preview.manifest.collectionSettings.settingsVersion + 1)
+        assertFalse(configuredStudyModuleEnabled(server, preview.manifest.studyId,
+            preview.manifest.participantId, module, current))
+        val accepted = current.copy(decision = ParticipantDecision.ACCEPTED)
+        assertTrue(configuredStudyModuleEnabled(server, preview.manifest.studyId,
+            preview.manifest.participantId, module, accepted))
+        assertFalse(configuredStudyModuleEnabled(server, preview.manifest.studyId,
+            preview.manifest.participantId, module, accepted.copy(serverEnabled = false)))
+        assertFalse(configuredStudyModuleEnabled(server, preview.manifest.studyId,
+            preview.manifest.participantId, module, accepted.copy(appliedVersion = 0)))
+        assertFalse(configuredStudyModuleEnabled(server, preview.manifest.studyId,
+            preview.manifest.participantId, module,
+            accepted.copy(appliedVersion = preview.manifest.collectionSettings.settingsVersion)))
+        assertFalse(configuredStudyModuleEnabled(server.copy(participantId = "other-participant"),
+            preview.manifest.studyId, preview.manifest.participantId, module, accepted))
+    }
+
+    @Test
     fun enabledManifestModuleAuthorizesOnlyItsExactEnrollmentIdentity() {
         val preview = previewWith(CollectionModuleId.USER_IDENTIFICATION, enabled = true)
         val server = server(preview)
+        val accepted = acceptedIdentificationState(preview)
+        assertFalse(configuredStudyModuleEnabled(server, preview.manifest.studyId,
+            preview.manifest.participantId, CollectionModuleId.USER_IDENTIFICATION))
 
         assertTrue(
             configuredStudyModuleEnabled(
@@ -23,6 +51,7 @@ class StudyModuleAuthorizationTest {
                 preview.manifest.studyId,
                 preview.manifest.participantId,
                 CollectionModuleId.USER_IDENTIFICATION,
+                accepted,
             ),
         )
         assertFalse(
@@ -31,6 +60,7 @@ class StudyModuleAuthorizationTest {
                 preview.manifest.studyId,
                 preview.manifest.participantId,
                 CollectionModuleId.USER_IDENTIFICATION,
+                accepted,
             ),
         )
     }
@@ -39,6 +69,7 @@ class StudyModuleAuthorizationTest {
     fun disabledMissingCorruptOrIncompleteManifestFailsClosed() {
         val preview = previewWith(CollectionModuleId.USER_IDENTIFICATION, enabled = false)
         val server = server(preview)
+        val accepted = acceptedIdentificationState(preview)
 
         assertFalse(
             configuredStudyModuleEnabled(
@@ -46,6 +77,7 @@ class StudyModuleAuthorizationTest {
                 preview.manifest.studyId,
                 preview.manifest.participantId,
                 CollectionModuleId.USER_IDENTIFICATION,
+                accepted,
             ),
         )
         listOf(
@@ -61,6 +93,7 @@ class StudyModuleAuthorizationTest {
                     preview.manifest.studyId,
                     preview.manifest.participantId,
                     CollectionModuleId.USER_IDENTIFICATION,
+                    accepted,
                 ),
             )
         }
@@ -94,6 +127,11 @@ class StudyModuleAuthorizationTest {
             ),
         )
     }
+
+    private fun acceptedIdentificationState(preview: EnrollmentPreviewResponse) =
+        CollectionModuleState.initial(CollectionModuleId.USER_IDENTIFICATION).copy(
+            serverEnabled = true, decision = ParticipantDecision.ACCEPTED,
+            appliedVersion = preview.manifest.collectionSettings.settingsVersion)
 
     private fun server(preview: EnrollmentPreviewResponse): UploadServerEntity = UploadServerEntity(
         name = preview.manifest.studyTitle,

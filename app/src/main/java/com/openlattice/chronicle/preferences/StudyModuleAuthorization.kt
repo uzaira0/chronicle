@@ -2,6 +2,9 @@ package com.openlattice.chronicle.preferences
 
 import com.openlattice.chronicle.api.MobileEnrollmentManifest
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
+import com.openlattice.chronicle.collection.state.CollectionModuleState
+import com.openlattice.chronicle.collection.state.CollectionStateMachine
 import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.storage.UploadServerEntity
 import java.net.URI
@@ -9,14 +12,15 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * Proves that an Android module is inside the exact authenticated scope accepted at enrollment.
- * The local participant preference can narrow this scope, but can never expand it.
+ * Verifies enrollment evidence before using the settings state applied for that enrollment.
+ * Consent-gated modules also require the participant's current decision.
  */
 internal fun configuredStudyModuleEnabled(
     server: UploadServerEntity?,
     studyId: UUID,
     participantId: String,
     moduleId: CollectionModuleId,
+    currentState: CollectionModuleState? = null,
 ): Boolean {
     if (server == null || !server.enabled || !server.enrollmentSetupComplete) return false
     if (server.studyId != studyId.toString() || server.participantId != participantId) return false
@@ -33,7 +37,17 @@ internal fun configuredStudyModuleEnabled(
         manifest.participantPolicy.version != disclosureVersion ||
         canonicalHttpsOrigin(manifest.serverOrigin) != canonicalHttpsOrigin(server.url)
     ) return false
-    return moduleId in manifest.collectionSettings.effectiveEnabledModuleIds()
+    val enabledAtEnrollment = moduleId in manifest.collectionSettings.effectiveEnabledModuleIds()
+    val consentGated = moduleId in CollectionStateMachine.ACK_GATED_MODULES
+    if (currentState != null) {
+        return moduleId in AndroidDataCollectionSetting.androidSupportedModuleIds &&
+            currentState.moduleId == moduleId &&
+            currentState.appliedVersion >= manifest.collectionSettings.settingsVersion &&
+            (currentState.appliedVersion > manifest.collectionSettings.settingsVersion || enabledAtEnrollment) &&
+            (if (consentGated) currentState.collectsWhenEnrolled
+            else currentState.serverEnabled)
+    }
+    return enabledAtEnrollment && !consentGated
 }
 
 private fun canonicalHttpsOrigin(raw: String): String? {

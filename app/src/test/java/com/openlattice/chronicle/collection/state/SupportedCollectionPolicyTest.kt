@@ -9,6 +9,7 @@ import com.openlattice.chronicle.collection.CollectionModuleSetting
 import com.openlattice.chronicle.collection.NetworkPolicy
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Assume.assumeTrue
 
 class SupportedCollectionPolicyTest {
     private fun minimalPlaySetting(
@@ -45,7 +46,7 @@ class SupportedCollectionPolicyTest {
 
     @Test
     fun publicReleaseRejectsDisabledMandatoryUploadDiagnostics() {
-        if (BuildConfig.DISTRIBUTION_CHANNEL !in setOf("PLAY", "AMAZON")) return
+        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL in setOf("PLAY", "AMAZON"))
         val result = runCatching {
             requireSupportedCollectionPolicies(
                 minimalPlaySetting(
@@ -60,7 +61,7 @@ class SupportedCollectionPolicyTest {
 
     @Test
     fun playReleaseRejectsEveryModuleOutsideUsageBasicTelemetryAndUnlockIdentification() {
-        if (BuildConfig.DISTRIBUTION_CHANNEL != "PLAY") return
+        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL == "PLAY")
         val supported = setOf(
             CollectionModuleId.USAGE_EVENTS,
             CollectionModuleId.IN_APP_ACTIVITY_CLASS,

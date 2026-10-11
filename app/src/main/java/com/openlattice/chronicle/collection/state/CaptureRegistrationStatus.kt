@@ -2,17 +2,28 @@ package com.openlattice.chronicle.collection.state
 
 import android.content.Context
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.services.upload.*
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordAccessEpisodes
 import com.openlattice.chronicle.storage.UploadServerEntity
 
 /** Persisted provider failures supplement OS permission checks; each recovery ends its episode. */
 internal object CaptureRegistrationStatus {
     private const val PREFS = "capture_registration_status"
+    private val modules = setOf(CollectionModuleId.SLEEP, CollectionModuleId.ACTIVITY_RECOGNITION)
+    private fun episodePrefs(context: Context, module: CollectionModuleId) =
+        context.getSharedPreferences("capture_registration_episode_${module.id}", Context.MODE_PRIVATE)
+
+    fun clear(context: Context) {
+        (listOf(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)) + modules.map { episodePrefs(context, it) }).forEach {
+            com.openlattice.chronicle.storage.checkLocalStoreWrite(it.edit().clear().commit())
+        }
+    }
     fun failedModules(context: Context): Set<CollectionModuleId> {
         val owner = ResearchPersistenceGate.captureOwner(context) ?: return emptySet()
         val scope = ResearchErasureFence.enrollmentKey(owner)
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return setOf(CollectionModuleId.SLEEP, CollectionModuleId.ACTIVITY_RECOGNITION)
+        return modules
             .filterTo(linkedSetOf()) { prefs.getString(it.id, null) == scope }
     }
     fun recordOutcome(context: Context, owner: UploadServerEntity?, module: CollectionModuleId, success: Boolean) {
@@ -25,7 +36,7 @@ internal object CaptureRegistrationStatus {
             }.commit())
             val family = if (module == CollectionModuleId.SLEEP) LocalUploadModuleFamily.SLEEP else LocalUploadModuleFamily.ACTIVITY_RECOGNITION
             recordAccessEpisodes(LocalUploadDiagnosticsStore.of(context),
-                context.getSharedPreferences("capture_registration_episode_${module.id}", Context.MODE_PRIVATE),
+                episodePrefs(context, module),
                 "${owner.studyId}:${owner.participantId}", if (success) emptySet() else setOf(family), setOf(family))
             true
         }

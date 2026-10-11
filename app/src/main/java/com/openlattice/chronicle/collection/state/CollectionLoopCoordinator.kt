@@ -6,10 +6,8 @@ import android.content.Intent
 import android.hardware.SensorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.R
-import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.android.AndroidSensorSetting
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
@@ -46,14 +44,14 @@ import com.openlattice.chronicle.services.notifications.CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.userIdentificationMayRun
 import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
+import com.openlattice.chronicle.services.notifications.postNotificationIfPermitted
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
-import com.openlattice.chronicle.services.upload.completeServerForIdentity
+import com.openlattice.chronicle.services.upload.resolveServerForIdentity
 import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServer
 import com.openlattice.chronicle.services.upload.triggerImmediateUpload
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
-import com.openlattice.chronicle.utils.Utils
 import java.time.OffsetDateTime
 import java.util.UUID
 
@@ -277,6 +275,7 @@ class CollectionLoopCoordinator(context: Context) {
         fun retryPendingCollectionAcks(
             pending: List<PendingCollectionAckRecord>,
             servers: List<UploadServerEntity>,
+            provisionalEnrollmentServer: UploadServerEntity? = null,
             report: (server: UploadServerEntity, studyId: UUID, acknowledgment: CollectionAcknowledgment) -> Unit,
             onFailure: (server: UploadServerEntity, error: Exception) -> Unit = { _, _ -> },
             onDiscard: (
@@ -286,6 +285,7 @@ class CollectionLoopCoordinator(context: Context) {
         ): CollectionAckRetryResult {
             if (pending.isEmpty()) return CollectionAckRetryResult(emptySet(), true)
             val removedStableKeys = linkedSetOf<String>()
+            val deferredServerIds = mutableSetOf<Long>()
             var allAttemptedSucceeded = true
 
             pending.forEach { record ->
@@ -324,6 +324,10 @@ class CollectionLoopCoordinator(context: Context) {
                     removedStableKeys += record.stableKey()
                     return@forEach
                 }
+                if (server.id in deferredServerIds) {
+                    allAttemptedSucceeded = false
+                    return@forEach
+                }
 
                 val studyId = runCatching { UUID.fromString(server.studyId) }.getOrNull()
                 if (studyId == null) {
@@ -332,11 +336,13 @@ class CollectionLoopCoordinator(context: Context) {
                     return@forEach
                 }
                 val participantId = record.participantId ?: server.participantId
-                val eligible = completeServerForIdentity(server, studyId, participantId)
+                val eligible = resolveServerForIdentity(server, studyId, participantId,
+                    requireSetupComplete = server != provisionalEnrollmentServer).server
                 if (eligible == null) {
                     // The exact enrollment still exists, but is not currently safe to contact
                     // (provisional/disabled/non-canonical/credential-incomplete). Retain it.
                     allAttemptedSucceeded = false
+                    deferredServerIds += server.id
                     return@forEach
                 }
                 try {
@@ -345,6 +351,7 @@ class CollectionLoopCoordinator(context: Context) {
                 } catch (e: Exception) {
                     onFailure(eligible, e)
                     allAttemptedSucceeded = false
+                    deferredServerIds += server.id
                 }
             }
 
@@ -489,7 +496,8 @@ class CollectionLoopCoordinator(context: Context) {
     ): Boolean {
         var applied = false
         try {
-            ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation("settings-apply", ResearchErasureFence.enrollmentKey(expected), ResearchErasureFence.enrollmentKey(expected)), completed = { applied }) {
+            ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.SETTINGS_APPLY,
+                ResearchErasureFence.enrollmentKey(expected), ResearchErasureFence.enrollmentKey(expected)), completed = { applied }) {
                 val current = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
                 val fence = ResearchErasureFence(appContext)
                 if (current == null || ResearchErasureFence.enrollmentKey(current) != ResearchErasureFence.enrollmentKey(expected) ||
@@ -505,7 +513,8 @@ class CollectionLoopCoordinator(context: Context) {
                 val transitions = CollectionStateMachine.reconcile(previous, resolved, fetched.settingsVersion)
                 val discarded = transitions.filter { it.disposition == CollectionDataDisposition.DISCARD_AND_STOP }
                     .map { it.moduleId }.toSet()
-                if (discarded.isNotEmpty()) fence.erase(discarded, states = transitions.map { it.newState }, ownerKey = ResearchErasureFence.enrollmentKey(expected))
+                if (discarded.isNotEmpty()) fence.erase(discarded, states = transitions.map { it.newState }, ownerKey =
+                    ResearchErasureFence.enrollmentKey(expected))
                 else fence.settingsChanged()
                 DistributionRestrictedRuntime.markDirectBootSensorErasures(appContext,
                     discarded.mapNotNull { SensorCollectionModules.sensorTypeOf(it)?.name }.toSet())
@@ -543,7 +552,9 @@ class CollectionLoopCoordinator(context: Context) {
     private fun currentErasureOwner(): String? = ChronicleDb.getInstance(appContext)
         .uploadServerDao().getConfiguredServer()?.let(ResearchErasureFence::enrollmentKey)
 
-    internal fun replayPendingErasures() = ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation("erasure-replay", ownerKey = ResearchPersistenceGate.currentOwnerKey()), completed = { !ResearchErasureFence(appContext).hasPendingErasures() }) {
+    internal fun replayPendingErasures() = ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(
+        ResearchPersistenceGate.PrivacyOperationKind.ERASURE_REPLAY, ownerKey = ResearchPersistenceGate.currentOwnerKey()), completed = {
+        !ResearchErasureFence(appContext).hasPendingErasures() }) {
         val fence = ResearchErasureFence(appContext)
         fence.replayRecoveryErasure(appContext)
         fence.pending().forEach { module ->
@@ -626,7 +637,8 @@ class CollectionLoopCoordinator(context: Context) {
         val store = CollectionLoopStore.of(appContext)
         lateinit var result: DecisionResult
         var preconditionPassed = false
-        ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation("participant-decision", decisions.toSortedMap(compareBy { it.id }).toString(), ResearchPersistenceGate.currentOwnerKey()),
+        ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.PARTICIPANT_DECISION,
+            decisions.toSortedMap(compareBy { it.id }).toString(), ResearchPersistenceGate.currentOwnerKey()),
             completed = { preconditionPassed },
             resolved = {
                 val saved = store.loadAll()
@@ -636,11 +648,11 @@ class CollectionLoopCoordinator(context: Context) {
             if (!precondition()) return@stop
             preconditionPassed = true
             result = CollectionStateMachine.decide(store.loadAll(), decisions, System.currentTimeMillis())
-            DistributionRestrictedRuntime.markDirectBootSensorErasures(appContext,
-                result.deactivated.mapNotNull { SensorCollectionModules.sensorTypeOf(it)?.name }.toSet())
             val fence = ResearchErasureFence(appContext)
             if (result.deactivated.isNotEmpty()) fence.erase(result.deactivated, states = result.newStates.values, ownerKey = currentErasureOwner())
             else fence.settingsChanged()
+            DistributionRestrictedRuntime.markDirectBootSensorErasures(appContext,
+                result.deactivated.mapNotNull { SensorCollectionModules.sensorTypeOf(it)?.name }.toSet())
             fence.accepted(result.activated)
             store.save(result.newStates.values)
             // A participant turning a module off is a privacy decision, not a researcher-selected
@@ -734,7 +746,8 @@ class CollectionLoopCoordinator(context: Context) {
         val expected = expectedEnrollment ?: ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
             ?: return false
         var applied = false
-        ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation("settings-apply", ResearchErasureFence.enrollmentKey(expected), ResearchErasureFence.enrollmentKey(expected)), completed = { applied }) {
+        ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.SETTINGS_APPLY,
+            ResearchErasureFence.enrollmentKey(expected), ResearchErasureFence.enrollmentKey(expected)), completed = { applied }) {
             val current = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
             if (current == null || ResearchErasureFence.enrollmentKey(current) != ResearchErasureFence.enrollmentKey(expected) ||
                 EnrollmentSettings(appContext).getParticipationStatus() != ParticipationStatus.ENROLLED ||
@@ -922,7 +935,8 @@ class CollectionLoopCoordinator(context: Context) {
      */
     private fun applyDisposition(moduleId: CollectionModuleId, disposition: CollectionDataDisposition) {
         val operation = if (disposition == CollectionDataDisposition.DISCARD_AND_STOP)
-            ResearchPersistenceGate.PrivacyOperation("module-discard", moduleId.id, currentErasureOwner()) else null
+            ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.MODULE_DISCARD, moduleId.id, currentErasureOwner(
+                )) else null
         ResearchPersistenceGate.stop(operation) {
             if (disposition == CollectionDataDisposition.DISCARD_AND_STOP) {
                 val fence = ResearchErasureFence(appContext)
@@ -1006,7 +1020,6 @@ class CollectionLoopCoordinator(context: Context) {
             is DispositionAction.ClearSensor -> ResearchPersistenceGate.stop {
                 UploadQueueSingleFlight.withExclusiveMutation {
                     Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': dropping only ${action.sensorType} rows")
-                    DistributionRestrictedRuntime.markDirectBootSensorErasures(appContext, setOf(action.sensorType))
                     val ramErased = com.openlattice.chronicle.collection.sink.SensorSampleWriter.discardSensorSamples(action.sensorType)
                     val db = ChronicleDb.getInstance(appContext)
                     db.runInTransaction {
@@ -1045,33 +1058,12 @@ class CollectionLoopCoordinator(context: Context) {
         servers: List<UploadServerEntity> = enabledServers(),
         provisionalEnrollmentServer: UploadServerEntity? = null,
     ): DecisionReportOutcome {
-        val operation = {
+        val operation = { UploadQueueSingleFlight.withExclusiveMutation {
             val admittedServers = if (provisionalEnrollmentServer == null) enabledServers() else servers
             val acknowledgedAt = OffsetDateTime.now()
-            val failedReports = mutableListOf<PendingCollectionAckRecord>()
-            val succeeded = reportCollectionAckToServers(
-                servers = admittedServers,
-                accepted = accepted,
-                declined = declined,
-                unavailable = unavailable,
-                trigger = trigger,
-                acknowledgedAt = acknowledgedAt,
-                settingsVersion = settingsVersion,
-                report = { server, studyId, acknowledgment ->
-                    UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride).reportCollectionAck(
-                        studyId,
-                        server.participantId,
-                        server.sourceDeviceId,
-                        server.apiKey,
-                        acknowledgment,
-                    )
-                },
-                onFailure = { server, error ->
-                    // The local decision is already persisted; report partial failure so callers can
-                    // surface it without blocking local consent state.
-                    Log.w(TAG, "Failed to report collection decision to '${server.name}'", error)
-                    failedReports += PendingCollectionAckRecord.from(
-                        server = server,
+            if (admittedServers.isEmpty()) return@withExclusiveMutation DecisionReportOutcome(false, false)
+            CollectionAckRetryQueue.of(appContext).enqueue(admittedServers.map { server ->
+                    PendingCollectionAckRecord.from(server = server,
                         accepted = accepted,
                         declined = declined,
                         unavailable = unavailable,
@@ -1079,25 +1071,12 @@ class CollectionLoopCoordinator(context: Context) {
                         acknowledgedAt = acknowledgedAt,
                         settingsVersion = settingsVersion,
                     )
-                },
-            )
-            // A delivery is durable only if it succeeded or every failed destination was captured
-            // before the lifecycle lease is released. A withdrawal cannot return and then have a
-            // failed request resurrect its enrollment-bound retry record.
-            var retryDurable = succeeded
-            if (failedReports.isNotEmpty()) {
-                try {
-                    CollectionAckRetryQueue.of(appContext).enqueue(failedReports)
-                    retryDurable = true
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to persist pending collection decision report", e)
-                }
-            }
-            DecisionReportOutcome(allDelivered = succeeded, retryDurable = retryDurable)
-        }
+                })
+            DecisionReportOutcome(allDelivered = retryPendingCollectionAcks(provisionalEnrollmentServer), retryDurable = true)
+        } }
         return try {
             val admitted = if (provisionalEnrollmentServer == null) {
-                ResearchPersistenceGate.runIfActive(appContext, operation)
+                ResearchPersistenceGate.runIfEnrolled(appContext, operation)
             } else {
                 ResearchPersistenceGate.runIfExpectedEnrollment(
                     appContext,
@@ -1134,7 +1113,7 @@ class CollectionLoopCoordinator(context: Context) {
         emptyList()
     }
 
-    private fun retryPendingCollectionAcks(): Boolean {
+    private fun retryPendingCollectionAcks(provisionalEnrollmentServer: UploadServerEntity? = null): Boolean {
         val queue = try {
             CollectionAckRetryQueue.of(appContext)
         } catch (e: Exception) {
@@ -1142,15 +1121,16 @@ class CollectionLoopCoordinator(context: Context) {
             return false
         }
         return try {
-            ResearchPersistenceGate.runIfActive(appContext) {
+            val operation = { UploadQueueSingleFlight.withExclusiveMutation {
                 // Load under the enrollment read lease. Withdrawal clears this durable queue
                 // under the write side of the same barrier, so a predecessor record can never
                 // remain only in memory and cross a completed withdrawal/re-enrollment boundary.
                 val pending = queue.load()
-                if (pending.isEmpty()) return@runIfActive true
+                if (pending.isEmpty()) return@withExclusiveMutation true
                 val result = CollectionLoopCoordinator.retryPendingCollectionAcks(
                     pending = pending,
                     servers = allServers(),
+                    provisionalEnrollmentServer = provisionalEnrollmentServer,
                     report = { server, studyId, acknowledgment ->
                         UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
                             .reportCollectionAck(
@@ -1160,6 +1140,9 @@ class CollectionLoopCoordinator(context: Context) {
                                 server.apiKey,
                                 acknowledgment,
                             )
+                        acknowledgment.settingsVersion?.let {
+                            ChronicleDb.getInstance(appContext).uploadQueueEvidenceDao().releaseHeldThrough(it)
+                        }
                     },
                     onFailure = { server, error ->
                         Log.w(TAG, "Failed to retry collection decision report to '${server.name}'", error)
@@ -1170,7 +1153,9 @@ class CollectionLoopCoordinator(context: Context) {
                 )
                 queue.removeByStableKeys(result.removedStableKeys)
                 result.allAttemptedSucceeded
-            } ?: false
+            } }
+            if (provisionalEnrollmentServer == null) ResearchPersistenceGate.runIfEnrolled(appContext, operation) ?: false
+            else ResearchPersistenceGate.runIfExpectedEnrollment(appContext, provisionalEnrollmentServer, operation) ?: false
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update pending collection decision store", e)
             false
@@ -1210,19 +1195,20 @@ class CollectionLoopCoordinator(context: Context) {
     }
 
     /** Whether any per-sensor module currently collects (server-enabled AND acknowledged). */
-    private fun anySensorCollects(store: CollectionLoopStore): Boolean =
-        SensorCollectionModules.sensorModuleIds.any { store.collects(it) }
+    internal fun anySensorCollects(): Boolean =
+        ResearchPersistenceGate.isActiveEnrollment(appContext) &&
+            SensorCollectionModules.sensorModuleIds.any { CollectionLoopStore.of(appContext).collects(it) }
 
     /**
      * Starts the one shared sensor foreground service if any per-sensor module collects, and
      * stops it otherwise. Reads the freshly-persisted gate state.
      */
-    private fun updateSensorService() {
+    internal fun updateSensorService() {
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
             SensorSettings(appContext).clear()
             return
         }
-        if (anySensorCollects(CollectionLoopStore.of(appContext))) {
+        if (anySensorCollects()) {
             if (!DistributionRestrictedRuntime.tryStartHardwareSensors(appContext)) {
                 Log.i(TAG, "Sensor foreground service start deferred; collection settings sync remains applied")
             }
@@ -1292,7 +1278,6 @@ class CollectionLoopCoordinator(context: Context) {
     }
 
     private fun postAckNeededNotification(modules: Set<CollectionModuleId>, mandatory: Boolean) {
-        Utils.createNotificationChannel(appContext)
         // Deep-link to the Data Sharing tab, where each pending module is reviewed and decided
         // individually — NOT the retired all-at-once acknowledgment screen.
         val intent = Intent(appContext, com.openlattice.chronicle.MainActivity::class.java)
@@ -1315,11 +1300,10 @@ class CollectionLoopCoordinator(context: Context) {
             .setAutoCancel(true)
             .setContentIntent(pending)
             .build()
-        notifySafely(NOTIFICATION_ID_ACK, notification)
+        postNotificationIfPermitted(appContext, NOTIFICATION_ID_ACK, notification)
     }
 
     private fun postInformationalNotice(nowRequired: Boolean, nowOptional: Boolean) {
-        Utils.createNotificationChannel(appContext)
         val intent = Intent(appContext, com.openlattice.chronicle.MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             .putExtra(com.openlattice.chronicle.MainActivity.EXTRA_SELECT_TAB, R.id.nav_data_sharing)
@@ -1342,11 +1326,10 @@ class CollectionLoopCoordinator(context: Context) {
             .setAutoCancel(true)
             .setContentIntent(pending)
             .build()
-        notifySafely(NOTIFICATION_ID_INFORM, notification)
+        postNotificationIfPermitted(appContext, NOTIFICATION_ID_INFORM, notification)
     }
 
     private fun postDisabledNotification(disabled: List<ModuleTransition>) {
-        Utils.createNotificationChannel(appContext)
         // Approved copy 2026-06-04 — docs/COLLECTION-LOOP-CLOSURE-DESIGN.md Appendix B
         // ("Disabled" notification). Fires only for disable transitions (see dispatch).
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
@@ -1355,17 +1338,8 @@ class CollectionLoopCoordinator(context: Context) {
             .setContentText(appContext.getString(R.string.notif_option_off))
             .setAutoCancel(true)
             .build()
-        notifySafely(NOTIFICATION_ID_SCOPE, notification)
-    }
-
-    private fun notifySafely(id: Int, notification: android.app.Notification) {
-        try {
-            NotificationManagerCompat.from(appContext).notify(id, notification)
-        } catch (e: SecurityException) {
-            // POST_NOTIFICATIONS not granted — the scope change is still applied; the user
-            // will see pending modules in-app on next open.
-            Log.w(TAG, "Notification suppressed (permission not granted)", e)
-        }
+        // Without the permission the scope change still applies; pending modules show in-app on next open.
+        postNotificationIfPermitted(appContext, NOTIFICATION_ID_SCOPE, notification)
     }
 }
 
