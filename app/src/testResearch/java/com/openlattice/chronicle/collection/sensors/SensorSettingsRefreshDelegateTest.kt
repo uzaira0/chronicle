@@ -4,7 +4,6 @@ import com.openlattice.chronicle.android.AndroidSensorSetting
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -50,9 +49,6 @@ class SensorSettingsRefreshDelegateTest {
 
         override fun enabledServers(): List<SensorSettingsGateway.Server> = servers
 
-        // Retired path — the availability-only refresh never calls this.
-        override fun fetchAndroidSensorSetting(server: SensorSettingsGateway.Server) = AndroidSensorSetting()
-
         override fun reportAvailability(
             server: SensorSettingsGateway.Server,
             requestedSensors: Set<AndroidSensorType>,
@@ -66,23 +62,11 @@ class SensorSettingsRefreshDelegateTest {
         }
     }
 
-    /** A fake settings store recording any write/clear (which must never happen). */
+    /** Read-only coordinator settings for the availability report. */
     private class FakeStore(
-        var current: AndroidSensorSetting? = null,
+        val current: AndroidSensorSetting? = null,
     ) : SensorSettingsStore {
-        var cleared = false
-        var saveCount = 0
         override fun read(): AndroidSensorSetting? = current
-        override fun isEffectivelyEnabled(): Boolean = current?.sensors?.isNotEmpty() ?: false
-        override fun save(setting: AndroidSensorSetting) {
-            saveCount++
-            current = setting
-        }
-
-        override fun clear() {
-            cleared = true
-            current = null
-        }
     }
 
     private fun delegate(gateway: FakeGateway, store: FakeStore) =
@@ -126,8 +110,6 @@ class SensorSettingsRefreshDelegateTest {
         val gateway = FakeGateway(servers = mutableListOf(server()))
         val store = FakeStore(current = accelSetting)
         delegate(gateway, store).refresh()
-        assertEquals("availability refresh must not write the sensor config", 0, store.saveCount)
-        assertFalse("availability refresh must not clear the sensor config", store.cleared)
         assertEquals("the coordinator-owned config is left intact", accelSetting, store.current)
     }
 

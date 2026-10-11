@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.UserManager
 import android.util.Log
 import com.openlattice.chronicle.BuildConfig
+import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
 import com.openlattice.chronicle.services.sensors.HardwareSensorService
 
@@ -41,14 +42,15 @@ class LockedBootReceiver : BroadcastReceiver() {
         }
 
         val snapshot = DirectBootSensorSnapshot(context)
-        if (!snapshot.isUsableFor(DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS)) {
+        val collectable = DistributionRestrictedRuntime.directBootCollectableSensors(context)
+        if (!snapshot.isUsableFor(DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS) || collectable.isEmpty()) {
             Log.i(TAG, "No usable direct-boot snapshot; not collecting before first unlock")
             return
         }
 
         Log.i(
             TAG,
-            "Locked boot: starting sensor collection for ${snapshot.collectableSensors().size} sensor(s) pre-unlock",
+            "Locked boot: starting sensor collection for ${collectable.size} sensor(s) pre-unlock",
         )
         HardwareSensorService.tryStartService(context)
     }

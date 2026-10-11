@@ -51,6 +51,14 @@ internal fun sharedUsageDisposition(
     }
 }
 
+internal fun eraseSharedUsageEvent(moduleId: CollectionModuleId, event: ExtractedUsageEvent): ExtractedUsageEvent? =
+    when (sharedUsageDisposition(moduleId, event)) {
+        SharedUsageDisposition.KEEP -> event
+        SharedUsageDisposition.ERASE -> null
+        SharedUsageDisposition.REDACT_ACTIVITY_CLASS -> event.copy(activityClass = null)
+        SharedUsageDisposition.REDACT_USER -> event.copy(user = "")
+    }
+
 /** Runs under the caller's exclusive queue mutation and Room transaction. */
 internal fun eraseSharedQueueModule(db: ChronicleDb, moduleId: CollectionModuleId) {
     val queue = db.queueEntryData()
@@ -69,29 +77,18 @@ internal fun eraseSharedQueueModule(db: ChronicleDb, moduleId: CollectionModuleI
                 val erased = mutableListOf<ExtractedUsageEvent>()
                 val kept = mutableListOf<ExtractedUsageEvent>()
                 originals.forEach { event ->
-                    when (sharedUsageDisposition(moduleId, event)) {
-                        SharedUsageDisposition.KEEP -> kept += event
-                        SharedUsageDisposition.ERASE -> erased += event
-                        SharedUsageDisposition.REDACT_USER -> {
-                            erased += event
-                            kept += event.copy(user = "")
-                        }
-                        SharedUsageDisposition.REDACT_ACTIVITY_CLASS -> {
-                            erased += event
-                            kept += event.copy(activityClass = null)
-                        }
-                    }
+                    val retained = eraseSharedUsageEvent(moduleId, event)
+                    if (retained != event) erased += event
+                    if (retained != null) kept += retained
                 }
                 if (erased.isNotEmpty()) {
                     recordPolicyErasureCountInTransaction(
                         db, erased.size.toLong(), LocalUploadModuleFamily.USAGE_LIFECYCLE,
                         LocalOperationalIssue.MODULE_POLICY_ERASED,
                     )
-                    queue.deleteEntry(entry)
-                    if (kept.isNotEmpty()) {
-                        queue.insertAllocatedEntries(listOf(QueueEntry(entry.writeTimestamp, entry.id,
-                            JsonSerializer.serializeQueueEntry(ChronicleData(kept)))))
-                    }
+                    if (kept.isEmpty()) queue.deleteEntry(entry)
+                    else queue.updateData(entry.writeTimestamp, entry.id,
+                        JsonSerializer.serializeQueueEntry(ChronicleData(kept)))
                 }
             }
         }
@@ -130,12 +127,7 @@ internal fun eraseSharedQueueModuleQuarantine(db: ChronicleDb, moduleId: Collect
             quarantine.delete(row)
         } else {
             val kept = events.filterNotNull().mapNotNull { event ->
-                when (sharedUsageDisposition(moduleId, event)) {
-                    SharedUsageDisposition.KEEP -> event
-                    SharedUsageDisposition.ERASE -> null
-                    SharedUsageDisposition.REDACT_ACTIVITY_CLASS -> event.copy(activityClass = null)
-                    SharedUsageDisposition.REDACT_USER -> event.copy(user = "")
-                }
+                eraseSharedUsageEvent(moduleId, event)
             }
             if (kept.isEmpty()) quarantine.delete(row)
             else if (kept != events) {

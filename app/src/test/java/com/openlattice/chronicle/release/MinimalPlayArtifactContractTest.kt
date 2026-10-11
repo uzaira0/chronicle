@@ -264,7 +264,6 @@ class MinimalPlayArtifactContractTest {
             assertTrue("AAB verifier does not reject excluded disclosure copy: $prohibited", verifier.contains(prohibited))
         }
         listOf(
-            "health_connect_rationale" to "Not available in this release.",
             "health_connect_disclosure_title" to "Not available in this release.",
             // Preserve the base resource's format argument so a Play build cannot fail resource linking.
             "health_connect_disclosure_body" to "Not available in this release.%1$.0s",

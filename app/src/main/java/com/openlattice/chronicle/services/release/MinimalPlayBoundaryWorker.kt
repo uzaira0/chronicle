@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.collection.device.HealthConnectScopeStore

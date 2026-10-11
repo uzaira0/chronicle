@@ -1,28 +1,38 @@
 package com.openlattice.chronicle.collection.directboot
 
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
+import android.os.UserManager
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
+import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.android.AndroidSensorType
+import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServer
+import com.openlattice.chronicle.services.sensors.HardwareSensorService
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.SensorSampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
 import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 class DirectBootSensorErasureTest {
@@ -56,6 +66,46 @@ class DirectBootSensorErasureTest {
     private fun buffer(owner: String) = DirectBootSampleBuffer(
         File(temp.root, "samples"), cipher, NoOpCollectionLog, ownerForAppend = { owner },
     )
+
+    @Test fun snapshotRetirementFailureKeepsErasurePendingAndBlocksLockedCaptureUntilRetry() {
+        val snapshot = DirectBootSensorSnapshot(context)
+        assertTrue(snapshot.write(mapOf(AndroidSensorType.accelerometer to DirectBootSensorSnapshot.SensorConfig())))
+        val protected = context.createDeviceProtectedStorageContext()
+        val hooked = object : ContextWrapper(context) {
+            override fun createDeviceProtectedStorageContext(): Context = object : ContextWrapper(protected) {
+                override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+                    val delegate = super.getSharedPreferences(name, mode)
+                    if (name != "chronicle_direct_boot_snapshot") return delegate
+                    return object : SharedPreferences by delegate {
+                        override fun edit(): SharedPreferences.Editor {
+                            val editor = delegate.edit()
+                            return object : SharedPreferences.Editor by editor {
+                                override fun clear(): SharedPreferences.Editor = apply { editor.clear() }
+                                override fun commit(): Boolean = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            DistributionRestrictedRuntime.markDirectBootSensorErasures(hooked, setOf(AndroidSensorType.accelerometer.name))
+        }
+        assertEquals(setOf(AndroidSensorType.accelerometer.name), DistributionRestrictedRuntime.pendingDirectBootSensorErasures(context))
+        assertTrue(snapshot.isUsableFor(DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS))
+        assertEquals(emptySet<AndroidSensorType>(), DistributionRestrictedRuntime.directBootCollectableSensors(context))
+        shadowOf(context.getSystemService(UserManager::class.java)).setUserUnlocked(false)
+        val buffer = buffer("owner")
+        assertTrue(HardwareSensorService.directBootSink(context, buffer).write(listOf(sample("blocked"))) is ModuleResult.Skipped)
+        assertTrue(buffer.isEmpty())
+
+        shadowOf(context.getSystemService(UserManager::class.java)).setUserUnlocked(true)
+        DistributionRestrictedRuntime.eraseDirectBootSensorSamples(context, AndroidSensorType.accelerometer.name,
+            buffer, DirectBootDiagnosticsJournal(File(temp.root, "diagnostics.bin"), cipher), {})
+        assertFalse(snapshot.isUsableFor(DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS))
+        assertTrue(DistributionRestrictedRuntime.pendingDirectBootSensorErasures(context).isEmpty())
+    }
 
     @Test fun interruptedRewriteAccountsErasedIdsOnceOnRetry() {
         var failRewrite = false

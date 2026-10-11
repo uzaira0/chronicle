@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.state
 import android.content.Context
 import com.openlattice.chronicle.BuildConfig
 import java.util.concurrent.atomic.AtomicBoolean
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 
 private const val PREFS_NAME = "minimal_play_artifact_state"
 private const val KEY_BOUNDARY_REGISTRY_SHA256 = "boundary_registry_sha256"
@@ -65,7 +66,7 @@ object MinimalPlayArtifactState {
 
     fun markBoundaryApplied(context: Context) {
         if (!isMinimalPublicDistribution()) return
-        check(
+        checkLocalStoreWrite(
             prefs(context).edit()
                 .putString(KEY_BOUNDARY_REGISTRY_SHA256, BuildConfig.APPROVED_MODULE_REGISTRY_SHA256)
                 .commit(),
@@ -74,7 +75,7 @@ object MinimalPlayArtifactState {
 
     fun markPolicyCompatible(context: Context) {
         if (!isMinimalPublicDistribution()) return
-        check(
+        checkLocalStoreWrite(
             prefs(context).edit()
                 .putString(KEY_POLICY_REGISTRY_SHA256, BuildConfig.APPROVED_MODULE_REGISTRY_SHA256)
                 .commit(),
@@ -85,7 +86,7 @@ object MinimalPlayArtifactState {
     fun markPolicyIncompatible(context: Context) {
         if (!isMinimalPublicDistribution()) return
         runtimePolicyClosed.set(true)
-        check(prefs(context).edit().remove(KEY_POLICY_REGISTRY_SHA256).commit()) {
+        checkLocalStoreWrite(prefs(context).edit().remove(KEY_POLICY_REGISTRY_SHA256).commit()) {
             "Failed to close the Play study-policy boundary"
         }
     }

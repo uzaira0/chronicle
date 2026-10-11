@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class InteractionPersistenceExecutorTest {
     @Test
-    fun `queue is bounded and shutdown reports abandoned work`() {
+    fun queueIsBoundedAndShutdownReportsAbandonedWork() {
         val dropped = AtomicInteger()
         val firstStarted = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)

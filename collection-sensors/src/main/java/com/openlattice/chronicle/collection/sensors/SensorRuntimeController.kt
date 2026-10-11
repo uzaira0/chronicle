@@ -2,7 +2,6 @@ package com.openlattice.chronicle.collection.sensors
 
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.CollectionModuleSetting
-import com.openlattice.chronicle.collection.core.CollectionClock
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
@@ -88,7 +87,6 @@ public class SensorRuntimeController(
     private val sampleLease: (() -> Unit) -> Unit = { it() },
     private val retainOnStop: Boolean = false,
     private val observationAdmission: (AndroidSensorType) -> CollectionPersistenceGuard = { CollectionPersistenceGuard.ALLOW },
-    private val clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
     /** Redacted count of already-collected samples affected by a local loss path. */
     private val reportLoss: (String, Int) -> Unit = { _, _ -> },
@@ -738,15 +736,7 @@ public class SensorRuntimeController(
             // Uncertain entries retry; only a known erasure generation may discard them.
             synchronized(bufferLock) {
                 drained.filter { origins.containsKey(it.id) }.forEach { entry ->
-                    if ((discardGenerations[entry.sensorType] ?: 0L) == (generations[entry.sensorType] ?: 0L)) {
-                        if (queuedIds.add(entry.id) && !buffer.offer(entry)) {
-                queuedIds.remove(entry.id)
-                            samplesDropped.incrementAndGet()
-                            countLoss("LOCAL_REQUEUE_OVERFLOW", 1)
-                            origins.remove(entry.id)
-                        }
-                    } else origins.remove(entry.id)
-                    inFlightIds.remove(entry.id)
+                    requeueEntry(entry, (discardGenerations[entry.sensorType] ?: 0L) == (generations[entry.sensorType] ?: 0L))
                 }
             }
             return ModuleResult.Failed(error, redactedMessage = "sensor validation failed: ${error.javaClass.simpleName}")
@@ -769,15 +759,21 @@ public class SensorRuntimeController(
     private fun requeueAfterFailedFlush(entries: List<SensorSampleEntry>, isCurrent: (SensorSampleEntry) -> Boolean) = sampleLease {
         val admitted = entries.filter(isCurrent)
         synchronized(bufferLock) {
-        admitted.forEach { entry ->
+            admitted.forEach { entry -> requeueEntry(entry, true) }
+        }
+    }
+
+    /** Caller holds bufferLock; validation differs between a failed write and a failed admission. */
+    private fun requeueEntry(entry: SensorSampleEntry, allowed: Boolean) {
+        if (allowed) {
             if (queuedIds.add(entry.id) && !buffer.offer(entry)) {
                 queuedIds.remove(entry.id)
                 samplesDropped.incrementAndGet()
                 countLoss("LOCAL_REQUEUE_OVERFLOW", 1)
                 origins.remove(entry.id)
             }
-            inFlightIds.remove(entry.id)
-        }
-        }
+        } else origins.remove(entry.id)
+        inFlightIds.remove(entry.id)
     }
+
 }

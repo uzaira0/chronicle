@@ -17,7 +17,10 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.*
+import androidx.work.Data
+import androidx.work.ListenableWorker
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import androidx.work.impl.utils.taskexecutor.WorkManagerTaskExecutor
 import com.google.android.gms.common.internal.safeparcel.SafeParcelableSerializer
 import com.google.android.gms.location.ActivityTransitionEvent
@@ -39,12 +42,30 @@ import com.openlattice.chronicle.collection.interaction.InteractionCollectionSer
 import com.openlattice.chronicle.collection.sink.HealthMetricSampleSink
 import com.openlattice.chronicle.crypto.EncryptedEnvelope
 import com.openlattice.chronicle.crypto.EncryptedPayloadType
-import com.openlattice.chronicle.preferences.*
-import com.openlattice.chronicle.services.crypto.*
-import com.openlattice.chronicle.services.sync.*
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.InteractionPolicySettings
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
+import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
+import com.openlattice.chronicle.preferences.STUDY_ID
+import com.openlattice.chronicle.services.crypto.FileSealedEnvelopeStore
+import com.openlattice.chronicle.services.crypto.InMemorySealedEnvelopeStore
+import com.openlattice.chronicle.services.crypto.PayloadSealer
+import com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry
+import com.openlattice.chronicle.services.crypto.SealedEnvelopeStore
+import com.openlattice.chronicle.services.sync.CHRONICLE_SYNC_WORK_NAME
+import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
-import com.openlattice.chronicle.services.withdrawal.*
-import com.openlattice.chronicle.storage.*
+import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalWorker
+import com.openlattice.chronicle.services.withdrawal.WithdrawalState
+import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
+import com.openlattice.chronicle.storage.BatterySampleEntry
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.CollectionModuleStateEntity
+import com.openlattice.chronicle.storage.UploadServerDao
+import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.activityRecognitionSampleDao
+import com.openlattice.chronicle.storage.healthMetricSampleDao
+import com.openlattice.chronicle.storage.interactionSampleDao
 import java.io.File
 import java.io.IOException
 import java.lang.reflect.InvocationTargetException
@@ -54,7 +75,14 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,6 +90,10 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import androidx.work.ForegroundUpdater
+import androidx.work.ProgressUpdater
+import androidx.work.WorkerFactory
+import androidx.work.Configuration
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28])
@@ -134,7 +166,7 @@ class AndroidSweepReview4RegressionTest {
         Application::class.java.getDeclaredMethod("attach", Context::class.java).apply { isAccessible = true }.invoke(it, base)
     }
 
-    @Test @Config(sdk = [26]) fun row1_minSdkStartupAndDirectBootErasureUseSupportedApis() {
+    @Test @Config(sdk = [26]) fun row1MinSdkStartupAndDirectBootErasureUseSupportedApis() {
         coldSnapshot()
         application().onCreate()
         worker { DirectBootStorageAdmission.clear(context) }
@@ -150,7 +182,7 @@ class AndroidSweepReview4RegressionTest {
         assertEquals(0, mainQueries.get())
     }
 
-    @Test fun row2_admissionExceptionsRejectBothEmptyAndNonemptyHealthReadWindows() = worker {
+    @Test fun row2AdmissionExceptionsRejectBothEmptyAndNonemptyHealthReadWindows() = worker {
         listOf(false, true).forEach { empty ->
             var pending = false
             var acknowledgments = 0
@@ -182,7 +214,7 @@ class AndroidSweepReview4RegressionTest {
         }
     }
 
-    @Test fun row3_erasureWaitsForRollingInteractionStateAndNextEventStartsFresh() {
+    @Test fun row3ErasureWaitsForRollingInteractionStateAndNextEventStartsFresh() {
         val service = Robolectric.buildService(InteractionCollectionService::class.java).create().get()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -234,7 +266,7 @@ class AndroidSweepReview4RegressionTest {
         executor.submit {}.get(5, TimeUnit.SECONDS)
     }
 
-    @Test fun row4_coldReceiverRetainsDeliveryUntilInitializationThenChecksRegistration() {
+    @Test fun row4ColdReceiverRetainsDeliveryUntilInitializationThenChecksRegistration() {
         val module = CollectionModuleId.ACTIVITY_RECOGNITION
         val stamp = ResearchPersistenceGate.observationScope(context, module)!!.first
         coldSnapshot()
@@ -266,7 +298,7 @@ class AndroidSweepReview4RegressionTest {
         } finally { release.countDown(); context.unregisterReceiver(receiver); worker { } }
     }
 
-    @Test fun row5_schedulingResumesAfterTransientInitializationFailure() {
+    @Test fun row5SchedulingResumesAfterTransientInitializationFailure() {
         application().workManagerConfiguration.initializationExceptionHandler!!.accept(SQLiteException("temporary WorkManager failure"))
         // Initialization recovery must not depend on a new Activity scheduling work.
         waitUntil {
@@ -291,7 +323,7 @@ class AndroidSweepReview4RegressionTest {
             payloadType = EncryptedPayloadType.BATTERY, encryptedKey = "wrapped", iv = "nonce", ciphertext = "sealed", sampleCount = 1)))
     }
 
-    @Test fun row6_startupInstallsDiskEnvelopesBeforeAnyAuthorizationReplay() {
+    @Test fun row6StartupInstallsDiskEnvelopesBeforeAnyAuthorizationReplay() {
         val disk = FileSealedEnvelopeStore(File(context.applicationInfo.dataDir, "no_backup/sealed-envelopes"))
         envelope(disk)
         PayloadSealer.sealedEnvelopeStore = InMemorySealedEnvelopeStore()
@@ -307,7 +339,7 @@ class AndroidSweepReview4RegressionTest {
         assertNull("startup replay must erase the persisted ciphertext", disk.load("study|participant|BATTERY"))
     }
 
-    @Test fun row7_verifiedRecoveryRetainsDiscardUntilAuxiliaryErasureSucceeds() = worker {
+    @Test fun row7VerifiedRecoveryRetainsDiscardUntilAuxiliaryErasureSucceeds() = worker {
         val disk = FileSealedEnvelopeStore(File(context.noBackupFilesDir, "review4-recovery-sealed"))
         envelope(disk)
         val fail = AtomicBoolean(true)
@@ -329,7 +361,7 @@ class AndroidSweepReview4RegressionTest {
         assertNull(disk.load("study|participant|BATTERY"))
     }
 
-    @Test fun row8_acknowledgedWithdrawalRetriesFenceFailureAndFinishesAfterRecovery() = worker {
+    @Test fun row8AcknowledgedWithdrawalRetriesFenceFailureAndFinishesAfterRecovery() = worker {
         val state = WithdrawalStateStore(context)
         state.beginWithdrawal()
         state.acknowledgeServer(db.uploadServerDao().getConfiguredServer()!!.id)
@@ -340,7 +372,8 @@ class AndroidSweepReview4RegressionTest {
         val failing = Proxy.newProxyInstance(SharedPreferences::class.java.classLoader, arrayOf(SharedPreferences::class.java)) { _, method, args ->
             if (method.name == "edit") {
                 val editor = raw.edit()
-                Proxy.newProxyInstance(SharedPreferences.Editor::class.java.classLoader, arrayOf(SharedPreferences.Editor::class.java)) { proxy, edit, values ->
+                Proxy.newProxyInstance(SharedPreferences.Editor::class.java.classLoader, arrayOf(SharedPreferences.Editor::class.java)) { proxy, edit,
+                    values ->
                     if (edit.name == "commit" && fail.get()) false else {
                         val result = edit.invoke(editor, *(values ?: emptyArray()))
                         if (result is SharedPreferences.Editor) proxy else result

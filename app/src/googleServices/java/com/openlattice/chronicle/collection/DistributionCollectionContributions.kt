@@ -74,11 +74,12 @@ internal object DistributionCollectionContributions {
         failures += delegate.uploadStream(
             servers,
             getOldest = { delegate.db.appNetworkUsageSampleDao().getOldest(it) },
+            getByIds = { delegate.db.appNetworkUsageSampleDao().getByIds(it) },
             idOf = { it.id },
             toDto = { it.toAndroidAppNetworkUsageEvent() },
             payloadType = EncryptedPayloadType.APP_NETWORK_USAGE,
             deleteByIds = { delegate.db.appNetworkUsageSampleDao().deleteByIds(it) },
-            plainUpload = { studyId, server, events ->
+            plainUpload = { studyId, server, events, version ->
                 RestrictedUploadApiFactory.get(
                     server.url,
                     server.mobileSigningSecretOverride,
@@ -88,6 +89,7 @@ internal object DistributionCollectionContributions {
                     server.sourceDeviceId,
                     server.apiKey,
                     events,
+                    version,
                 )
             },
             label = "app_network_usage",
@@ -96,11 +98,12 @@ internal object DistributionCollectionContributions {
             failures += delegate.uploadStream(
                 servers,
                 getOldest = { delegate.db.sleepSampleDao().getOldest(it) },
+                getByIds = { delegate.db.sleepSampleDao().getByIds(it) },
                 idOf = { it.id },
                 toDto = { it.toAndroidSleepEvent() },
                 payloadType = EncryptedPayloadType.SLEEP,
                 deleteByIds = { delegate.db.sleepSampleDao().deleteByIds(it) },
-                plainUpload = { studyId, server, events ->
+                plainUpload = { studyId, server, events, version ->
                     RestrictedUploadApiFactory.get(
                         server.url,
                         server.mobileSigningSecretOverride,
@@ -110,6 +113,7 @@ internal object DistributionCollectionContributions {
                         server.sourceDeviceId,
                         server.apiKey,
                         events,
+                        version,
                     )
                 },
                 label = "sleep",
@@ -117,11 +121,12 @@ internal object DistributionCollectionContributions {
             failures += delegate.uploadStream(
                 servers,
                 getOldest = { delegate.db.activityRecognitionSampleDao().getOldest(it) },
+                getByIds = { delegate.db.activityRecognitionSampleDao().getByIds(it) },
                 idOf = { it.id },
                 toDto = { it.toAndroidActivityRecognitionEvent() },
                 payloadType = EncryptedPayloadType.ACTIVITY_RECOGNITION,
                 deleteByIds = { delegate.db.activityRecognitionSampleDao().deleteByIds(it) },
-                plainUpload = { studyId, server, events ->
+                plainUpload = { studyId, server, events, version ->
                     RestrictedUploadApiFactory.get(
                         server.url,
                         server.mobileSigningSecretOverride,
@@ -131,6 +136,7 @@ internal object DistributionCollectionContributions {
                         server.sourceDeviceId,
                         server.apiKey,
                         events,
+                        version,
                     )
                 },
                 label = "activity_recognition",
@@ -140,11 +146,12 @@ internal object DistributionCollectionContributions {
             failures += delegate.uploadStream(
                 servers,
                 getOldest = { delegate.db.healthMetricSampleDao().getOldest(it) },
+                getByIds = { delegate.db.healthMetricSampleDao().getByIds(it) },
                 idOf = { it.id },
                 toDto = { it.toAndroidHealthMetricEvent() },
                 payloadType = EncryptedPayloadType.HEALTH_CONNECT,
                 deleteByIds = { delegate.db.healthMetricSampleDao().deleteByIds(it) },
-                plainUpload = { studyId, server, events ->
+                plainUpload = { studyId, server, events, version ->
                     RestrictedUploadApiFactory.get(
                         server.url,
                         server.mobileSigningSecretOverride,
@@ -154,6 +161,7 @@ internal object DistributionCollectionContributions {
                         server.sourceDeviceId,
                         server.apiKey,
                         events,
+                        version,
                     )
                 },
                 label = "health_connect",

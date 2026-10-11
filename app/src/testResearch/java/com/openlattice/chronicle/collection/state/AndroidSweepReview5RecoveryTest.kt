@@ -13,7 +13,11 @@ import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.response.ReadRecordsResponse
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.*
+import androidx.work.Data
+import androidx.work.ListenableWorker
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import androidx.work.impl.WorkManagerImpl
 import androidx.work.impl.model.WorkProgress
 import androidx.work.impl.model.WorkSpecDao
@@ -25,14 +29,26 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.HealthConnectRecordType
 import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
-import com.openlattice.chronicle.collection.device.*
+import com.openlattice.chronicle.collection.device.AndroidHealthMetricSource
+import com.openlattice.chronicle.collection.device.ExpansionCollectionWorker
+import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
+import com.openlattice.chronicle.collection.device.HealthMetricCollectionModule
+import com.openlattice.chronicle.collection.device.HealthMetricModuleHolder
 import com.openlattice.chronicle.collection.sensors.SensorRuntimeController
 import com.openlattice.chronicle.collection.sink.HealthMetricSampleSink
-import com.openlattice.chronicle.preferences.*
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
+import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
+import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.sensors.HardwareSensorService
 import com.openlattice.chronicle.services.sync.CHRONICLE_SYNC_WORK_NAME
 import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
-import com.openlattice.chronicle.storage.*
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.CollectionModuleStateEntity
+import com.openlattice.chronicle.storage.HealthMetricSampleDao
+import com.openlattice.chronicle.storage.UploadServerDao
+import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.healthMetricSampleDao
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
 import java.time.Instant
@@ -41,7 +57,11 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,6 +70,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
+import androidx.work.ForegroundUpdater
+import androidx.work.ProgressUpdater
+import androidx.work.WorkerFactory
+import androidx.work.Configuration
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28])
@@ -93,7 +117,7 @@ class AndroidSweepReview5RecoveryTest {
         db.close()
     }
 
-    @Test @Config(sdk = [26]) fun row1_startupRecoveryRetriesCleanupBeforeReenqueuingOrphanedPeriodicWork() {
+    @Test @Config(sdk = [26]) fun row1StartupRecoveryRetriesCleanupBeforeReenqueuingOrphanedPeriodicWork() {
         val wm = WorkManagerImpl.getInstance(context)
         // A fresh process has no in-process execution of the previous process's RUNNING row.
         // Retain the real OS scheduler but disable GreedyScheduler's immediate worker launch.
@@ -143,7 +167,7 @@ class AndroidSweepReview5RecoveryTest {
         }
     }
 
-    @Test fun row2_refusedHealthAcknowledgmentRetriesTheSameWindowAfterStorageRecovery() = worker {
+    @Test fun row2RefusedHealthAcknowledgmentRetriesTheSameWindowAfterStorageRecovery() = worker {
         HealthConnectScopeStore.of(context).replace(setOf(HealthConnectRecordType.STEPS))
         val source = AndroidHealthMetricSource(context)
         val previous = System.currentTimeMillis() - TimeUnit.HOURS.toMillis(2)
@@ -151,11 +175,13 @@ class AndroidSweepReview5RecoveryTest {
         checkpoint.edit().putLong("last_end_millis", previous).putString("consent_scope",
             ResearchPersistenceGate.observationScope(context, CollectionModuleId.HEALTH_CONNECT)!!.first).commit()
         val permissions = Proxy.newProxyInstance(PermissionController::class.java.classLoader, arrayOf(PermissionController::class.java)) { _, _, _ ->
-            setOf(HealthPermission.getReadPermission(StepsRecord::class))
+            setOf(HealthPermission.getReadPermission(StepsRecord::class),
+                com.openlattice.chronicle.collection.permissions.ModulePermissions.HEALTH_CONNECT_BACKGROUND_READ)
         } as PermissionController
         val reads = AtomicInteger()
         val client = Proxy.newProxyInstance(HealthConnectClient::class.java.classLoader, arrayOf(HealthConnectClient::class.java)) { _, method, _ ->
             when (method.name) {
+                "getFeatures" -> com.openlattice.chronicle.collection.device.healthConnectTestFeatures()
                 "getPermissionController" -> permissions
                 "readRecords" -> {
                     reads.incrementAndGet()
@@ -172,7 +198,8 @@ class AndroidSweepReview5RecoveryTest {
         source.javaClass.getDeclaredField("clientProvider").apply { isAccessible = true }.set(source, provider)
         val fail = AtomicBoolean(true)
         val dao = db.healthMetricSampleDao()
-        val closingDao = Proxy.newProxyInstance(HealthMetricSampleDao::class.java.classLoader, arrayOf(HealthMetricSampleDao::class.java)) { _, method, args ->
+        val closingDao = Proxy.newProxyInstance(HealthMetricSampleDao::class.java.classLoader, arrayOf(HealthMetricSampleDao::class.java)) { _,
+            method, args ->
             val result = try { method.invoke(dao, *(args ?: emptyArray())) }
             catch (error: InvocationTargetException) { throw error.targetException }
             if (method.name == "insertAll" && fail.get()) ResearchPersistenceGate.closeForPersistenceFailure()
@@ -195,7 +222,7 @@ class AndroidSweepReview5RecoveryTest {
         assertTrue(checkpoint.getLong("last_end_millis", 0) > previous)
     }
 
-    @Test fun row4_sensorServiceRetriesItsOwnAuthorizationFailureAndRestartsCollectionOffline() {
+    @Test fun row4SensorServiceRetriesItsOwnAuthorizationFailureAndRestartsCollectionOffline() {
         val dao = db.uploadServerDao()
         val failing = AtomicBoolean(true)
         val attempts = AtomicInteger()
@@ -218,7 +245,8 @@ class AndroidSweepReview5RecoveryTest {
             assertEquals(Service.START_STICKY, service.onStartCommand(null, 0, 1))
             failing.set(false)
             waitUntil {
-                (service.javaClass.getDeclaredField("controller").apply { isAccessible = true }.get(service) as? SensorRuntimeController)?.isStarted == true
+                (service.javaClass.getDeclaredField("controller").apply { isAccessible = true }.get(
+                    service) as? SensorRuntimeController)?.isStarted == true
             }
             assertTrue(ResearchPersistenceGate.collectsNow(context, SensorCollectionModules.moduleFor(AndroidSensorType.accelerometer)))
         } finally {

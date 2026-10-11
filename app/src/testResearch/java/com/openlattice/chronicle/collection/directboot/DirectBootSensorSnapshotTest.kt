@@ -21,15 +21,17 @@ class DirectBootSensorSnapshotTest {
     private val snapshot = DirectBootSensorSnapshot(prefs) { now }
 
     @Test
-    fun `write and read round-trips the collectable set and per-sensor config`() {
+    fun writeAndReadRoundTripsTheCollectableSetAndPerSensorConfig() {
         val written = snapshot.write(
             mapOf(
                 AndroidSensorType.accelerometer to SensorConfig(50, 10, 60),
                 AndroidSensorType.light to SensorConfig(5, 30, 300),
             ),
+            settingsVersion = 7,
         )
 
         assertTrue(written)
+        assertEquals(7, snapshot.settingsVersion())
         assertEquals(
             setOf(AndroidSensorType.accelerometer, AndroidSensorType.light),
             snapshot.collectableSensors(),
@@ -39,7 +41,7 @@ class DirectBootSensorSnapshotTest {
     }
 
     @Test
-    fun `rewrite drops sensors and configs no longer collectable`() {
+    fun rewriteDropsSensorsAndConfigsNoLongerCollectable() {
         snapshot.write(
             mapOf(
                 AndroidSensorType.accelerometer to SensorConfig(50, 10, 60),
@@ -47,6 +49,7 @@ class DirectBootSensorSnapshotTest {
             ),
         )
         snapshot.write(mapOf(AndroidSensorType.light to SensorConfig(5, 30, 300)))
+        assertNull(snapshot.settingsVersion())
 
         assertEquals(setOf(AndroidSensorType.light), snapshot.collectableSensors())
         // The dropped sensor's stale overrides are gone: reads fall back to defaults.
@@ -54,7 +57,7 @@ class DirectBootSensorSnapshotTest {
     }
 
     @Test
-    fun `unwritten snapshot is unusable and has no age`() {
+    fun unwrittenSnapshotIsUnusableAndHasNoAge() {
         assertNull(snapshot.ageMillis())
         assertFalse(snapshot.isUsableFor(Long.MAX_VALUE))
         // Reads still answer with safe defaults.
@@ -63,7 +66,7 @@ class DirectBootSensorSnapshotTest {
     }
 
     @Test
-    fun `empty collectable set is a valid snapshot but never usable`() {
+    fun emptyCollectableSetIsAValidSnapshotButNeverUsable() {
         snapshot.write(emptyMap())
 
         assertEquals(0L, snapshot.ageMillis())
@@ -71,7 +74,7 @@ class DirectBootSensorSnapshotTest {
     }
 
     @Test
-    fun `staleness bound fails closed`() {
+    fun stalenessBoundFailsClosed() {
         snapshot.write(mapOf(AndroidSensorType.accelerometer to SensorConfig()))
         assertTrue(snapshot.isUsableFor(DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS))
 
@@ -81,7 +84,7 @@ class DirectBootSensorSnapshotTest {
     }
 
     @Test
-    fun `clear removes everything`() {
+    fun clearRemovesEverything() {
         snapshot.write(mapOf(AndroidSensorType.accelerometer to SensorConfig(50, 10, 60)))
 
         assertTrue(snapshot.clear())
@@ -92,7 +95,7 @@ class DirectBootSensorSnapshotTest {
     }
 
     @Test
-    fun `unknown persisted sensor names are ignored, not fatal`() {
+    fun unknownPersistedSensorNamesAreIgnoredNotFatal() {
         snapshot.write(mapOf(AndroidSensorType.accelerometer to SensorConfig()))
         // Simulate a persisted name from a build with a since-removed enum constant.
         prefs.edit().putStringSet("db_sensors", mutableSetOf("accelerometer", "NO_SUCH_SENSOR")).commit()

@@ -11,9 +11,16 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.ConsentTrigger
 import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.sensors.SensorRuntimeController
-import com.openlattice.chronicle.preferences.*
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
+import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
+import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.sensors.HardwareSensorService
-import com.openlattice.chronicle.storage.*
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.CollectionModuleStateDao
+import com.openlattice.chronicle.storage.CollectionModuleStateEntity
+import com.openlattice.chronicle.storage.LocalStoreRecoveryManager
+import com.openlattice.chronicle.storage.UploadServerEntity
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
@@ -23,7 +30,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -73,7 +83,8 @@ class AndroidSweepReview6RegressionTest {
 
     private fun swapModuleStateDao(failing: AtomicBoolean, method: String, attempts: AtomicInteger = AtomicInteger()): () -> Unit {
         val dao = db.collectionModuleStateDao()
-        val proxy = Proxy.newProxyInstance(CollectionModuleStateDao::class.java.classLoader, arrayOf(CollectionModuleStateDao::class.java)) { _, m, args ->
+        val proxy = Proxy.newProxyInstance(CollectionModuleStateDao::class.java.classLoader, arrayOf(CollectionModuleStateDao::class.java)) { _, m,
+            args ->
             if (m.name == method && failing.get()) {
                 attempts.incrementAndGet()
                 throw SQLiteException("temporary module-state failure")
@@ -97,7 +108,8 @@ class AndroidSweepReview6RegressionTest {
             assertFalse("a transient gate read must not be treated as 'no sensor enabled'", shadowOf(service).isStoppedBySelf)
             failing.set(false)
             waitUntil {
-                (service.javaClass.getDeclaredField("controller").apply { isAccessible = true }.get(service) as? SensorRuntimeController)?.isStarted == true
+                (service.javaClass.getDeclaredField("controller").apply { isAccessible = true }.get(
+                    service) as? SensorRuntimeController)?.isStarted == true
             }
         } finally {
             failing.set(false)
@@ -123,7 +135,8 @@ class AndroidSweepReview6RegressionTest {
             assertFalse(ResearchPersistenceGate.collectsNow(context, CollectionModuleId.HEALTH_CONNECT))
             failing.set(false)
             worker { coordinator.replayPendingErasures() }
-            assertEquals(ParticipantDecision.DECLINED, worker { CollectionLoopStore.of(context).loadAll()[CollectionModuleId.BATTERY_TELEMETRY]?.decision })
+            assertEquals(ParticipantDecision.DECLINED, worker { CollectionLoopStore.of(context).loadAll(
+                )[CollectionModuleId.BATTERY_TELEMETRY]?.decision })
             assertTrue("the decline's outcome is durable, so accepted modules must collect again",
                 ResearchPersistenceGate.collectsNow(context, CollectionModuleId.HEALTH_CONNECT))
             assertFalse(ResearchPersistenceGate.collectsNow(context, CollectionModuleId.BATTERY_TELEMETRY))
@@ -147,7 +160,8 @@ class AndroidSweepReview6RegressionTest {
                         ConsentTrigger.values().first(), false, { true })
             } }
             runCatching { worker { coordinator.replayPendingErasures() } }
-            assertEquals(ParticipantDecision.ACCEPTED, worker { CollectionLoopStore.of(context).loadAll()[CollectionModuleId.BATTERY_TELEMETRY]?.decision })
+            assertEquals(ParticipantDecision.ACCEPTED, worker { CollectionLoopStore.of(context).loadAll(
+                )[CollectionModuleId.BATTERY_TELEMETRY]?.decision })
             assertFalse("an unfulfilled decline must keep collection closed",
                 ResearchPersistenceGate.collectsNow(context, CollectionModuleId.HEALTH_CONNECT))
         } finally {
@@ -159,7 +173,8 @@ class AndroidSweepReview6RegressionTest {
     @Test fun failedDiagnosticPreservationStillErasesResearchButKeepsSeparateDiagnostics() {
         val root = File(context.noBackupFilesDir, "chronicle-recovery").apply { deleteRecursively(); mkdirs() }
         val bundle = File(root, "bundle-1").apply { mkdirs() }
-        File(bundle, "manifest.txt").writeText("owner_scope_sha256=unknown\ndiagnostics_separated=true\ndiagnostic_artifact=upload-diagnostics.json\n")
+        File(bundle, "manifest.txt").writeText(
+            "owner_scope_sha256=unknown\ndiagnostics_separated=true\ndiagnostic_artifact=upload-diagnostics.json\n")
         val research = File(bundle, "chronicle.db").apply { writeText("research payload") }
         val diagnostics = File(bundle, "upload-diagnostics.json").apply { writeText("{\"diagnostics\":1}") }
         // A file where the preservation directory must go makes preservation fail (like a full disk).

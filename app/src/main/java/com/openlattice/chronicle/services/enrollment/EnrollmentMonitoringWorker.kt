@@ -6,9 +6,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequest
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.Worker
 import androidx.work.WorkerParameters
-import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.data.ParticipationStatus
@@ -29,7 +27,7 @@ private val TAG = EnrollmentMonitoringWorker::class.java.simpleName
 /**
  * Periodically refreshes [ParticipationStatus] from the Chronicle API and persists it in [EnrollmentSettings].
  *
- * This worker intentionally has a narrow responsibility: fetch + persist status.
+ * Terminal erasure hands off to the same durable local cleanup used for withdrawal.
  */
 class EnrollmentMonitoringWorker(
     context: Context,
@@ -85,7 +83,12 @@ class EnrollmentMonitoringWorker(
                 chronicleApi.getParticipationStatus(studyId, participantId) ?: ParticipationStatus.UNKNOWN
             }
 
-            ResearchPersistenceGate.applyParticipationStatus(applicationContext, server, generation, participationStatus)
+            if (participationStatus == ParticipationStatus.ERASED) {
+                com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
+                    .completeResearcherErasure(applicationContext, server, generation)
+            } else {
+                ResearchPersistenceGate.applyParticipationStatus(applicationContext, server, generation, participationStatus)
+            }
 
             Log.i(TAG, "Updated participation status: $participationStatus")
             LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_MONITOR_SUCCESS, null)

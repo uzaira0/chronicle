@@ -79,13 +79,13 @@ class SensitiveStorageInvariantTest {
         assertTrue(entity.contains("val singletonKey: Int = 1"))
 
         val database = read(root, "collection-base/src/main/java/com/openlattice/chronicle/storage/ChronicleDb.kt")
-        assertTrue(database.contains("version = 29"))
         assertTrue(database.contains("MIGRATION_23_24"))
         assertTrue(database.contains("MIGRATION_24_25"))
         assertTrue(database.contains("MIGRATION_25_26"))
         assertTrue(database.contains("MIGRATION_26_27"))
         assertTrue(database.contains("MIGRATION_27_28"))
         assertTrue(database.contains("MIGRATION_28_29"))
+        assertTrue(database.contains("MIGRATION_30_31"))
 
         val diagnosticMigration = read(
             root,
@@ -136,7 +136,12 @@ class SensitiveStorageInvariantTest {
             "app/src/main/java/com/openlattice/chronicle/ServerEnrollmentActivity.kt",
         )
         assertTrue(manualEnrollment.contains("const val MAX_SERVERS = 1"))
-        assertTrue(manualEnrollment.contains("BuildConfig.DISTRIBUTION_CHANNEL != \"RESEARCH\""))
+        assertTrue(
+            "Public store builds must reject the manual enrollment editor.",
+            manualEnrollment.contains("!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS || editServerId <= 0"),
+        )
+        assertTrue(manualEnrollment.contains("manualEnrollmentAllowed = DistributionChannel.current() == DistributionChannel.RESEARCH"))
+        assertTrue(manualEnrollment.contains("if (!manualEnrollmentAllowed) return"))
     }
 
     @Test
@@ -191,8 +196,8 @@ class SensitiveStorageInvariantTest {
         val source = read(buildRoot(), "app/src/main/java/com/openlattice/chronicle/preferences/EnrollmentSettings.kt")
         assertTrue(source.contains("EncryptedPrefsHelper.getEncryptedPrefs(context)"))
         assertFalse(source.contains("context.getSharedPreferences"))
-        assertTrue(source.contains(".putString(PARTICIPANT_ID, _participantId)"))
-        assertTrue(source.contains(".putString(STUDY_ID, _studyId.toString())"))
+        assertTrue(source.contains(".putString(PARTICIPANT_ID, newParticipantId)"))
+        assertTrue(source.contains(".putString(STUDY_ID, newStudyId.toString())"))
         assertTrue(source.contains("uploadServerDao().getConfiguredServer()"))
         assertTrue(source.contains("server.studyId == studyId.toString()"))
         assertTrue(source.contains("server.participantId == participantId"))

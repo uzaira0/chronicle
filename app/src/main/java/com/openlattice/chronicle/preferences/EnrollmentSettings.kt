@@ -14,6 +14,7 @@ import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
 import com.openlattice.chronicle.storage.AUTH_MODE_DEVICE_ID
 import com.openlattice.chronicle.storage.UserQueueEntry
+import com.openlattice.chronicle.storage.currentUserOr
 import com.openlattice.chronicle.storage.UserStorageQueue
 import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
@@ -21,7 +22,6 @@ import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
 import com.openlattice.chronicle.collection.directboot.clearDirectBootSensorBuffer
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.utils.Utils
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.apache.olingo.commons.api.edm.FullQualifiedName
 import java.util.*
@@ -134,18 +134,18 @@ class EnrollmentSettings(private val context: Context) {
         return studyId
     }
 
-    fun setParticipantId(_participantId: String) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
-        participantId = _participantId
-        checkLocalStoreWrite(settings.edit().putString(PARTICIPANT_ID, _participantId).commit()) { "Failed to persist participant id" }
+    fun setParticipantId(newParticipantId: String) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
+        participantId = newParticipantId
+        checkLocalStoreWrite(settings.edit().putString(PARTICIPANT_ID, newParticipantId).commit()) { "Failed to persist participant id" }
     }
 
-    fun setStudyId(_studyId: UUID) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
-        val changed = studyId != _studyId
+    fun setStudyId(newStudyId: UUID) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
+        val changed = studyId != newStudyId
         if (changed) InteractionPolicySettings.invalidateMemoryCache()
-        val editor = settings.edit().putString(STUDY_ID, _studyId.toString())
+        val editor = settings.edit().putString(STUDY_ID, newStudyId.toString())
         if (changed) editor.remove(INTERACTION_POLICY_SNAPSHOT_KEY)
         checkLocalStoreWrite(editor.commit()) { "Failed to persist study id" }
-        studyId = _studyId
+        studyId = newStudyId
     }
 
     fun setAwarenessNotificationsEnabled(notificationsEnabled: Boolean) {
@@ -169,7 +169,8 @@ class EnrollmentSettings(private val context: Context) {
         return deserializePropertyTypeIds(settings.getString(PROPERTY_TYPE_IDS, ""))
     }
 
-    fun setParticipationStatus(participationStatus: ParticipationStatus) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
+    fun setParticipationStatus(participationStatus: ParticipationStatus) =
+        com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
         val changed = getParticipationStatus() != participationStatus
         if (changed) InteractionPolicySettings.invalidateMemoryCache()
         val editor = settings.edit()
@@ -207,8 +208,9 @@ class EnrollmentSettings(private val context: Context) {
             .commit()) { "Unable to persist survey cancellation handles" }
     }
 
-    /** Clears identity; only explicit withdrawal may erase locally retained research data. */
-    fun clearEnrollment(eraseLocalData: Boolean = false, diagnostics: LocalUploadDiagnosticsStore? = null) = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
+    /** Clears identity; withdrawal or confirmed server erasure also removes retained local data. */
+    fun clearEnrollment(eraseLocalData: Boolean = false, diagnostics: LocalUploadDiagnosticsStore? = null) =
+        com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentUpdate(context) {
         InteractionPolicySettings.invalidateMemoryCache()
         com.openlattice.chronicle.services.notifications.eraseSurveyArtifacts(context)
         // Retire collection permission even when identity is temporarily orphaned.
@@ -222,16 +224,7 @@ class EnrollmentSettings(private val context: Context) {
         if (eraseLocalData) (diagnostics ?: LocalUploadDiagnosticsStore.of(context)).clear()
         if (eraseLocalData) com.openlattice.chronicle.services.crypto.PayloadSealer.clearSealedEnvelopes()
         checkLocalStoreWrite(settings.edit()
-            .remove(PARTICIPANT_ID)
-            .remove(STUDY_ID)
-            .remove(ORGANIZATION_ID)
-            .remove(PARTICIPATION_STATUS)
-            .remove(PROPERTY_TYPE_IDS)
-            .remove(AWARENESS_NOTIFICATIONS_ENABLED)
-            .remove(MOBILE_REMINDER_REQUEST_CODES)
-            .remove(INTERACTION_POLICY_SNAPSHOT_KEY)
-            .remove(context.getString(R.string.identify_user))
-            .remove(context.getString(R.string.current_user))
+            .removeEnrollmentIdentity(context)
             .commit()) {
             "Failed to clear persisted enrollment state"
         }
@@ -243,9 +236,9 @@ class EnrollmentSettings(private val context: Context) {
     /**
      * The pre-Phase-7 inline target-user write — the regression baseline: appends a
      * [UserQueueEntry] to the `userQueue` Room table and writes the `current_user`
-     * EncryptedSharedPreferences key. The `runBlocking { launch { } }` shape is
-     * preserved verbatim: the queue insert is launched concurrently with the
-     * `current_user` pref write.
+     * EncryptedSharedPreferences key. Room commits before the preference mirror is
+     * updated. The displayed selection
+     * is derived from that same committed history.
      *
      * The Phase 7A migration-switch routing (module-manager path vs this legacy
      * path) lives in `:app`'s `collection.identification.TargetUserRouter`, NOT
@@ -254,9 +247,7 @@ class EnrollmentSettings(private val context: Context) {
      */
     fun setTargetUser(user: String) {
         runBlocking {
-            launch {
-                userStorageQueue.insertEntry(UserQueueEntry(user = user))
-            }
+            userStorageQueue.insertEntry(UserQueueEntry(user = user))
             checkLocalStoreWrite(
                 settings
                     .edit()
@@ -269,10 +260,7 @@ class EnrollmentSettings(private val context: Context) {
     }
 
     fun getCurrentUser(): String? {
-        return settings.getString(
-            context.getString(R.string.current_user),
-            context.getString(R.string.user_unassigned)
-        )
+        return userStorageQueue.currentUserOr(context.getString(R.string.user_unassigned))
     }
 
     fun isUserIdentificationEnabled(): Boolean {
@@ -280,13 +268,15 @@ class EnrollmentSettings(private val context: Context) {
             settings.getBoolean(context.getString(R.string.identify_user), false)
     }
 
-    /** The enrollment manifest is authority; the local preference may only narrow this scope. */
+    /** Current study settings and consent authorize the module; the local toggle narrows it. */
     fun isUserIdentificationStudyAuthorized(): Boolean = try {
         configuredStudyModuleEnabled(
             chronicleDb.uploadServerDao().getConfiguredServer(),
             studyId,
             participantId,
             CollectionModuleId.USER_IDENTIFICATION,
+            com.openlattice.chronicle.collection.state.CollectionLoopStore.of(context)
+                .loadAll()[CollectionModuleId.USER_IDENTIFICATION],
         )
     } catch (_: RuntimeException) {
         false
@@ -374,16 +364,7 @@ class EnrollmentSettings(private val context: Context) {
             existingStudyId?.let { EncryptionSettingStore.of(context).evict(it) }
             checkLocalStoreWrite(
                 prefs.edit()
-                    .remove(PARTICIPANT_ID)
-                    .remove(STUDY_ID)
-                    .remove(ORGANIZATION_ID)
-                    .remove(PARTICIPATION_STATUS)
-                    .remove(PROPERTY_TYPE_IDS)
-                    .remove(AWARENESS_NOTIFICATIONS_ENABLED)
-                    .remove(MOBILE_REMINDER_REQUEST_CODES)
-                    .remove(INTERACTION_POLICY_SNAPSHOT_KEY)
-                    .remove(context.getString(R.string.identify_user))
-                    .remove(context.getString(R.string.current_user))
+                    .removeEnrollmentIdentity(context)
                     .commit(),
             ) {
                 "Failed to clear enrollment state during local-store recovery"
@@ -392,6 +373,18 @@ class EnrollmentSettings(private val context: Context) {
     }
 
 }
+
+private fun android.content.SharedPreferences.Editor.removeEnrollmentIdentity(context: Context) =
+    remove(PARTICIPANT_ID)
+        .remove(STUDY_ID)
+        .remove(ORGANIZATION_ID)
+        .remove(PARTICIPATION_STATUS)
+        .remove(PROPERTY_TYPE_IDS)
+        .remove(AWARENESS_NOTIFICATIONS_ENABLED)
+        .remove(MOBILE_REMINDER_REQUEST_CODES)
+        .remove(INTERACTION_POLICY_SNAPSHOT_KEY)
+        .remove(context.getString(R.string.identify_user))
+        .remove(context.getString(R.string.current_user))
 
 fun getDevice(deviceInstanceId: String): AndroidDevice {
     return AndroidDevice(

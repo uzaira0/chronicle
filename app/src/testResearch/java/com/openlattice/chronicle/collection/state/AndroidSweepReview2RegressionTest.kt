@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.os.Looper
-import android.os.SystemClock
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
@@ -26,13 +25,23 @@ import com.openlattice.chronicle.collection.sensors.SensorRuntimeController
 import com.openlattice.chronicle.collection.sink.SensorSampleSink
 import com.openlattice.chronicle.collection.sink.SensorSampleWriter
 import com.openlattice.chronicle.collection.usage.DaoUsagePollCheckpointStore
-import com.openlattice.chronicle.preferences.*
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
+import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
+import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
 import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
 import com.openlattice.chronicle.services.withdrawal.WithdrawalState
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.sensors.USAGE_EVENTS_SENSOR_CHECKPOINT
-import com.openlattice.chronicle.storage.*
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.CollectionModuleStateEntity
+import com.openlattice.chronicle.storage.LocalStoreRecoveryManager
+import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.storage.UploadServerDao
+import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.UsagePollCheckpointEntity
+import com.openlattice.chronicle.storage.audioActivitySampleDao
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
@@ -41,7 +50,12 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -112,7 +126,7 @@ class AndroidSweepReview2RegressionTest {
         db.close()
     }
 
-    @Test fun row1_lifecycleWithdrawalReconcilesAndPublishesOffMain() {
+    @Test fun row1LifecycleWithdrawalReconcilesAndPublishesOffMain() {
         WithdrawalStateStore(context).beginWithdrawal()
         ParticipantWithdrawalManager.resumePending(context)
         awaitWorker()
@@ -121,12 +135,14 @@ class AndroidSweepReview2RegressionTest {
         waitUntil { WorkManager.getInstance(context).getWorkInfosForUniqueWork(ParticipantWithdrawalManager.WORK_NAME).get().isNotEmpty() }
     }
 
-    @Test fun row2_failedWithdrawalAndEachPrivacyOperationRequireTheirOwnRetry() {
+    @Test fun row2FailedWithdrawalAndEachPrivacyOperationRequireTheirOwnRetry() {
         val rawFence = context.getSharedPreferences("research_erasure_fence", Context.MODE_PRIVATE)
-        val failingFence = Proxy.newProxyInstance(SharedPreferences::class.java.classLoader, arrayOf(SharedPreferences::class.java)) { _, method, args ->
+        val failingFence = Proxy.newProxyInstance(SharedPreferences::class.java.classLoader, arrayOf(SharedPreferences::class.java)) { _, method,
+            args ->
             if (method.name == "edit") {
                 val editor = rawFence.edit()
-                Proxy.newProxyInstance(SharedPreferences.Editor::class.java.classLoader, arrayOf(SharedPreferences.Editor::class.java)) { proxy, edit, values ->
+                Proxy.newProxyInstance(SharedPreferences.Editor::class.java.classLoader, arrayOf(SharedPreferences.Editor::class.java)) { proxy, edit,
+                    values ->
                     if (edit.name == "commit") false else {
                         val result = edit.invoke(editor, *(values ?: emptyArray()))
                         if (result is SharedPreferences.Editor) proxy else result
@@ -149,9 +165,11 @@ class AndroidSweepReview2RegressionTest {
         prefs.edit().putString(PARTICIPATION_STATUS, "ENROLLED").commit()
         ResearchPersistenceGate.initialize(context)
         assertTrue(ResearchPersistenceGate.collectsNow(context, module))
-        listOf("participant-decision", "erasure-replay", "settings-apply").forEach { kind ->
+        listOf(ResearchPersistenceGate.PrivacyOperationKind.PARTICIPANT_DECISION, ResearchPersistenceGate.PrivacyOperationKind.ERASURE_REPLAY,
+            ResearchPersistenceGate.PrivacyOperationKind.SETTINGS_APPLY).forEach { kind ->
             val operation = ResearchPersistenceGate.PrivacyOperation(kind, "original")
-            assertThrows(java.io.IOException::class.java) { ResearchPersistenceGate.stop(operation) { throw java.io.IOException("failed privacy write") } }
+            assertThrows(java.io.IOException::class.java) { ResearchPersistenceGate.stop(operation) { throw java.io.IOException(
+                "failed privacy write") } }
             ResearchPersistenceGate.stop { }
             ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(kind, "unrelated")) { }
             assertFalse("$kind must retain its own failure", ResearchPersistenceGate.collectsNow(context, module))
@@ -160,7 +178,7 @@ class AndroidSweepReview2RegressionTest {
         }
     }
 
-    @Test fun row3_coldInitializationRetriesLocallyWithoutCallbacksOrNetwork() {
+    @Test fun row3ColdInitializationRetriesLocallyWithoutCallbacksOrNetwork() {
         failQueries.set(true)
         ResearchPersistenceGate.initializeAsync(context)
         assertTrue(queryFailed.await(5, TimeUnit.SECONDS))
@@ -183,7 +201,7 @@ class AndroidSweepReview2RegressionTest {
         waitUntil { ResearchPersistenceGate.collectsNow(context, module) }
     }
 
-    @Test fun row4_serverEnablementPublishesOfflineAdmission() {
+    @Test fun row4ServerEnablementPublishesOfflineAdmission() {
         val id = owner.id
         ResearchPersistenceGate.stop { db.uploadServerDao().setEnabled(id, false) }
         assertFalse(ResearchPersistenceGate.collectsNow(context, CollectionModuleId.USAGE_EVENTS))
@@ -193,7 +211,7 @@ class AndroidSweepReview2RegressionTest {
         assertFalse(ResearchPersistenceGate.captureObservation(context, CollectionModuleId.USAGE_EVENTS).isCurrent())
     }
 
-    @Test fun row6_expiredDirectBootAdmissionRefreshesForArmedOnChangeSensor() {
+    @Test fun row6ExpiredDirectBootAdmissionRefreshesForArmedOnChangeSensor() {
         val buffer = DirectBootSampleBuffer(context)
         assertTrue(DirectBootStorageAdmission.allowed(context, buffer))
         DirectBootStorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
@@ -207,10 +225,11 @@ class AndroidSweepReview2RegressionTest {
         runtime.stop()
     }
 
-    @Test fun row7_recoveryReplayPreservesSplitDiagnosticsAndErasesUnsplitDatabase() {
+    @Test fun row7RecoveryReplayPreservesSplitDiagnosticsAndErasesUnsplitDatabase() {
         val root = File(context.noBackupFilesDir, "chronicle-recovery")
         val bundle = File(root, "split").apply { mkdirs() }
-        File(bundle, "manifest.txt").writeText("owner_scope_sha256=unknown\ndiagnostics_separated=true\ndiagnostic_artifact=diagnostic-snapshot.enc\n")
+        File(bundle, "manifest.txt").writeText(
+            "owner_scope_sha256=unknown\ndiagnostics_separated=true\ndiagnostic_artifact=diagnostic-snapshot.enc\n")
         File(bundle, "artifact-chronicle.db.enc").writeText("encrypted research and diagnostics")
         val diagnostic = "encrypted immutable diagnostic journal".toByteArray()
         File(bundle, "diagnostic-snapshot.enc").writeBytes(diagnostic)
@@ -224,7 +243,7 @@ class AndroidSweepReview2RegressionTest {
         assertFalse(legacy.exists())
     }
 
-    @Test fun row8_newEnrollmentCannotAdoptAnotherOwnersLegacyUsageCheckpoint() {
+    @Test fun row8NewEnrollmentCannotAdoptAnotherOwnersLegacyUsageCheckpoint() {
         db.usagePollCheckpointDao().upsert(UsagePollCheckpointEntity(USAGE_EVENTS_SENSOR_CHECKPOINT, 9000))
         val store = DaoUsagePollCheckpointStore(db.usagePollCheckpointDao(), "replacement-owner:1", 0)
         assertNull(store.readPreviousPollTimestamp())
@@ -232,17 +251,19 @@ class AndroidSweepReview2RegressionTest {
         assertEquals(9000L, verified.readPreviousPollTimestamp())
     }
 
-    @Test fun row9_legacyUnlockTransferRetainsAcceptedAndUncertainRamThroughHold() {
+    @Test fun row9LegacyUnlockTransferRetainsAcceptedAndUncertainRamThroughHold() {
         val original = owner
         val identity = "${original.id}:${original.createdAt}:${original.studyId}:${original.participantId}:${original.sourceDeviceId}"
-        val old = SensorRuntimeController(FakeSensorGateway(), FakeSensorRuntimeSettings(), SensorSampleWriter { ModuleResult.Retry("DE append unavailable") },
+        val old = SensorRuntimeController(FakeSensorGateway(), FakeSensorRuntimeSettings(), SensorSampleWriter { ModuleResult.Retry(
+            "DE append unavailable") },
             ManualSensorRuntimeScheduler(false), log = NoOpCollectionLog)
         old.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f), 1, OffsetDateTime.now())
         ResearchPersistenceGate.stop { consent(module, false) }
         old.stop(true) { ResearchPersistenceGate.guardForLegacyRetainedRegistration(context, module, identity, System.currentTimeMillis()) }
         val replacement = SensorRuntimeController(FakeSensorGateway(), FakeSensorRuntimeSettings(),
             SensorSampleSink(db.sensorSampleDao(), NoOpCollectionLog, ResearchPersistenceGate.guard(context, module)),
-            ManualSensorRuntimeScheduler(false), collectionGate = { ResearchPersistenceGate.collectsNow(context, module) }, retainOnStop = true, log = NoOpCollectionLog)
+            ManualSensorRuntimeScheduler(false), collectionGate = { ResearchPersistenceGate.collectsNow(context, module) }, retainOnStop = true, log =
+                NoOpCollectionLog)
         assertEquals(1, replacement.bufferedCount)
         assertTrue(replacement.flushBuffer() is ModuleResult.Retry)
         ResearchPersistenceGate.stop { consent(module) }
@@ -258,7 +279,7 @@ class AndroidSweepReview2RegressionTest {
         val scans = AtomicInteger()
         override fun contains(element: SensorSampleEntry?): Boolean { scans.incrementAndGet(); return super.contains(element) }
     }
-    @Test fun row10_largeFailedFlushRequeuesWithoutQueueScansOrDuplicates() {
+    @Test fun row10LargeFailedFlushRequeuesWithoutQueueScansOrDuplicates() {
         val runtime = SensorRuntimeController(FakeSensorGateway(), FakeSensorRuntimeSettings(), SensorSampleWriter { ModuleResult.Retry("HOLD") },
             ManualSensorRuntimeScheduler(false), log = NoOpCollectionLog)
         val queue = ScanCountingQueue()
@@ -272,7 +293,7 @@ class AndroidSweepReview2RegressionTest {
         runtime.stop()
     }
 
-    @Test fun row11_queuedAudioSurvivesUnrelatedModuleErasure() {
+    @Test fun row11QueuedAudioSurvivesUnrelatedModuleErasure() {
         val capture = AudioCaptureController(context)
         val executor = Executors.newSingleThreadExecutor()
         capture.javaClass.getDeclaredField("captureExecutor").apply { isAccessible = true }.set(capture, executor)

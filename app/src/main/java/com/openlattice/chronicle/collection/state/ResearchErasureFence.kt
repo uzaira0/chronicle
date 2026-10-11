@@ -37,7 +37,8 @@ class ResearchErasureFence(private val context: Context) {
         val legacy = com.openlattice.chronicle.storage.ChronicleDb.getInstance(context).usagePollCheckpointDao()
             .getLastPollTimestamp(com.openlattice.chronicle.sensors.USAGE_EVENTS_SENSOR_CHECKPOINT)
         checkLocalStoreWrite(prefs.edit().putBoolean("legacy_checkpoint_checked", true)
-            .putString("legacy_checkpoint_owner", enrollmentKey(owner).takeIf { legacy != null && CollectionModuleId.values().all { generation(it) == 0L } }).commit())
+            .putString("legacy_checkpoint_owner", enrollmentKey(owner).takeIf { legacy != null && CollectionModuleId.values().all { generation(
+                it) == 0L } }).commit())
     }
 
     fun completeAfterVerifiedReset() {
@@ -52,21 +53,16 @@ class ResearchErasureFence(private val context: Context) {
     /** Survives reset/process death until every indivisible recovery artifact is removed. */
     fun markRecoveryErasure(owner: Pair<String, String>?) {
         val scope = owner?.let {
-            java.security.MessageDigest.getInstance("SHA-256")
-                .digest("${it.first}\u0000${it.second}".toByteArray(Charsets.UTF_8))
-                .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+            com.openlattice.chronicle.storage.LocalStoreRecoveryManager.scopeDigest(it.first, it.second)
         } ?: "unknown"
-        val ownerKey = ResearchPersistenceGate.currentOwnerKey()
-            ?: prefs.getString("installed_enrollment", null)
-            ?: pending().mapNotNull(::pendingOwner).distinct().singleOrNull()
-        checkLocalStoreWrite(prefs.edit().putString("pending_recovery_scope", scope).putString("pending_recovery_owner", ownerKey).commit())
+        checkLocalStoreWrite(prefs.edit().putString("pending_recovery_scope", scope).commit())
     }
 
     fun replayRecoveryErasure(context: Context) {
         if (!prefs.contains("pending_recovery_scope")) return
         com.openlattice.chronicle.storage.LocalStoreRecoveryManager.erasePendingRecoveryArtifacts(context,
             prefs.getString("pending_recovery_scope", null)?.takeUnless { it == "unknown" })
-        checkLocalStoreWrite(prefs.edit().remove("pending_recovery_scope").remove("pending_recovery_owner").commit())
+        checkLocalStoreWrite(prefs.edit().remove("pending_recovery_scope").commit())
     }
 
     fun settingsChanged() {
@@ -135,7 +131,8 @@ class ResearchErasureFence(private val context: Context) {
         }
         fun unregisterObserver(observer: Observer) { synchronized(observers) { observers.remove(observer) } }
         fun enrollmentKey(owner: UploadServerEntity): String = java.security.MessageDigest.getInstance("SHA-256")
-            .digest("${owner.id}:${owner.createdAt}:${owner.enrollmentIssuedAtEpochMillis}:${owner.studyId}:${owner.participantId}:${owner.sourceDeviceId}".toByteArray(Charsets.UTF_8))
+            .digest(
+                "${owner.id}:${owner.createdAt}:${owner.enrollmentIssuedAtEpochMillis}:${owner.studyId}:${owner.participantId}:${owner.sourceDeviceId}".toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
     }
 }

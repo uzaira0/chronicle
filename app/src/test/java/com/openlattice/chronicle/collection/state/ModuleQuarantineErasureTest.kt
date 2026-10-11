@@ -74,6 +74,30 @@ class ModuleQuarantineErasureTest {
             .invoke(CollectionLoopCoordinator(context), moduleId, CollectionDataDisposition.DISCARD_AND_STOP)
     }
 
+    @Test fun dedicatedPayloadAdmissionAndErasureUseTheSameModule() {
+        val module = CollectionModuleId.CONNECTIVITY_STATE
+        val payload = com.openlattice.chronicle.crypto.EncryptedPayloadType.CONNECTIVITY_STATE
+        db.collectionModuleStateDao().upsertAll(listOf(com.openlattice.chronicle.storage.CollectionModuleStateEntity(
+            module.id, false, ParticipantDecision.ACCEPTED.name, 0, false, 1, null, CollectionDataDisposition.HOLD_PENDING.id,
+        )))
+        val policy = com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db)
+        org.junit.Assert.assertFalse(policy.allows(payload))
+        org.junit.Assert.assertTrue(policy.allows(com.openlattice.chronicle.crypto.EncryptedPayloadType.BATTERY))
+        val old = com.openlattice.chronicle.services.crypto.PayloadSealer.sealedEnvelopeStore
+        val erased = mutableSetOf<com.openlattice.chronicle.crypto.EncryptedPayloadType>()
+        com.openlattice.chronicle.services.crypto.PayloadSealer.sealedEnvelopeStore =
+            object : com.openlattice.chronicle.services.crypto.SealedEnvelopeStore {
+                override fun load(stream: String): com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry? = null
+                override fun save(stream: String, entry: com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry) = Unit
+                override fun clear() = Unit
+                override fun erase(types: Set<com.openlattice.chronicle.crypto.EncryptedPayloadType>) { erased += types }
+            }
+        try {
+            eraseModuleAuxiliaryState(context, module)
+            assertEquals(setOf(payload), erased)
+        } finally { com.openlattice.chronicle.services.crypto.PayloadSealer.sealedEnvelopeStore = old }
+    }
+
     @Test fun identificationDiscardRedactsLiveAndQuarantinedUsers() {
         val preference = context.getString(com.openlattice.chronicle.R.string.current_user)
         EncryptedPrefsHelper.getEncryptedPrefs(context).edit().putString(preference, "identified-user").commit()

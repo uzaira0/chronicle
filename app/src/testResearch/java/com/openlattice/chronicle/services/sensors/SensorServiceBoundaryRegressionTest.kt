@@ -26,7 +26,11 @@ import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
 import com.openlattice.chronicle.storage.SensorSampleDao
 import com.openlattice.chronicle.storage.SensorSampleEntry
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -78,7 +82,8 @@ class SensorServiceBoundaryRegressionTest {
     @Test fun unlockControllerRecoveryFailureIsContainedAtExecutorBoundary() {
         val service = Robolectric.buildService(HardwareSensorService::class.java).create().get()
         val escaped = java.util.concurrent.atomic.AtomicReference<Throwable>()
-        startup(service).submit { Thread.currentThread().uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, error -> escaped.set(error) } }
+        startup(service).submit { Thread.currentThread().uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, error -> escaped.set(
+            error) } }
             .get(5, TimeUnit.SECONDS)
         db.javaClass.getDeclaredField("_sensorSampleDao").apply { isAccessible = true }.set(db,
             lazy<SensorSampleDao> { throw LocalStoreRecoveryRequiredException(LocalStoreRecoveryReason.DATABASE_OPEN_FAILED) })
@@ -99,7 +104,8 @@ class SensorServiceBoundaryRegressionTest {
         startup(service).submit {}.get(5, TimeUnit.SECONDS)
         val runtime = SensorRuntimeController(gateway = FakeSensorGateway(), settings = FakeSensorRuntimeSettings(),
             sink = object : SensorSampleWriter {
-                override fun write(samples: List<SensorSampleEntry>): ModuleResult = ModuleResult.Failed(IllegalStateException("disk full"), "write failed")
+                override fun write(samples: List<SensorSampleEntry>): ModuleResult = ModuleResult.Failed(IllegalStateException("disk full"),
+                    "write failed")
             }, scheduler = ManualSensorRuntimeScheduler(executeImmediately = false), collectionGate = { true }, log = NoOpCollectionLog,
             reportLoss = { _, _ -> ResearchPersistenceGate.withReadLease {} })
         repeat(SensorRuntimeController.MAX_BUFFERED_SAMPLES + 1) { runtime.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f), 3) }
@@ -131,7 +137,8 @@ class SensorServiceBoundaryRegressionTest {
         service.onDestroy()
         assertTrue(startup(service).awaitTermination(5, TimeUnit.SECONDS))
         // Drain the admission worker before the test's in-memory database is closed.
-        val refresh = StorageAdmission::class.java.getDeclaredField("refreshExecutor").apply { isAccessible = true }.get(StorageAdmission) as ExecutorService
+        val refresh = StorageAdmission::class.java.getDeclaredField("refreshExecutor").apply { isAccessible = true }.get(
+            StorageAdmission) as ExecutorService
         refresh.submit {}.get(5, TimeUnit.SECONDS)
     }
 

@@ -46,14 +46,6 @@ public interface SensorSettingsGateway {
     public fun enabledServers(): List<Server>
 
     /**
-     * Fetches the `AndroidSensor` setting from [server].
-     *
-     * @throws Exception verbatim — a `code 404` + `AndroidSensor` message signals the
-     *   missing-settings case; any other exception is treated as transient.
-     */
-    public fun fetchAndroidSensorSetting(server: Server): AndroidSensorSetting
-
-    /**
      * Reports modeled-sensor availability to [server] for [requestedSensors].
      *
      * @return `true` if the report was acknowledged, `false` on any failure.
@@ -66,21 +58,13 @@ public interface SensorSettingsGateway {
 
 /**
  * Seam over the locally-persisted sensor settings ([com.openlattice.chronicle.preferences.SensorSettings]).
- * The module path reads/writes the device's sensor config through this so the refresh
+ * The module path reads the device's sensor config through this so the refresh
  * logic is JVM-unit testable.
  */
 public interface SensorSettingsStore {
     /** The currently persisted backend-configured legacy setting, or `null` if none. */
     public fun read(): AndroidSensorSetting?
 
-    /** Whether any configured sensor is currently allowed by local tablet overrides. */
-    public fun isEffectivelyEnabled(): Boolean
-
-    /** Persists [setting] as the device's sensor configuration. */
-    public fun save(setting: AndroidSensorSetting)
-
-    /** Clears the persisted sensor configuration (disable-on-missing). */
-    public fun clear()
 }
 
 /**

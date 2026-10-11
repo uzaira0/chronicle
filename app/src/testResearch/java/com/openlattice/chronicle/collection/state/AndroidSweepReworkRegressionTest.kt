@@ -8,10 +8,14 @@ import android.app.Notification
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Rect
-import android.hardware.*
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.hardware.TriggerEvent
+import android.hardware.TriggerEventListener
 import android.os.Looper
 import android.os.SystemClock
 import android.service.notification.StatusBarNotification
@@ -20,26 +24,52 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
+import androidx.work.ListenableWorker
 import androidx.work.WorkManager
 import com.openlattice.chronicle.android.AndroidSensorType
-import com.openlattice.chronicle.collection.*
+import com.openlattice.chronicle.audit.auditWorkerParameters
+import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.HealthConnectRecordType
+import com.openlattice.chronicle.collection.InteractionPolicy
+import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
-import com.openlattice.chronicle.collection.device.*
+import com.openlattice.chronicle.collection.device.AndroidHealthMetricSource
+import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
+import com.openlattice.chronicle.collection.device.HealthMetricCheckpoint
+import com.openlattice.chronicle.collection.device.HealthMetricReadCoordinator
 import com.openlattice.chronicle.collection.interaction.InteractionCollectionService
-import com.openlattice.chronicle.collection.sensors.*
-import com.openlattice.chronicle.collection.sink.*
+import com.openlattice.chronicle.collection.sensors.AndroidSensorGateway
+import com.openlattice.chronicle.collection.sensors.FakeSensorGateway
+import com.openlattice.chronicle.collection.sensors.FakeSensorRuntimeSettings
+import com.openlattice.chronicle.collection.sensors.ManualSensorRuntimeScheduler
+import com.openlattice.chronicle.collection.sensors.SensorGateway
+import com.openlattice.chronicle.collection.sensors.SensorRuntimeController
+import com.openlattice.chronicle.collection.sink.SensorSampleSink
 import com.openlattice.chronicle.collection.usage.DaoUsagePollCheckpointStore
-import com.openlattice.chronicle.preferences.*
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.InteractionPolicySettings
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
+import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
+import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.notifications.NotificationListener
+import com.openlattice.chronicle.services.sync.ChronicleSyncWorker
+import com.openlattice.chronicle.services.sync.mergeSyncResults
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
 import com.openlattice.chronicle.services.usage.UsageModuleCollectionDelegate
 import com.openlattice.chronicle.services.usage.collectUsage
 import com.openlattice.chronicle.sensors.LAST_USAGE_QUERY_TIMESTAMP
 import com.openlattice.chronicle.sensors.USAGE_EVENTS_SENSOR_CHECKPOINT
-import com.openlattice.chronicle.storage.*
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.CollectionModuleStateDao
+import com.openlattice.chronicle.storage.CollectionModuleStateEntity
+import com.openlattice.chronicle.storage.QueueEntry
+import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.storage.UploadServerDao
+import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.UsagePollCheckpointEntity
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
@@ -48,7 +78,13 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,6 +98,7 @@ import org.robolectric.shadows.ShadowSensor
 import org.robolectric.shadows.ShadowUsageStatsManager
 import org.robolectric.shadows.ShadowSensorManager
 import org.robolectric.util.ReflectionHelpers
+import com.openlattice.chronicle.collection.sink.SensorSampleWriter
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28], shadows = [AndroidSweepReworkRegressionTest.UsageProvider::class,
@@ -130,7 +167,7 @@ class AndroidSweepReworkRegressionTest {
     private fun <T : Any> countDao(field: String, type: Class<T>, delegate: T) {
         val proxy = Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
             queries.incrementAndGet()
-            if (failQueries) throw IllegalStateException("transient DAO read failure")
+            if (failQueries) error("transient DAO read failure")
             try { method.invoke(delegate, *(args ?: emptyArray())) }
             catch (error: InvocationTargetException) { throw error.targetException }
         }
@@ -138,7 +175,8 @@ class AndroidSweepReworkRegressionTest {
     }
 
     private fun publish() = onPersistenceWorker {
-        val method = ResearchPersistenceGate::class.java.declaredMethods.firstOrNull { !java.lang.reflect.Modifier.isPrivate(it.modifiers) && it.name.startsWith("initialize$") && it.parameterCount == 1 && it.parameterTypes[0] == Context::class.java }
+        val method = ResearchPersistenceGate::class.java.declaredMethods.firstOrNull { !java.lang.reflect.Modifier.isPrivate(it.modifiers) &&
+            it.name.startsWith("initialize$") && it.parameterCount == 1 && it.parameterTypes[0] == Context::class.java }
         if (method == null) stopOnPersistenceWorker { } else { method.isAccessible = true; method.invoke(ResearchPersistenceGate, context) }
     }
 
@@ -206,12 +244,14 @@ class AndroidSweepReworkRegressionTest {
         val listeners = gateway.javaClass.getDeclaredField("continuousListeners").apply { isAccessible = true }.get(gateway)
             as Map<AndroidSensorType, SensorEventListener>
         val event = ReflectionHelpers.callConstructor(SensorEvent::class.java, ReflectionHelpers.ClassParameter.from(Int::class.javaPrimitiveType, 3))
-        ReflectionHelpers.setField(event, "sensor", (context.getSystemService(Context.SENSOR_SERVICE) as SensorManager).getDefaultSensor(Sensor.TYPE_ACCELEROMETER))
+        ReflectionHelpers.setField(event, "sensor", (context.getSystemService(Context.SENSOR_SERVICE) as SensorManager).getDefaultSensor(
+            Sensor.TYPE_ACCELEROMETER))
         return { listeners.getValue(AndroidSensorType.accelerometer).onSensorChanged(event) }
     }
 
     private fun runtime(scheduler: ManualSensorRuntimeScheduler = ManualSensorRuntimeScheduler(false)) = SensorRuntimeController(
-        FakeSensorGateway(), FakeSensorRuntimeSettings(), SensorSampleSink(db.sensorSampleDao(), NoOpCollectionLog, ResearchPersistenceGate.guard(context)),
+        FakeSensorGateway(), FakeSensorRuntimeSettings(), SensorSampleSink(db.sensorSampleDao(), NoOpCollectionLog, ResearchPersistenceGate.guard(
+            context)),
         scheduler, collectionGate = { ResearchPersistenceGate.collectsNow(context, SensorCollectionModules.moduleFor(it)) },
         observationAdmission = { ResearchPersistenceGate.captureObservation(context, SensorCollectionModules.moduleFor(it)) },
         sampleLease = { ResearchPersistenceGate.withReadLease(it) }, log = NoOpCollectionLog)
@@ -340,8 +380,9 @@ class AndroidSweepReworkRegressionTest {
     }
 
     @Test fun successfulRetryOfSameOperationReopensTransientFailureLatch() {
-        val operation = ResearchPersistenceGate.PrivacyOperation("withdrawal")
-        assertThrows(java.io.IOException::class.java) { stopOnPersistenceWorker(operation) { throw java.io.IOException("transient deletion failure") } }
+        val operation = ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.WITHDRAWAL)
+        assertThrows(java.io.IOException::class.java) { stopOnPersistenceWorker(operation) { throw java.io.IOException(
+            "transient deletion failure") } }
         assertNull(ResearchPersistenceGate.runIfActive(context) { "closed" })
         stopOnPersistenceWorker { }
         assertNull(ResearchPersistenceGate.runIfActive(context) { "still closed" })
@@ -350,7 +391,8 @@ class AndroidSweepReworkRegressionTest {
     }
 
     @Test fun successfulReplayReopensOnlyItsOwnFailedErasureOperation() {
-        val operation = ResearchPersistenceGate.PrivacyOperation("erasure-replay", ownerKey = ResearchPersistenceGate.currentOwnerKey())
+        val operation = ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.ERASURE_REPLAY, ownerKey =
+            ResearchPersistenceGate.currentOwnerKey())
         assertThrows(java.io.IOException::class.java) { stopOnPersistenceWorker(operation) { throw java.io.IOException("transient failure") } }
         stopOnPersistenceWorker { fence.erase(setOf(CollectionModuleId.BATTERY_TELEMETRY), ownerKey = ResearchErasureFence.enrollmentKey(owner)) }
         assertFalse(ResearchPersistenceGate.collectsNow(context, CollectionModuleId.USAGE_EVENTS))
@@ -365,7 +407,8 @@ class AndroidSweepReworkRegressionTest {
         publish()
         stopOnPersistenceWorker { fence.installEnrollment(owner) }
         val scope = ResearchPersistenceGate.observationScope(context, CollectionModuleId.USAGE_EVENTS)!!
-        assertEquals(legacy, DaoUsagePollCheckpointStore(db.usagePollCheckpointDao(), scope.first, scope.second, fence.legacyCheckpointOwner()).readPreviousPollTimestamp())
+        assertEquals(legacy, DaoUsagePollCheckpointStore(db.usagePollCheckpointDao(), scope.first, scope.second, fence.legacyCheckpointOwner(
+            )).readPreviousPollTimestamp())
         assertEquals(legacy, db.usagePollCheckpointDao().getLastPollTimestamp("$USAGE_EVENTS_SENSOR_CHECKPOINT:${scope.first}"))
     }
 
@@ -384,7 +427,8 @@ class AndroidSweepReworkRegressionTest {
     @Test fun acceptedOptionalUsageFieldsSurviveTemporaryHold() {
         val sink = ResearchPersistenceGate.usageSink(context)
         hold(CollectionModuleId.IN_APP_ACTIVITY_CLASS, false); hold(CollectionModuleId.USER_IDENTIFICATION, false)
-        val event = com.openlattice.chronicle.models.ExtractedUsageEvent(appPackageName = "example.app", interactionType = "Activity Resumed", timestamp = OffsetDateTime.now(),
+        val event = com.openlattice.chronicle.models.ExtractedUsageEvent(appPackageName = "example.app", interactionType = "Activity Resumed",
+            timestamp = OffsetDateTime.now(),
             timezone = "UTC", user = "accepted-user", applicationLabel = "Example", activityClass = "AcceptedActivity")
         assertEquals(ModuleResult.Ok(1), sink.write(listOf(QueueEntry(1, 1, JsonSerializer.serializeQueueEntry(listOf(event))))))
         val stored = JsonSerializer.deserializeQueueEntry(db.queueEntryData().getEntriesAfter(Long.MIN_VALUE, Long.MIN_VALUE, 10).single().data)
@@ -406,7 +450,7 @@ class AndroidSweepReworkRegressionTest {
         assertEquals("AcceptedActivity", stored.activityClass)
     }
 
-    @Test fun usagePollWithoutUsageAccessKeepsCursorUntilAccessReturns() {
+    @Test @Config(sdk = [30, 36]) fun usagePollWithoutUsageAccessKeepsCursorUntilAccessReturns() {
         assertTrue(UsageModuleCollectionDelegate(context).execute())
         val scope = ResearchPersistenceGate.observationScope(context, CollectionModuleId.USAGE_EVENTS)!!
         val cursor = { DaoUsagePollCheckpointStore(db.usagePollCheckpointDao(), scope.first, scope.second).readPreviousPollTimestamp() }
@@ -415,8 +459,17 @@ class AndroidSweepReworkRegressionTest {
         shadowOf(appOps).setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, AppOpsManager.MODE_IGNORED)
         Thread.sleep(5)
         assertTrue(collectUsage(context))
+        val usageResult = ReflectionHelpers.callInstanceMethod<ListenableWorker.Result>(
+            ChronicleSyncWorker(context, auditWorkerParameters()), "runUsageCollection")
+        assertEquals(ListenableWorker.Result.success(), mergeSyncResults(usageResult, ListenableWorker.Result.success()))
         assertEquals(before, cursor())
         shadowOf(appOps).setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, AppOpsManager.MODE_ALLOWED)
+        val userManager = context.getSystemService(android.os.UserManager::class.java)
+        shadowOf(userManager).setUserUnlocked(false)
+        assertTrue(UsageModuleCollectionDelegate(context).execute())
+        assertTrue(com.openlattice.chronicle.services.usage.UsageCollectionDelegate(context).execute())
+        assertEquals(before, cursor())
+        shadowOf(userManager).setUserUnlocked(true)
         assertTrue(collectUsage(context))
         assertTrue(cursor()!! > before!!)
     }
@@ -451,12 +504,15 @@ class AndroidSweepReworkRegressionTest {
         val permissions = Proxy.newProxyInstance(permissionType.classLoader, arrayOf(permissionType)) { _, method, _ ->
             check(method.name == "getGrantedPermissions")
             assertEquals("provider permissions must not hold a lease", 0, lock.readLockCount)
-            setOf(androidx.health.connect.client.permission.HealthPermission.getReadPermission(androidx.health.connect.client.records.StepsRecord::class))
+            setOf(androidx.health.connect.client.permission.HealthPermission.getReadPermission(
+                androidx.health.connect.client.records.StepsRecord::class),
+                com.openlattice.chronicle.collection.permissions.ModulePermissions.HEALTH_CONNECT_BACKGROUND_READ)
         } as androidx.health.connect.client.PermissionController
         var reads = 0
         val clientType = androidx.health.connect.client.HealthConnectClient::class.java
         val client = Proxy.newProxyInstance(clientType.classLoader, arrayOf(clientType)) { _, method, _ ->
             when (method.name) {
+                "getFeatures" -> com.openlattice.chronicle.collection.device.healthConnectTestFeatures()
                 "getPermissionController" -> permissions
                 "readRecords" -> {
                     assertEquals("provider records must not hold a lease", 0, lock.readLockCount)
@@ -679,9 +735,11 @@ class AndroidSweepReworkRegressionTest {
         runtime.start(); scheduler.runNextExecution()
         assertTrue(registrationLog.problems.joinToString { "${it.message}: ${it.error?.stackTraceToString()}" }, registrationLog.problems.isEmpty())
         @Suppress("UNCHECKED_CAST")
-        val registrations = gateway.javaClass.getDeclaredField("triggerListeners").apply { isAccessible = true }.get(gateway) as Map<Sensor, TriggerEventListener>
+        val registrations = gateway.javaClass.getDeclaredField("triggerListeners").apply { isAccessible = true }.get(gateway) as Map<Sensor,
+            TriggerEventListener>
         val registration = registrations.entries.single()
-        val event = ReflectionHelpers.callConstructor(TriggerEvent::class.java, ReflectionHelpers.ClassParameter.from(Int::class.javaPrimitiveType, 1))
+        val event = ReflectionHelpers.callConstructor(TriggerEvent::class.java, ReflectionHelpers.ClassParameter.from(Int::class.javaPrimitiveType,
+            1))
         ReflectionHelpers.setField(event, "sensor", registration.key)
         StorageAdmission::class.java.getDeclaredField("lastAllowed").apply { isAccessible = true }.setBoolean(StorageAdmission, false)
         duringStop { registration.value.onTrigger(event) }
@@ -696,14 +754,14 @@ class AndroidSweepReworkRegressionTest {
     @Test fun directBootUnlockHandoverRetainsAcceptedRamAcrossTemporaryHold() {
         val module = CollectionModuleId.SENSOR_ACCELEROMETER
         val stamp = ResearchPersistenceGate.observationScope(context, module)!!.first
+        val version = ResearchPersistenceGate.currentSettingsVersion()
         val old = SensorRuntimeController(FakeSensorGateway(), FakeSensorRuntimeSettings(),
             SensorSampleWriter { ModuleResult.Retry("temporary append refusal") }, ManualSensorRuntimeScheduler(false),
             log = NoOpCollectionLog)
         old.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f), 3)
         hold(module, false)
-        val method = ResearchPersistenceGate::class.java.declaredMethods.first { it.name.startsWith("guardForRetainedRegistration$") }
         val transfer: (SensorSampleEntry) -> CollectionPersistenceGuard = {
-            method.invoke(ResearchPersistenceGate, context, module, stamp) as CollectionPersistenceGuard
+            ResearchPersistenceGate.guardForRetainedRegistration(context, module, stamp, version)
         }
         val stop = old.javaClass.declaredMethods.first { it.name == "stop" && it.parameterCount == 2 }
         stop.invoke(old, true, transfer)

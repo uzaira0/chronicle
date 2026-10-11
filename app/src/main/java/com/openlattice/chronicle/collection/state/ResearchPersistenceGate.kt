@@ -6,7 +6,6 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.services.upload.LocalOperationalIssue
-import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.isExpectedProvisionalEnrollmentServer
 import com.openlattice.chronicle.services.upload.recordForExpectedOwner
@@ -24,6 +23,7 @@ import com.openlattice.chronicle.storage.UploadServerEntity
  * barrier under its write lock, eliminating the gate-check/insert race in framework callbacks.
  */
 object ResearchPersistenceGate {
+    private val capturedObservation = ThreadLocal<ObservationToken?>()
     private val admittedOrigins = ThreadLocal<Set<CollectionModuleId>>()
     private const val TAG = "ResearchPersistenceGate"
     private val barrier = ResearchPersistenceBarrier()
@@ -48,14 +48,16 @@ object ResearchPersistenceGate {
             current.studyId == expected.studyId && current.participantId == expected.participantId &&
             current.sourceDeviceId == expected.sourceDeviceId
     }
-    internal data class PrivacyOperation(val kind: String, val identity: String = "", val ownerKey: String? = null)
+    internal enum class PrivacyOperationKind { LOCAL_STORE, WITHDRAWAL, PARTICIPANT_DECISION, MODULE_DISCARD, ERASURE_REPLAY, SETTINGS_APPLY }
+    internal data class PrivacyOperation(val kind: PrivacyOperationKind, val identity: String = "", val ownerKey: String? = null)
     private val failedOperations: MutableSet<PrivacyOperation> = java.util.Collections.newSetFromMap(
         java.util.concurrent.ConcurrentHashMap<PrivacyOperation, Boolean>())
-    private val untaggedFailure = PrivacyOperation("local-store")
+    private val untaggedFailure = PrivacyOperation(PrivacyOperationKind.LOCAL_STORE)
     // A failed operation whose durable outcome is later reached by another path (e.g. erasure replay).
     private val failureResolvers = java.util.concurrent.ConcurrentHashMap<PrivacyOperation, () -> Boolean>()
     private val persistenceFailureClosed: Boolean get() = failedOperations.any { it.ownerKey == null || it.ownerKey == authorization.ownerKey }
     internal fun currentOwnerKey(): String? = authorization.ownerKey
+    internal fun currentSettingsVersion(): Int? = authorization.settingsVersion
     internal fun canStopOnCurrentThread(): Boolean = runCatching { barrier.checkCanStop() }.isSuccess
     private val operationStack = ThreadLocal<PrivacyOperation?>()
     private val attributedFailure = ThreadLocal<Throwable?>()
@@ -115,6 +117,7 @@ object ResearchPersistenceGate {
         val active: Boolean = false,
         val totalGeneration: Long = 0,
         val enrolled: Boolean = false,
+        val settingsVersion: Int? = null,
     )
     @Volatile private var authorization = AuthorizationSnapshot()
     @Volatile private var authorizationContext: Context? = null
@@ -197,7 +200,7 @@ object ResearchPersistenceGate {
         authorization = AuthorizationSnapshot(owner, owner?.let(ResearchErasureFence::enrollmentKey),
             generations, CollectionModuleId.values().associateWith(fence::floor),
             if (active && !halted) states.filterValues { it.serverEnabled && it.decision == ParticipantDecision.ACCEPTED }.keys.toSet()
-            else emptySet(), active, generations.values.sum(), enrolled)
+            else emptySet(), active, generations.values.sum(), enrolled, states.values.maxOfOrNull { it.appliedVersion }?.takeIf { it > 0 })
     }
 
     private fun enqueueErasureReplay(context: Context) {
@@ -215,7 +218,7 @@ object ResearchPersistenceGate {
         val snapshot = authorization
         return ObservationToken(context.applicationContext, moduleId, snapshot.ownerKey,
             if (moduleId == null) snapshot.totalGeneration else snapshot.generations[moduleId] ?: -1,
-            !persistenceFailureClosed && snapshot.active && (moduleId == null || moduleId in snapshot.accepted))
+            !persistenceFailureClosed && snapshot.active && (moduleId == null || moduleId in snapshot.accepted), snapshot.settingsVersion)
     }
 
     /**
@@ -234,7 +237,7 @@ object ResearchPersistenceGate {
                 owner, java.util.UUID.fromString(owner.studyId), owner.participantId, moduleId)
         }.getOrDefault(false)
         return ObservationToken(context.applicationContext, moduleId, snapshot.ownerKey,
-            snapshot.generations[moduleId] ?: -1, !persistenceFailureClosed && snapshot.active && studyEnabled)
+            snapshot.generations[moduleId] ?: -1, !persistenceFailureClosed && snapshot.active && studyEnabled, snapshot.settingsVersion)
     }
 
     private class ObservationToken(
@@ -243,6 +246,7 @@ object ResearchPersistenceGate {
         val ownerKey: String?,
         val generation: Long,
         val accepted: Boolean,
+        val settingsVersion: Int?,
     ) : CollectionPersistenceGuard {
         override fun capture(): CollectionPersistenceGuard = this
         override fun isCurrent(): Boolean {
@@ -259,14 +263,18 @@ object ResearchPersistenceGate {
         }
         override fun persist(persist: () -> Unit): Boolean = persistResult(persist) == CollectionPersistenceResult.PERSISTED
         override fun persistResult(persist: () -> Unit): CollectionPersistenceResult = barrier.withReadLease {
-            if (!validate()) CollectionPersistenceResult.REFUSED
-            else if (module == CollectionModuleId.USAGE_EVENTS) persistGuarded(context, module, persist)
-            else {
-                val previous = admittedOrigins.get()
-                admittedOrigins.set(previous.orEmpty() + module?.let(::setOf).orEmpty())
-                try { persistGuarded(context, null, persist) }
-                finally { admittedOrigins.set(previous) }
-            }
+            val previousObservation = capturedObservation.get()
+            capturedObservation.set(this)
+            try {
+                if (!validate()) CollectionPersistenceResult.REFUSED
+                else if (module == CollectionModuleId.USAGE_EVENTS) persistGuarded(context, module, persist)
+                else {
+                    val previous = admittedOrigins.get()
+                    admittedOrigins.set(previous.orEmpty() + module?.let(::setOf).orEmpty())
+                    try { persistGuarded(context, null, persist) }
+                    finally { admittedOrigins.set(previous) }
+                }
+            } finally { capturedObservation.set(previousObservation) }
         }
     }
 
@@ -286,12 +294,14 @@ object ResearchPersistenceGate {
                         if (sample is com.openlattice.chronicle.models.ExtractedUsageEvent) {
                             val time = sample.timestamp.toInstant().toEpochMilli()
                             sample.copy(
-                                activityClass = sample.activityClass.takeIf { allowActivity && time >= fence.floor(CollectionModuleId.IN_APP_ACTIVITY_CLASS) },
+                                activityClass = sample.activityClass.takeIf { allowActivity && time >= fence.floor(
+                                    CollectionModuleId.IN_APP_ACTIVITY_CLASS) },
                                 user = sample.user.takeIf { allowUser && time >= fence.floor(CollectionModuleId.USER_IDENTIFICATION) }.orEmpty(),
                             )
                         } else sample
                     }
-                    com.openlattice.chronicle.storage.QueueEntry(entry.writeTimestamp, entry.id, com.openlattice.chronicle.serialization.JsonSerializer.serializeQueueEntry(samples))
+                    com.openlattice.chronicle.storage.QueueEntry(entry.writeTimestamp, entry.id,
+                        com.openlattice.chronicle.serialization.JsonSerializer.serializeQueueEntry(samples))
                 }
             },
         )
@@ -311,11 +321,12 @@ object ResearchPersistenceGate {
     }
 
     /** A DE registration already accepted these RAM entries; HOLD does not revoke its epoch. */
-    internal fun guardForRetainedRegistration(context: Context, module: CollectionModuleId, stamp: String?): CollectionPersistenceGuard {
+    internal fun guardForRetainedRegistration(context: Context, module: CollectionModuleId, stamp: String?,
+                                             settingsVersion: Int? = null): CollectionPersistenceGuard {
         val current = authorization
         val generation = current.generations[module] ?: -1L
         val matches = current.ownerKey != null && stamp == "${current.ownerKey}:$generation"
-        return ObservationToken(context.applicationContext, module, current.ownerKey, generation, matches)
+        return ObservationToken(context.applicationContext, module, current.ownerKey, generation, matches, settingsVersion)
     }
 
     internal fun guardForLegacyRetainedRegistration(context: Context, module: CollectionModuleId,
@@ -334,11 +345,11 @@ object ResearchPersistenceGate {
                     }
                 }
                 return ObservationToken(context.applicationContext, module, current.ownerKey,
-                    current.generations[module] ?: -1L, true)
+                    current.generations[module] ?: -1L, true, null)
             }
             override fun isCurrent(): Boolean = resolved()?.isCurrent() ?: true
             override fun validate(): Boolean = resolved()?.validate()
-                ?: throw IllegalStateException("Legacy registration ownership requires verification")
+                ?: error("Legacy registration ownership requires verification")
             override fun persist(persist: () -> Unit): Boolean = resolved()?.persist(persist) ?: false
             override fun persistResult(persist: () -> Unit): CollectionPersistenceResult =
                 resolved()?.persistResult(persist) ?: CollectionPersistenceResult.STORAGE_UNAVAILABLE
@@ -364,6 +375,10 @@ object ResearchPersistenceGate {
             if (!isSameEnrolledOwner(context, expected) || fence.settingsGeneration() != responseGeneration) return@stop
             val settings = EnrollmentSettings(context)
             val changed = settings.getParticipationStatus() != status
+            if (changed && status == ParticipationStatus.ENROLLED) {
+                // Commit the resume floor before reopening collection; keep authorized queues.
+                fence.erase(CollectionModuleId.values().toSet(), durableIntent = false)
+            }
             settings.setParticipationStatus(status)
             if (status != ParticipationStatus.ENROLLED) {
                 synchronized(com.openlattice.chronicle.services.notifications.REMINDER_SCHEDULE_LOCK) {
@@ -372,7 +387,8 @@ object ResearchPersistenceGate {
                     }
                 }
             }
-            if (changed) fence.settingsChanged()
+            if (changed && status != ParticipationStatus.ENROLLED) fence.settingsChanged()
+            CollectionLoopCoordinator(context).updateSensorService()
             applied = true
         }
         return applied
@@ -391,11 +407,15 @@ object ResearchPersistenceGate {
     fun guardForExpectedOwner(
         context: Context,
         expectedOwner: String,
+        settingsVersion: Int? = null,
         ownerNow: () -> String?,
     ): CollectionPersistenceGuard {
         val appContext = context.applicationContext
-        return expectedOwnerGuard(expectedOwner, ownerNow,
+        val ownerGuard = expectedOwnerGuard(expectedOwner, ownerNow,
             allowed = { isActiveEnrollmentOrThrow(appContext) && StorageAdmission.allowed(appContext) })
+        return CollectionPersistenceGuard { persist ->
+            ownerGuard.persist { persistWithSettingsEvidence(appContext, persist, settingsVersion) }
+        }
     }
 
     internal fun expectedOwnerGuard(
@@ -442,18 +462,8 @@ object ResearchPersistenceGate {
                         (moduleId == null || moduleId in admittedOrigins.get().orEmpty() || CollectionLoopStore.of(appContext).collects(moduleId))
                 },
                 persist = {
-                    try {
-                        persist()
-                        persisted = true
-                    } catch (error: Exception) {
-                        Log.e(TAG, "Research write failed; counting $records record(s) as lost", error)
-                        if (records > 0) runCatching {
-                            LocalUploadDiagnosticsStore.of(appContext).recordOperational(
-                                LocalUploadModuleFamily.LOCAL_STORE,
-                                LocalOperationalIssue.LOCAL_WRITE_FAILED, records,
-                            )
-                        }.onFailure { Log.e(TAG, "Unable to record lost research write", it) }
-                    }
+                    persistWithSettingsEvidence(appContext, persist)
+                    persisted = true
                 },
                 onRefused = {
                     if (records > 0 && isSameActiveOwner(appContext, owner)) {
@@ -463,11 +473,31 @@ object ResearchPersistenceGate {
                 },
             )
         } catch (error: Exception) {
+            // The outer transaction must roll back before its caller records the loss.
+            if (runCatching { ChronicleDb.getInstance(appContext).inTransaction() }.getOrDefault(false)) throw error
             Log.e(TAG, "Research write admission failed", error)
             recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.LOCAL_STORE,
                 LocalOperationalIssue.LOCAL_WRITE_FAILED, records)
         }
         return persisted
+    }
+
+    private fun persistWithSettingsEvidence(context: Context, persist: () -> Unit,
+        version: Int? = capturedObservation.get().let { if (it == null) authorization.settingsVersion else it.settingsVersion },
+    ) {
+        val db = ChronicleDb.getInstance(context)
+        db.runInTransaction {
+            val dao = db.lifecycleStateDao()
+            val key = com.openlattice.chronicle.storage.QUEUE_CAPTURE_VERSION_KEY
+            val previous = dao.get(key)
+            dao.upsert(com.openlattice.chronicle.storage.LifecycleStateEntity(key,
+                (version ?: com.openlattice.chronicle.collection.CollectionUploadEvidence.UNKNOWN_SETTINGS_VERSION).toString(), 0))
+            try { persist() }
+            finally {
+                if (previous == null) db.openHelper.writableDatabase.execSQL("DELETE FROM lifecycle_state WHERE `key` = ?", arrayOf(key))
+                else dao.upsert(previous)
+            }
+        }
     }
 
     /** See [ResearchPersistenceBarrier.withReadLease]; the direct-boot drain holds its buffer lock inside it. */
@@ -484,7 +514,7 @@ object ResearchPersistenceGate {
         return isActiveEnrollmentOrThrow(context) && isSameEnrollment(context, expected)
     }
 
-    private fun isSameEnrolledOwner(context: Context, expected: UploadServerEntity): Boolean {
+    internal fun isSameEnrolledOwner(context: Context, expected: UploadServerEntity): Boolean {
         return isActiveEnrollmentOrThrow(context, anyParticipationStatus = true) && isSameEnrollment(context, expected)
     }
 
@@ -495,17 +525,22 @@ object ResearchPersistenceGate {
         val current = ChronicleDb.getInstance(context).uploadServerDao().getConfiguredServer()
             ?: return false
         return current.id == expected.id && current.createdAt == expected.createdAt &&
-            current.enrollmentIssuedAtEpochMillis == expected.enrollmentIssuedAtEpochMillis && current.studyId == expected.studyId && current.participantId == expected.participantId &&
+            current.enrollmentIssuedAtEpochMillis == expected.enrollmentIssuedAtEpochMillis && current.studyId == expected.studyId &&
+                current.participantId == expected.participantId &&
             current.sourceDeviceId == expected.sourceDeviceId
     }
 
     fun <T : Any> runIfExpectedOwner(context: Context, expectedOwner: UploadServerEntity,
                                      operation: () -> T): T? {
+        return runOperation(context, { isSameActiveOwner(it, expectedOwner) }, operation)
+    }
+
+    private fun <T : Any> runOperation(context: Context, allowed: (Context) -> Boolean, operation: () -> T): T? {
         val appContext = context.applicationContext
         if (ResearchErasureFence(appContext).hasPendingErasures()) enqueueErasureReplay(appContext)
         var result: T? = null
         val admitted = barrier.persistIf(
-            allowed = { isSameActiveOwner(appContext, expectedOwner) },
+            allowed = { allowed(appContext) },
             persist = { result = com.openlattice.chronicle.security.CallDeadline.within(30_000, operation) },
         )
         return if (admitted) checkNotNull(result) else null
@@ -523,7 +558,7 @@ object ResearchPersistenceGate {
         } else if (persistenceFailureClosed || !StorageAdmission.allowed(appContext)) {
             CollectionPersistenceResult.STORAGE_UNAVAILABLE
         } else {
-            persist()
+            persistWithSettingsEvidence(appContext, persist)
             CollectionPersistenceResult.PERSISTED
         }
     }
@@ -549,15 +584,12 @@ object ResearchPersistenceGate {
      * worker so retry/failure behavior is preserved.
      */
     fun <T : Any> runIfActive(context: Context, operation: () -> T): T? {
-        val appContext = context.applicationContext
-        if (ResearchErasureFence(appContext).hasPendingErasures()) enqueueErasureReplay(appContext)
-        var result: T? = null
-        val admitted = barrier.persistIf(
-            allowed = { isActiveEnrollmentOrThrow(appContext) },
-            persist = { result = com.openlattice.chronicle.security.CallDeadline.within(30_000, operation) },
-        )
-        return if (admitted) checkNotNull(result) else null
+        return runOperation(context, { isActiveEnrollmentOrThrow(it) }, operation)
     }
+
+    /** Drain authorized queues after pause/completion; withdrawal and owner changes still fence HTTP. */
+    fun <T : Any> runIfEnrolled(context: Context, operation: () -> T): T? =
+        runOperation(context, { isActiveEnrollmentOrThrow(it, anyParticipationStatus = true) }, operation)
 
     /**
      * Initial enrollment acknowledgment lease. Setup is not complete yet, so [runIfActive]
@@ -571,22 +603,14 @@ object ResearchPersistenceGate {
         expected: UploadServerEntity,
         operation: () -> T,
     ): T? {
-        val appContext = context.applicationContext
-        if (ResearchErasureFence(appContext).hasPendingErasures()) enqueueErasureReplay(appContext)
-        var result: T? = null
-        val admitted = barrier.persistIf(
-            allowed = {
-                !persistenceFailureClosed && !ResearchErasureFence(appContext).hasPendingErasures() &&
+        return runOperation(context, { appContext ->
+            !persistenceFailureClosed && !ResearchErasureFence(appContext).hasPendingErasures() &&
                 EnrollmentSettings(appContext).getParticipationStatus() == ParticipationStatus.ENROLLED &&
-                    WithdrawalStateStore(appContext).state() == WithdrawalState.NONE &&
-                    isExpectedProvisionalEnrollmentServer(
-                        ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer(),
-                        expected,
-                    )
-            },
-            persist = { result = com.openlattice.chronicle.security.CallDeadline.within(30_000, operation) },
-        )
-        return if (admitted) checkNotNull(result) else null
+                WithdrawalStateStore(appContext).state() == WithdrawalState.NONE &&
+                isExpectedProvisionalEnrollmentServer(
+                    ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer(), expected,
+                )
+        }, operation)
     }
 
     /** Enrolled on this device and not withdrawn, whatever the server-side participation status. */
@@ -601,7 +625,8 @@ object ResearchPersistenceGate {
     fun isActiveEnrollment(context: Context): Boolean = try {
         val appContext = context.applicationContext
         val settings = EnrollmentSettings(appContext)
-        !ResearchErasureFence(appContext).hasPendingErasures() && !persistenceFailureClosed && collectionOwnerIsCurrent(appContext) && settings.getParticipationStatus() == ParticipationStatus.ENROLLED &&
+        !ResearchErasureFence(appContext).hasPendingErasures() && !persistenceFailureClosed && collectionOwnerIsCurrent(appContext) &&
+            settings.getParticipationStatus() == ParticipationStatus.ENROLLED &&
             settings.isEnrolled() &&
             WithdrawalStateStore(appContext).state() == WithdrawalState.NONE &&
             MinimalPlayArtifactState.isReady(appContext)
@@ -638,7 +663,7 @@ object ResearchPersistenceGate {
         barrier.stop {
             if ((stopDepth.get() ?: 0) == 0) attributedFailure.remove()
             val previous = operationStack.get()
-            val tagged = operation?.takeIf { it.kind in setOf("withdrawal", "participant-decision", "module-discard", "erasure-replay", "settings-apply") }
+            val tagged = operation?.takeIf { it.kind != PrivacyOperationKind.LOCAL_STORE }
             val effective = tagged ?: previous
             operationStack.set(effective)
             stopDepth.set((stopDepth.get() ?: 0) + 1)

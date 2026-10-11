@@ -1,7 +1,6 @@
 package com.openlattice.chronicle.collection.sensors
 
 import com.openlattice.chronicle.android.AndroidSensorType
-import com.openlattice.chronicle.collection.core.FixedCollectionClock
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.FakeSensorSampleDao
@@ -107,7 +106,6 @@ class SensorRuntimeControllerTest {
             scheduler = scheduler,
             collectionGate = collectionGate,
             collectionAdmission = collectionAdmission,
-            clock = FixedCollectionClock(1_000L),
             log = NoOpCollectionLog,
         )
         gateway.attach(

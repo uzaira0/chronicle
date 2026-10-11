@@ -31,7 +31,7 @@ class DirectBootDrainGateTest {
     )
 
     @Test
-    fun `closed-gate samples wait and unparseable sensors are erased while open-gate samples transfer`() {
+    fun closedGateSamplesWaitAndUnparseableSensorsAreErasedWhileOpenGateSamplesTransfer() {
         val written = mutableListOf<SensorSampleEntry>()
         val sink = SensorSampleWriter { samples ->
             written.addAll(samples)
@@ -54,7 +54,7 @@ class DirectBootDrainGateTest {
     }
 
     @Test
-    fun `all-refused batch transfers no samples`() {
+    fun allRefusedBatchTransfersNoSamples() {
         val sink = SensorSampleWriter { ModuleResult.Skipped("hold") }
 
         val result = DirectBootDrainWorker.persistGated(
@@ -67,7 +67,7 @@ class DirectBootDrainGateTest {
     }
 
     @Test
-    fun `reenrollment changes owner inside persistence lease and blocks insert`() {
+    fun reenrollmentChangesOwnerInsidePersistenceLeaseAndBlocksInsert() {
         var owner = "enrollment-A"
         var inserted = false
         val guard = ResearchPersistenceGate.expectedOwnerGuard("enrollment-A", { owner }, { true })

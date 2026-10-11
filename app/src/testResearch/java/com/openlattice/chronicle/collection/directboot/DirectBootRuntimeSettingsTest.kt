@@ -10,7 +10,7 @@ import org.junit.Test
 class DirectBootRuntimeSettingsTest {
 
     @Test
-    fun `delegates set and per-sensor config to the snapshot`() {
+    fun delegatesSetAndPerSensorConfigToTheSnapshot() {
         val snapshot = DirectBootSensorSnapshot(InMemorySharedPreferences()) { 0L }
         snapshot.write(
             mapOf(

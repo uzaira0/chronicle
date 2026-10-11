@@ -11,7 +11,7 @@ import java.nio.file.Paths
 class InteractionInputNonInterferenceContractTest {
 
     @Test
-    fun `accessibility configs request view events but no touch interception mode`() {
+    fun accessibilityConfigsRequestViewEventsButNoTouchInterceptionMode() {
         listOf(
             "app/src/googleServices/res/xml/interaction_accessibility_service_config.xml",
             "app/src/googleServices/res/xml-v31/interaction_accessibility_service_config.xml",
@@ -25,7 +25,7 @@ class InteractionInputNonInterferenceContractTest {
     }
 
     @Test
-    fun `collector never subscribes to or handles the touchscreen MotionEvent stream`() {
+    fun collectorNeverSubscribesToOrHandlesTheTouchscreenMotionEventStream() {
         val source = String(
             Files.readAllBytes(
                 repoPath(
@@ -40,7 +40,7 @@ class InteractionInputNonInterferenceContractTest {
     }
 
     @Test
-    fun `new interaction rows preserve node bounds without fake raw tap coordinates`() {
+    fun newInteractionRowsPreserveNodeBoundsWithoutFakeRawTapCoordinates() {
         val source = String(
             Files.readAllBytes(
                 repoPath(

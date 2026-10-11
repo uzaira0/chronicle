@@ -97,6 +97,8 @@ internal class DirectBootDiagnosticsJournal(
         if (sources.isEmpty()) return@synchronized false
         sources.forEach { source ->
             val digest = MessageDigest.getInstance("SHA-256").digest(source.readBytes())
+            // Corrupt journal content needs a stable incident ID across repeated recovery attempts.
+            // nosemgrep: chronicle-uuid-from-string
             val id = UUID.nameUUIDFromBytes(digest).toString()
             val quarantine = File(file.parentFile, "diagnostics-corrupt-$id.bin")
             if (!quarantine.exists()) check(source.renameTo(quarantine)) { "Unable to quarantine corrupt journal" }
@@ -140,6 +142,8 @@ internal class DirectBootDiagnosticsJournal(
     }
 
     private fun uuidId(id: String): String = runCatching { UUID.fromString(id).toString() }
+        // Non-UUID legacy incident labels map to stable journal keys for replay deduplication.
+        // nosemgrep: chronicle-uuid-from-string
         .getOrElse { UUID.nameUUIDFromBytes(id.toByteArray(Charsets.UTF_8)).toString() }
 
     private fun write(state: State) {

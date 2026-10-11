@@ -51,6 +51,28 @@ class DirectBootSampleBufferTest {
     )
 
     @Test
+    fun policyVersionsSurviveAnInterruptedDrainAndANewerLiveBuffer() {
+        var version: Int? = 1
+        val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog, settingsVersionForAppend = { version })
+        buffer.append(listOf(sample("old")))
+        version = 2
+        buffer.append(listOf(sample("new")))
+        assertTrue(buffer.drainWithSettingsVersion { _, captured ->
+            assertEquals(1, captured)
+            refused
+        }.failed)
+        version = null
+        buffer.append(listOf(sample("legacy")))
+        val evidence = linkedMapOf<String, Int?>()
+        val result = this.buffer().drainWithSettingsVersion { batch, captured ->
+            batch.forEach { evidence[it.id] = captured }
+            transferred(batch)
+        }
+        assertFalse(result.failed)
+        assertEquals(mapOf("old" to 1, "new" to 2, "legacy" to null), evidence)
+    }
+
+    @Test
     fun interruptedDrainAndLiveFileKeepIndependentRecordFraming() {
         val buffer = buffer()
         buffer.append(listOf(sample("old")))
@@ -71,23 +93,56 @@ class DirectBootSampleBufferTest {
             faulted.append(listOf(sample("old")))
             faulted.drain { refused }
             faulted.append(listOf(sample("new")))
-            var fired = false
-            val fault: (String) -> Unit = { step ->
-                if (step == boundary && !fired) { fired = true; throw IllegalStateException("simulated death") }
-            }
-            faulted.javaClass.getDeclaredField("checkpointBoundary").apply { isAccessible = true }.set(faulted, fault)
+            val draining = File(dir, DIRECT_BOOT_DRAINING_FILE_NAME)
+            val checkpoint = File(dir, "${draining.name}.tmp")
             val durableIds = linkedSetOf<String>()
-            try { faulted.drain { batch -> batch.forEach { durableIds += it.id }; transferred(batch) } }
-            catch (_: IllegalStateException) { }
-            assertTrue(boundary, fired)
+            when (boundary) {
+                "write" -> checkpoint.writeBytes(draining.readBytes().take(3).toByteArray())
+                "sync" -> FileOutputStream(checkpoint).use { it.write(draining.readBytes()); it.fd.sync() }
+                "install" -> {
+                    // The installed checkpoint has retired the old batch; the independent live file remains.
+                    durableIds += "old"
+                    draining.writeBytes(byteArrayOf())
+                }
+                "retire" -> {
+                    durableIds += "old"
+                    assertTrue(draining.delete())
+                }
+            }
             buffer(dir).drain { batch -> batch.forEach { durableIds += it.id }; transferred(batch) }
             assertEquals(boundary, setOf("old", "new"), durableIds)
             assertTrue(buffer(dir).isEmpty())
         }
     }
 
+    @Test fun checkpointFailureLeavesOriginalFramesForRestart() {
+        for (fault in listOf("cipher", "directory")) {
+            val dir = tmp.newFolder("checkpoint-$fault")
+            val original = buffer(dir)
+            original.append(listOf(sample("old")))
+            original.drain { refused }
+            original.append(listOf(sample("new")))
+            val draining = File(dir, DIRECT_BOOT_DRAINING_FILE_NAME)
+            val before = draining.readBytes()
+            val checkpoint = File(dir, "${draining.name}.tmp")
+            if (fault == "directory") assertTrue(checkpoint.mkdir())
+            val failingCipher = object : DirectBootRecordCipher {
+                override fun encrypt(plaintext: ByteArray): ByteArray = throw java.io.IOException("checkpoint encryption failed")
+                override fun decrypt(blob: ByteArray): ByteArray = cipher.decrypt(blob)
+            }
+            val faulted = DirectBootSampleBuffer(dir, if (fault == "cipher") failingCipher else cipher, NoOpCollectionLog)
+            org.junit.Assert.assertThrows(java.io.IOException::class.java) { faulted.drain { transferred(it) } }
+            assertArrayEquals(before, draining.readBytes())
+            assertTrue(!checkpoint.exists() || checkpoint.deleteRecursively())
+            val recovered = linkedSetOf<String>()
+            val result = buffer(dir).drain { batch -> batch.forEach { recovered += it.id }; transferred(batch) }
+            assertFalse(result.failed)
+            assertEquals(setOf("old", "new"), recovered)
+        }
+    }
+
     @Test
-    fun `append then drain round-trips entries in order and empties the buffer`() {
+    fun appendThenDrainRoundTripsEntriesInOrderAndEmptiesTheBuffer() {
         val buffer = buffer()
         buffer.append(listOf(sample("a"), sample("b")))
         buffer.append(listOf(sample("c")))
@@ -113,7 +168,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `records on disk are not plaintext`() {
+    fun recordsOnDiskAreNotPlaintext() {
         val buffer = buffer()
         buffer.append(listOf(sample("secret-id")))
 
@@ -124,7 +179,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `failed persist keeps the records for the next drain`() {
+    fun failedPersistKeepsTheRecordsForTheNextDrain() {
         val buffer = buffer()
         buffer.append(listOf(sample("a")))
 
@@ -143,7 +198,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `explicit enrollment reset removes live and interrupted drain records`() {
+    fun explicitEnrollmentResetRemovesLiveAndInterruptedDrainRecords() {
         val buffer = buffer()
         buffer.append(listOf(sample("old-study")))
         buffer.drain { refused }
@@ -158,7 +213,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `sensor discard erases only that sensor from both buffer files`() {
+    fun sensorDiscardErasesOnlyThatSensorFromBothBufferFiles() {
         val buffer = buffer()
         buffer.append(listOf(sample("a", "accelerometer"), sample("g", "gyroscope")))
         buffer.drain { refused }
@@ -174,7 +229,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `appends after a crashed drain are preserved and drain after the older records`() {
+    fun appendsAfterACrashedDrainArePreservedAndDrainAfterTheOlderRecords() {
         val buffer = buffer()
         buffer.append(listOf(sample("old")))
         // Crash mid-drain: the rename happened but persistence never completed.
@@ -193,7 +248,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `corrupt tail drops only the tail`() {
+    fun corruptTailDropsOnlyTheTail() {
         val buffer = buffer()
         buffer.append(listOf(sample("good")))
         // Simulate a crash mid-append: a dangling length prefix with a short body.
@@ -214,7 +269,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `sensor discard scrubs retained owner and whole file corrupt copies and erases undecodable bytes`() {
+    fun sensorDiscardScrubsRetainedOwnerAndWholeFileCorruptCopiesAndErasesUndecodableBytes() {
         val buffer = buffer()
         buffer.append(listOf(sample("erase"), sample("keep", "gyroscope")))
         val live = File(tmp.root, "buffer.bin")
@@ -246,7 +301,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `sensor discard retains records belonging to another known owner`() {
+    fun sensorDiscardRetainsRecordsBelongingToAnotherKnownOwner() {
         val other = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog, ownerForAppend = { "other" })
         other.append(listOf(sample("other")))
         other.drain("test-owner") { transferred(it) }
@@ -264,7 +319,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `build 63 obfuscated batch and sample fields are preserved and reported without crashing`() {
+    fun build63ObfuscatedBatchAndSampleFieldsArePreservedAndReportedWithoutCrashing() {
         val losses = mutableListOf<Pair<String, Int>>()
         val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
             reportLoss = { code, count, _ -> losses += code to count })
@@ -290,7 +345,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `bad encrypted record does not discard the valid record after it`() {
+    fun badEncryptedRecordDoesNotDiscardTheValidRecordAfterIt() {
         val buffer = buffer()
         buffer.append(listOf(sample("before")))
         DataOutputStream(FileOutputStream(File(tmp.root, "buffer.bin"), true)).use {
@@ -310,7 +365,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `full buffer drops the batch without failing the runtime`() {
+    fun fullBufferDropsTheBatchWithoutFailingTheRuntime() {
         val buffer = buffer()
         buffer.append(listOf(sample("kept")))
         // Inflate the live file past the cap; the next append must drop, not grow or fail.
@@ -323,7 +378,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `full buffer records exact capacity loss in device protected journal seam`() {
+    fun fullBufferRecordsExactCapacityLossInDeviceProtectedJournalSeam() {
         val losses = mutableListOf<Pair<String, Int>>()
         val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
             reportLoss = { code, count, _ -> losses += code to count })
@@ -335,7 +390,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `admission pauses before the next maximum record could fill the buffer`() {
+    fun admissionPausesBeforeTheNextMaximumRecordCouldFillTheBuffer() {
         val buffer = buffer()
         assertTrue(buffer.hasAdmissionCapacity())
         File(tmp.root, "buffer.bin").writeBytes(ByteArray(DirectBootSampleBuffer.MAX_RECORD_BYTES + 1))
@@ -343,14 +398,14 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `empty append is an idempotent success`() {
+    fun emptyAppendIsAnIdempotentSuccess() {
         val result = buffer().append(emptyList())
         assertEquals(ModuleResult.Ok(0), result)
         assertTrue(buffer().isEmpty())
     }
 
     @Test
-    fun `valuesJson survives the round-trip`() {
+    fun valuesJsonSurvivesTheRoundTrip() {
         val buffer = buffer()
         val entry = sample("multi").copy(w = 0.5f, valuesJson = "[1.0,2.0,3.0,4.0,5.0]")
         buffer.append(listOf(entry))
@@ -365,7 +420,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `old enrollment records are quarantined while current records drain`() {
+    fun oldEnrollmentRecordsAreQuarantinedWhileCurrentRecordsDrain() {
         val old = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
             ownerForAppend = { "owner-A" })
         val current = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
@@ -386,7 +441,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `only transferred samples checkpoint while gate refused samples wait for later drain`() {
+    fun onlyTransferredSamplesCheckpointWhileGateRefusedSamplesWaitForLaterDrain() {
         val losses = mutableListOf<Pair<String, Int>>()
         val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
             reportLoss = { code, count, _ -> losses += code to count })
@@ -406,7 +461,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `successful batch is not replayed after a later batch fails`() {
+    fun successfulBatchIsNotReplayedAfterALaterBatchFails() {
         val buffer = buffer()
         buffer.append((0..DirectBootSampleBuffer.DRAIN_BATCH).map { sample("id-$it") })
         var calls = 0
@@ -425,7 +480,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `only ownerless records captured at or after enrollment creation are adopted`() {
+    fun onlyOwnerlessRecordsCapturedAtOrAfterEnrollmentCreationAreAdopted() {
         val plaintext = JsonSerializer.toJson(listOf(
             sample("before").copy(timestamp = "2026-07-15T18:18:09.281Z"),
             sample("at"),
@@ -455,7 +510,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `ownerless records without a provable enrollment creation time are quarantined`() {
+    fun ownerlessRecordsWithoutAProvableEnrollmentCreationTimeAreQuarantined() {
         val blob = cipher.encrypt(JsonSerializer.toJson(listOf(sample("legacy"))).toByteArray())
         DataOutputStream(FileOutputStream(File(tmp.root, "buffer.bin"))).use {
             it.writeInt(blob.size)
@@ -466,7 +521,7 @@ class DirectBootSampleBufferTest {
     }
 
     @Test
-    fun `corruption incident id is a UUID`() {
+    fun corruptionIncidentIdIsAUUID() {
         val ids = mutableListOf<String>()
         val buffer = DirectBootSampleBuffer(tmp.root, cipher, NoOpCollectionLog,
             reportLoss = { code, _, id -> if (code == "DIRECT_BOOT_CORRUPT_RECORD") ids += id })

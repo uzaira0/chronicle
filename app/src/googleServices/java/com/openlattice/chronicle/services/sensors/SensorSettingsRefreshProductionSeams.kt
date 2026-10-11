@@ -6,7 +6,6 @@ import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.sensors.SensorSettingsGateway
 import com.openlattice.chronicle.collection.sensors.SensorSettingsStore
 import com.openlattice.chronicle.preferences.SensorSettings
-import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.storage.ChronicleDb
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -44,11 +43,6 @@ public class ChronicleSensorSettingsGateway(
             )
         }
 
-    override fun fetchAndroidSensorSetting(server: SensorSettingsGateway.Server): AndroidSensorSetting {
-        val api = UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
-        return api.getAndroidSensorSettings(UUID.fromString(server.studyId))
-    }
-
     override fun reportAvailability(
         server: SensorSettingsGateway.Server,
         requestedSensors: Set<AndroidSensorType>,
@@ -78,7 +72,7 @@ public class ChronicleSensorSettingsGateway(
  * Production [SensorSettingsStore] backed by the encrypted-prefs [SensorSettings].
  *
  * Reconstructs the legacy [AndroidSensorSetting] from the four `SensorSettings` getters
- * and writes it back through `save` / `clear`, exactly as the legacy worker did.
+ * for the availability report.
  *
  */
 public class SensorSettingsPrefsStore(context: Context) : SensorSettingsStore {
@@ -96,13 +90,4 @@ public class SensorSettingsPrefsStore(context: Context) : SensorSettingsStore {
         )
     }
 
-    override fun isEffectivelyEnabled(): Boolean = sensorSettings.isEnabled()
-
-    override fun save(setting: AndroidSensorSetting) {
-        sensorSettings.save(setting)
-    }
-
-    override fun clear() {
-        sensorSettings.clear()
-    }
 }

@@ -126,22 +126,31 @@ class AppNetworkEnrollmentPersistenceTest {
         assertTrue(StatsManager.windows.all { it.first == baseline })
     }
 
-    @Test fun readWithoutUsageAccessKeepsCheckpointUntilAccessReturns() {
+    @Test @Config(sdk = [26, 36]) fun readWithoutUsageAccessKeepsCheckpointUntilAccessReturns() {
         source.read()
         source.acknowledgeRead()
         val last = checkpoint.getLong("last_end_millis", -1)
+        Thread.sleep(2)
+        source.read()
+        val pending = checkpoint.getLong("pending_end_millis", -1)
         val appOps = context.getSystemService(android.app.AppOpsManager::class.java)
         val shadow = org.robolectric.Shadows.shadowOf(appOps)
-        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, android.app.AppOpsManager.MODE_IGNORED)
+        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
+            android.app.AppOpsManager.MODE_IGNORED)
         StatsManager.windows.clear()
         Thread.sleep(2)
-        assertTrue(source.read().isEmpty())
-        source.acknowledgeRead()
+        val module = AppNetworkUsageCollectionModule(
+            com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao()),
+            source, { true }, log = com.openlattice.chronicle.collection.core.NoOpCollectionLog)
+        assertEquals(com.openlattice.chronicle.collection.core.ModuleResult.Ok(0), module.sample())
+        assertNull(AndroidAppNetworkUsageSource::class.java.getDeclaredField("pendingEndMillis").apply { isAccessible = true }.get(source))
         assertTrue("no summary without Usage Access", StatsManager.windows.isEmpty())
         assertEquals(last, checkpoint.getLong("last_end_millis", -1))
-        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName, android.app.AppOpsManager.MODE_ALLOWED)
+        assertEquals(pending, checkpoint.getLong("pending_end_millis", -1))
+        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
+            android.app.AppOpsManager.MODE_ALLOWED)
         source.read()
-        assertTrue(StatsManager.windows.isNotEmpty() && StatsManager.windows.all { it.first == last })
+        assertTrue(StatsManager.windows.isNotEmpty() && StatsManager.windows.all { it.first == last && it.second == pending })
     }
 
     @Test fun withdrawalCompletesWithBoundaryWriterWaitingForQueue() {
@@ -285,6 +294,30 @@ class AppNetworkEnrollmentPersistenceTest {
         StatsManager.windows.clear()
         source.read()
         assertEquals(first, StatsManager.windows)
+    }
+
+    @Test fun backwardClockPollDoesNotReopenAcknowledgedNetworkWindow() {
+        source.read()
+        source.acknowledgeRead()
+        // An acknowledged endpoint ahead of the current clock models a backward correction.
+        val sentThrough = System.currentTimeMillis() + java.util.concurrent.TimeUnit.HOURS.toMillis(1)
+        checkpoint.edit().putLong("last_end_millis", sentThrough).commit()
+        StatsManager.windows.clear()
+
+        repeat(2) {
+            assertTrue(source.read().isEmpty())
+            source.acknowledgeRead()
+            assertEquals(sentThrough, checkpoint.getLong("last_end_millis", -1))
+            assertFalse(checkpoint.contains("pending_end_millis"))
+            assertTrue("acknowledged traffic must not be queried again", StatsManager.windows.isEmpty())
+        }
+
+        val nextEnd = sentThrough + java.util.concurrent.TimeUnit.MINUTES.toMillis(1)
+        checkpoint.edit().putLong("pending_end_millis", nextEnd).commit()
+        source.read()
+        assertEquals(listOf(sentThrough to nextEnd, sentThrough to nextEnd), StatsManager.windows)
+        source.acknowledgeRead()
+        assertEquals(nextEnd, checkpoint.getLong("last_end_millis", -1))
     }
 
     @Test fun upgradeAdoptsLegacyTaggedScopeAndPreservesBothWindowEndpoints() {

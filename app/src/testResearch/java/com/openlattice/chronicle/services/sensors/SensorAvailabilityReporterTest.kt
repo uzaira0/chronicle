@@ -6,7 +6,7 @@ import org.junit.Test
 
 class SensorAvailabilityReporterTest {
     @Test
-    fun `pre Android 14 reports pointer API unavailable`() {
+    fun preAndroid14ReportsPointerAPIUnavailable() {
         assertEquals(
             InteractionPointerCaptureCapability.PLATFORM_API_UNAVAILABLE,
             SensorAvailabilityReporter.interactionPointerCapabilityFor(33),
@@ -14,7 +14,7 @@ class SensorAvailabilityReporterTest {
     }
 
     @Test
-    fun `Android 14 and later report that pointer capture requires interception`() {
+    fun android14AndLaterReportThatPointerCaptureRequiresInterception() {
         assertEquals(
             InteractionPointerCaptureCapability.REQUIRES_INPUT_INTERCEPTION,
             SensorAvailabilityReporter.interactionPointerCapabilityFor(34),

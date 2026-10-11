@@ -12,7 +12,6 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.security.MessageDigest
@@ -50,16 +49,19 @@ class DirectBootSampleBuffer(
     private val log: CollectionLog = CollectionLog.LOGCAT,
     private val reportLoss: (String, Int, String) -> Unit = { _, _, _ -> },
     private val ownerForAppend: () -> String? = { "test-owner" },
+    private val settingsVersionForAppend: () -> Int? = { null },
 ) {
     constructor(context: Context) : this(
         File(directBootFilesDir(context), DIRECT_BOOT_BUFFER_DIR_NAME),
         KeystoreDirectBootRecordCipher(),
         reportLoss = { code, count, id -> DirectBootDiagnosticsJournal(context).record(code, count, id) },
         ownerForAppend = { DirectBootDiagnosticsJournal(context).currentOwner()?.let(::ownerKey) },
+        settingsVersionForAppend = com.openlattice.chronicle.preferences.DirectBootSensorSnapshot(context).settingsVersion().let { version -> {
+            version } },
     )
 
-    private data class Batch(val owner: String?, val samples: List<SensorSampleEntry>)
-    private data class OwnedSample(val owner: String?, val sample: SensorSampleEntry)
+    private data class Batch(val owner: String?, val samples: List<SensorSampleEntry>, val settingsVersion: Int? = null)
+    private data class OwnedSample(val owner: String?, val sample: SensorSampleEntry, val settingsVersion: Int?)
     private data class DecodeResult(
         val entries: List<OwnedSample>,
         val badRecords: List<Pair<Int, ByteArray>>,
@@ -79,8 +81,6 @@ class DirectBootSampleBuffer(
         val failed: Boolean = false,
         val discardedIds: Set<String> = emptySet(),
     )
-
-    private var checkpointBoundary: (String) -> Unit = {}
 
     private val liveFile: File get() = File(dir, DIRECT_BOOT_LIVE_FILE_NAME)
     private val drainingFile: File get() = File(dir, DIRECT_BOOT_DRAINING_FILE_NAME)
@@ -166,7 +166,7 @@ class DirectBootSampleBuffer(
                 val owner = ownerForAppend() ?: return@synchronized failed(
                     IllegalStateException("Direct-boot enrollment owner is unavailable"),
                 )
-                val blob = cipher.encrypt(BATCH_ADAPTER.toJson(Batch(owner, samples)).toByteArray(Charsets.UTF_8))
+                val blob = cipher.encrypt(BATCH_ADAPTER.toJson(Batch(owner, samples, settingsVersionForAppend())).toByteArray(Charsets.UTF_8))
                 require(blob.size <= MAX_RECORD_BYTES) { "Direct-boot batch exceeds record limit" }
                 if (liveFile.length() + blob.size + Int.SIZE_BYTES > MAX_BUFFER_BYTES) {
                     reportLoss("DIRECT_BOOT_CAPACITY_DROPPED", samples.size, UUID.randomUUID().toString())
@@ -199,6 +199,12 @@ class DirectBootSampleBuffer(
         expectedOwner: String = "test-owner",
         enrollmentCreatedAt: String? = null,
         persist: (List<SensorSampleEntry>) -> DrainTransfer,
+    ): DrainResult = drainWithSettingsVersion(expectedOwner, enrollmentCreatedAt) { samples, _ -> persist(samples) }
+
+    fun drainWithSettingsVersion(
+        expectedOwner: String = "test-owner",
+        enrollmentCreatedAt: String? = null,
+        persist: (List<SensorSampleEntry>, Int?) -> DrainTransfer,
     ): DrainResult = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
         // Drain the interrupted file independently: a partial tail must never frame newer records.
         if (drainingFile.length() == 0L && liveFile.length() > 0L) {
@@ -227,7 +233,10 @@ class DirectBootSampleBuffer(
             check(quarantineDir.isDirectory || quarantineDir.mkdirs())
             val digest = MessageDigest.getInstance("SHA-256")
                 .digest(unauthorized.joinToString("|") { "${it.owner}:${it.sample.id}" }.toByteArray())
-            val quarantine = File(quarantineDir, "owner-${UUID.nameUUIDFromBytes(digest)}.bin")
+                // Owner quarantine filename is a repeatable payload key, never an authorization token.
+                // nosemgrep: chronicle-uuid-from-string
+            val quarantine = File(quarantineDir,
+                "owner-${UUID.nameUUIDFromBytes(digest)}.bin")
             if (!quarantine.exists()) writeRecords(quarantine, unauthorized)
         }
         var remaining = entries.filter { it.owner == expectedOwner }
@@ -237,8 +246,9 @@ class DirectBootSampleBuffer(
         var persisted = 0
         val retained = mutableListOf<OwnedSample>()
         while (remaining.isNotEmpty()) {
-            val batch = remaining.take(DRAIN_BATCH)
-            val result = persist(batch.map { it.sample })
+            val version = remaining.first().settingsVersion
+            val batch = remaining.take(DRAIN_BATCH).takeWhile { it.settingsVersion == version }
+            val result = persist(batch.map { it.sample }, version)
             val consumed = result.transferredIds + result.discardedIds
             check(consumed.all { id -> batch.any { it.sample.id == id } })
             result.discardedIds.forEach { id -> reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, "unknown-sensor:$id") }
@@ -252,14 +262,13 @@ class DirectBootSampleBuffer(
             }
         }
         if (retained.isEmpty()) {
-            checkpointBoundary("retire")
             check(drainingFile.delete()) { "Unable to retire direct-boot drain" }
         }
         if (persisted > 0 || corrupt > 0) {
             log.info(TAG, "Drained $persisted direct-boot sample(s); $corrupt corrupt record(s) dropped")
         }
         if (retained.isEmpty() && liveFile.length() > 0L) {
-            val next = drain(expectedOwner, enrollmentCreatedAt, persist)
+            val next = drainWithSettingsVersion(expectedOwner, enrollmentCreatedAt, persist)
             DrainResult(persisted + next.persisted, corrupt + next.corruptRecordsDropped, next.failed)
         } else DrainResult(persisted, corrupt, failed = retained.isNotEmpty())
     }
@@ -267,6 +276,8 @@ class DirectBootSampleBuffer(
     private fun preserveCorruption(decoded: DecodeResult, retainPayloads: Boolean = true) {
         decoded.badRecords.forEach { (ordinal, blob) ->
             val digest = MessageDigest.getInstance("SHA-256").digest(blob)
+            // Corrupt record digest and ordinal deduplicate that record during repeated drains.
+            // nosemgrep: chronicle-uuid-from-string
             val id = UUID.nameUUIDFromBytes(digest + ordinal.toByte()).toString()
             val preserved = File(dir, "corrupt-$id.bin")
             if (retainPayloads && !preserved.exists()) preserved.writeBytes(blob)
@@ -274,6 +285,8 @@ class DirectBootSampleBuffer(
         }
         if (decoded.corruptTail.isNotEmpty()) {
             val digest = MessageDigest.getInstance("SHA-256").digest(decoded.corruptTail)
+            // Truncated-tail digest deduplicates the same loss incident across drain retries.
+            // nosemgrep: chronicle-uuid-from-string
             val id = UUID.nameUUIDFromBytes(digest).toString()
             val preserved = File(dir, "corrupt-$id.bin")
             if (retainPayloads && !preserved.exists()) preserved.writeBytes(decoded.corruptTail)
@@ -308,7 +321,7 @@ class DirectBootSampleBuffer(
                     val batch = if (json.trimStart().startsWith("[")) {
                         Batch(null, LEGACY_ADAPTER.fromJson(json).orEmpty())
                     } else BATCH_ADAPTER.fromJson(json) ?: error("Empty direct-boot batch")
-                    entries.addAll(batch.samples.map { OwnedSample(batch.owner, it) })
+                    entries.addAll(batch.samples.map { OwnedSample(batch.owner, it, batch.settingsVersion) })
                 } catch (e: Exception) {
                     badRecords += ordinal to blob
                     log.warn(TAG, "Quarantining corrupt direct-boot record", e)
@@ -322,23 +335,20 @@ class DirectBootSampleBuffer(
         val temp = File(destination.parentFile, "${destination.name}.tmp")
         FileOutputStream(temp).use { fos ->
             DataOutputStream(fos).use { output ->
-                entries.groupBy { it.owner }.forEach { (owner, owned) ->
+                entries.groupBy { it.owner to it.settingsVersion }.forEach { (evidence, owned) ->
                     owned.chunked(DRAIN_BATCH).forEach { chunk ->
                         val blob = cipher.encrypt(BATCH_ADAPTER.toJson(
-                            Batch(owner, chunk.map { it.sample }),
+                            Batch(evidence.first, chunk.map { it.sample }, evidence.second),
                         ).toByteArray(Charsets.UTF_8))
                         check(blob.size in 1..MAX_RECORD_BYTES)
-                        checkpointBoundary("write")
                         output.writeInt(blob.size)
                         output.write(blob)
                     }
                 }
                 output.flush()
                 fos.fd.sync()
-                checkpointBoundary("sync")
             }
         }
-        checkpointBoundary("install")
         check(temp.renameTo(destination)) { "Unable to checkpoint direct-boot drain" }
     }
 

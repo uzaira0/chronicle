@@ -4,10 +4,12 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import com.openlattice.chronicle.android.AndroidSensorType
+import com.openlattice.chronicle.collection.CollectionUploadEvidence
 
 private const val DIRECT_BOOT_PREFS_FILE = "chronicle_direct_boot_snapshot"
 private const val KEY_WRITTEN_AT = "db_written_at"
 private const val KEY_SENSORS = "db_sensors"
+private const val KEY_SETTINGS_VERSION = "db_settings_version"
 private const val KEY_RATE_HZ_PREFIX = "db_rate_hz_"
 private const val KEY_DUTY_ACTIVE_PREFIX = "db_duty_active_"
 private const val KEY_DUTY_PERIOD_PREFIX = "db_duty_period_"
@@ -74,8 +76,10 @@ class DirectBootSensorSnapshot(
      * "nothing may collect before unlock". Synchronous commit so callers can trust the
      * locked-boot view once this returns.
      */
-    fun write(collectable: Map<AndroidSensorType, SensorConfig>, consentStamps: Map<AndroidSensorType, String> = emptyMap()): Boolean {
+    fun write(collectable: Map<AndroidSensorType, SensorConfig>, consentStamps: Map<AndroidSensorType, String> = emptyMap(),
+              settingsVersion: Int? = null): Boolean {
         val editor = prefs.edit()
+        if (settingsVersion == null) editor.remove(KEY_SETTINGS_VERSION) else editor.putInt(KEY_SETTINGS_VERSION, settingsVersion)
         AndroidSensorType.entries.forEach { sensor ->
             editor.remove("db_consent_stamp_" + sensor.name)
                 .remove(KEY_RATE_HZ_PREFIX + sensor.name)
@@ -94,6 +98,9 @@ class DirectBootSensorSnapshot(
     }
 
     fun writtenAt(): Long? = prefs.getLong(KEY_WRITTEN_AT, -1L).takeIf { it >= 0 }
+
+    fun settingsVersion(): Int? = prefs.getInt(KEY_SETTINGS_VERSION, CollectionUploadEvidence.UNKNOWN_SETTINGS_VERSION)
+        .takeIf { it > CollectionUploadEvidence.UNKNOWN_SETTINGS_VERSION }
 
     fun consentStamp(sensor: AndroidSensorType): String? = prefs.getString("db_consent_stamp_" + sensor.name, null)
 

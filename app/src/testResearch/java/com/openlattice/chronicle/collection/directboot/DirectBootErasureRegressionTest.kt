@@ -32,7 +32,12 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -86,7 +91,8 @@ class DirectBootErasureRegressionTest {
     @Before fun setUp() {
         com.openlattice.chronicle.collection.state.ResearchPersistenceGate.resetAfterLocalStoreRecovery()
         if (!androidx.work.WorkManager.isInitialized()) {
-            androidx.work.WorkManager.initialize(context, androidx.work.Configuration.Builder().setExecutor(java.util.concurrent.Executor { }).build())
+            androidx.work.WorkManager.initialize(context, androidx.work.Configuration.Builder().setExecutor(java.util.concurrent.Executor { }).build(
+                ))
         }
         admissionPrefs.edit().clear().commit()
         pendingPrefs.edit().clear().commit()
@@ -123,7 +129,7 @@ class DirectBootErasureRegressionTest {
             )))
             val buffer = DirectBootSampleBuffer(temp.newFolder(), cipher, NoOpCollectionLog)
             buffer.append(listOf(sample("accepted")))
-            val result = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null) {
+            val result = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null) { _, _ ->
                 DirectBootSampleBuffer.DrainTransfer(emptySet())
             }
             assertTrue("$decision/$disposition must retain accepted records", result.failed)
@@ -138,8 +144,8 @@ class DirectBootErasureRegressionTest {
         val buffer = ownedBuffer()
         buffer.append(listOf(sample("discarded"), sample("keep", "gyroscope")))
         val written = mutableListOf<String>()
-        DirectBootDrainWorker.drainBuffer(context, buffer, configuredOwnerKey(), null) {
-            written += it.map { sample -> sample.id }; transfer(it)
+        DirectBootDrainWorker.drainBuffer(context, buffer, configuredOwnerKey(), null) { batch, _ ->
+            written += batch.map { sample -> sample.id }; transfer(batch)
         }
         assertEquals(listOf("keep"), written)
         assertTrue(pendingPrefs.getStringSet("sensor_types", emptySet()).orEmpty().isEmpty())
@@ -183,8 +189,8 @@ class DirectBootErasureRegressionTest {
         val buffer = ownedBuffer()
         buffer.append(listOf(sample("discarded")))
         var transferred = false
-        val result = DirectBootDrainWorker.drainBuffer(failingErasureContext(), buffer, configuredOwnerKey(), null) {
-            transferred = true; transfer(it)
+        val result = DirectBootDrainWorker.drainBuffer(failingErasureContext(), buffer, configuredOwnerKey(), null) { batch, _ ->
+            transferred = true; transfer(batch)
         }
         assertTrue(result.failed)
         assertFalse(transferred)
@@ -197,8 +203,8 @@ class DirectBootErasureRegressionTest {
         pendingPrefs.edit().putStringSet("sensor_types", setOf("accelerometer")).commit()
         val buffer = ownedBuffer()
         buffer.append(listOf(sample("erased")))
-        DirectBootDrainWorker.drainBuffer(context, buffer, null, null, ::transfer)
-        DirectBootDrainWorker.drainBuffer(context, buffer, null, null, ::transfer)
+        DirectBootDrainWorker.drainBuffer(context, buffer, null, null) { batch, _ -> transfer(batch) }
+        DirectBootDrainWorker.drainBuffer(context, buffer, null, null) { batch, _ -> transfer(batch) }
         val events = DirectBootDiagnosticsJournal(context)
         events.replay(context)
         assertEquals(1, db.uploadDiagnosticDao().forEnrollment(
@@ -229,10 +235,12 @@ class DirectBootErasureRegressionTest {
         repeat(2) { runtime.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f, 2f, 3f), 3) }
         runtime.recordSample(AndroidSensorType.gyroscope, floatArrayOf(1f, 2f, 3f), 3)
         val apply = com.openlattice.chronicle.collection.state.CollectionLoopCoordinator::class.java.getDeclaredMethod("applyDisposition",
-            com.openlattice.chronicle.collection.CollectionModuleId::class.java, com.openlattice.chronicle.collection.CollectionDataDisposition::class.java)
+            com.openlattice.chronicle.collection.CollectionModuleId::class.java,
+                com.openlattice.chronicle.collection.CollectionDataDisposition::class.java)
             .apply { isAccessible = true }
         repeat(2) { apply.invoke(com.openlattice.chronicle.collection.state.CollectionLoopCoordinator(context),
-            SensorCollectionModules.moduleFor(AndroidSensorType.accelerometer), com.openlattice.chronicle.collection.CollectionDataDisposition.DISCARD_AND_STOP) }
+            SensorCollectionModules.moduleFor(AndroidSensorType.accelerometer),
+                com.openlattice.chronicle.collection.CollectionDataDisposition.DISCARD_AND_STOP) }
         assertEquals(1, runtime.bufferedCount)
         val server = db.uploadServerDao().getConfiguredServer()!!
         assertEquals(2, db.uploadDiagnosticDao().forEnrollment(server.studyId, server.participantId,
@@ -369,7 +377,7 @@ class DirectBootErasureRegressionTest {
         state(AndroidSensorType.gyroscope, true)
         val written = mutableListOf<String>()
 
-        val result = DirectBootDrainWorker.drainBuffer(context, buffer, configuredOwnerKey(), null) { batch ->
+        val result = DirectBootDrainWorker.drainBuffer(context, buffer, configuredOwnerKey(), null) { batch, _ ->
             DirectBootDrainWorker.persistGated(batch, sinkFor = { type ->
                 com.openlattice.chronicle.collection.sink.SensorSampleWriter { samples ->
                     if (!CollectionLoopStore.of(context).collects(SensorCollectionModules.moduleFor(type))) {
@@ -453,13 +461,13 @@ class DirectBootErasureRegressionTest {
         state(AndroidSensorType.accelerometer, true)
         val buffer = buffer()
         buffer.append(listOf(sample("retry")))
-        val paused = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null) {
+        val paused = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null) { _, _ ->
             DirectBootSampleBuffer.DrainTransfer(emptySet(), true)
         }
         assertTrue(paused.failed)
         assertFalse(buffer.isEmpty())
 
-        val resumed = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null, ::transfer)
+        val resumed = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null) { batch, _ -> transfer(batch) }
 
         assertEquals(1, resumed.persisted)
         assertFalse(resumed.failed)
@@ -476,8 +484,8 @@ class DirectBootErasureRegressionTest {
         state(AndroidSensorType.gyroscope, true)
         var imported = false
 
-        val result = DirectBootDrainWorker.drainBuffer(context, buffer, null, null) {
-            imported = true; transfer(it)
+        val result = DirectBootDrainWorker.drainBuffer(context, buffer, null, null) { batch, _ ->
+            imported = true; transfer(batch)
         }
 
         assertFalse(imported)
@@ -496,7 +504,7 @@ class DirectBootErasureRegressionTest {
         val buffer = buffer()
         buffer.append(listOf(sample("keep")))
 
-        val result = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null) {
+        val result = DirectBootDrainWorker.drainBuffer(context, buffer, "test-owner", null) { _, _ ->
             DirectBootSampleBuffer.DrainTransfer(emptySet(), true)
         }
 

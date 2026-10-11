@@ -42,7 +42,7 @@ object DirectBootSnapshotWriter {
             if (!DirectBootSensorSnapshot(context).write(collectable, collectable.keys.mapNotNull { sensor ->
                 com.openlattice.chronicle.collection.state.ResearchPersistenceGate.observationScope(context,
                     SensorCollectionModules.moduleFor(sensor))?.first?.let { sensor to it }
-            }.toMap())) {
+            }.toMap(), com.openlattice.chronicle.collection.state.ResearchPersistenceGate.currentSettingsVersion())) {
                 Log.e(TAG, "Direct-boot snapshot commit failed")
                 return@runIfActive false
             }

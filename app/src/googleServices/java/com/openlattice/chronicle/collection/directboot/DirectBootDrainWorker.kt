@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.SensorCollectionModules
@@ -62,12 +61,13 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : com.op
         val expectedOwner = server?.let(::ownerKey)
         // Barrier before buffer lock, the same order as ResearchPersistenceGate.stop{} erasures;
         // taking the buffer lock first and the barrier inside persist deadlocked a sensor discard.
-        val result = drainBuffer(applicationContext, buffer, expectedOwner, server?.createdAt) { samples ->
+        val result = drainBuffer(applicationContext, buffer, expectedOwner, server?.createdAt) { samples, version ->
             persistGated(samples, sinkFor = { sensorType ->
                 SensorSampleSink(
                     db.sensorSampleDao(),
                     persistenceGuard = ResearchPersistenceGate.guardForExpectedOwner(
                         applicationContext, requireNotNull(expectedOwner),
+                        settingsVersion = version,
                         ownerNow = {
                             if (!CollectionGate.collects(applicationContext, SensorCollectionModules.moduleFor(sensorType))) null
                             else exactActiveEnrollmentServer(applicationContext, db)?.let(::ownerKey)
@@ -104,7 +104,7 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : com.op
             buffer: DirectBootSampleBuffer,
             expectedOwner: String?,
             enrollmentCreatedAt: String?,
-            persist: (List<SensorSampleEntry>) -> DirectBootSampleBuffer.DrainTransfer,
+            persist: (List<SensorSampleEntry>, Int?) -> DirectBootSampleBuffer.DrainTransfer,
         ): DirectBootSampleBuffer.DrainResult = ResearchPersistenceGate.withReadLease {
             try {
                 DistributionRestrictedRuntime.pendingDirectBootSensorErasures(context).forEach { sensorType ->
@@ -115,7 +115,7 @@ class DirectBootDrainWorker(context: Context, params: WorkerParameters) : com.op
                 return@withReadLease DirectBootSampleBuffer.DrainResult(0, 0, failed = true)
             }
             if (expectedOwner == null) DirectBootSampleBuffer.DrainResult(0, 0, failed = !buffer.isEmpty())
-            else buffer.drain(expectedOwner, enrollmentCreatedAt, persist)
+            else buffer.drainWithSettingsVersion(expectedOwner, enrollmentCreatedAt, persist)
         }
 
         fun enqueue(context: Context) {
