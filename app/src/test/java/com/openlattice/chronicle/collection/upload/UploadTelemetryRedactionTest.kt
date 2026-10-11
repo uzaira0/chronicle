@@ -72,8 +72,6 @@ class UploadTelemetryRedactionTest {
         enabled = e.enabled,
         consecutiveFailures = e.consecutiveFailures,
         sensorConsecutiveFailures = e.sensorConsecutiveFailures,
-        lastUsageUploadTime = e.lastUploadTime,
-        lastSensorUploadTime = e.lastSensorUploadTime,
         hasUsageUploadError = e.lastUploadError != null,
         hasSensorUploadError = e.lastSensorUploadError != null,
     )

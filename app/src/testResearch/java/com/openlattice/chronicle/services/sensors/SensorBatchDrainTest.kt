@@ -67,7 +67,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `acceptance proof requires exact plaintext sample or encrypted envelope count`() {
+    fun acceptanceProofRequiresExactPlaintextSampleOrEncryptedEnvelopeCount() {
         assertTrue(isCompleteSensorUploadAcceptance(encrypted = false, submittedSampleCount = 500, acceptedCount = 500))
         assertFalse(isCompleteSensorUploadAcceptance(encrypted = false, submittedSampleCount = 500, acceptedCount = 499))
         assertTrue(isCompleteSensorUploadAcceptance(encrypted = true, submittedSampleCount = 500, acceptedCount = 1))
@@ -76,7 +76,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `backdated and equal timestamp samples are all drained by immutable ID batches`() {
+    fun backdatedAndEqualTimestampSamplesAreAllDrainedByImmutableIDBatches() {
         val destination = Destination(id = 1, legacyCursor = "2099-01-01T00:00:00Z")
         val samples = buildList {
             add(sample("backdated", "2000-01-01T00:00:00Z"))
@@ -93,7 +93,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `partial two destination failure records no receipts and retry resends to both`() {
+    fun partialTwoDestinationFailureRecordsNoReceiptsAndRetryResendsToBoth() {
         val first = Destination(1)
         val second = Destination(2)
         val harness = Harness(listOf(sample("one"), sample("two")), mutableListOf(first, second))
@@ -117,7 +117,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `destination with null legacy cursor is attempted`() {
+    fun destinationWithNullLegacyCursorIsAttempted() {
         val nullCursor = Destination(id = 7, legacyCursor = null)
         val harness = Harness(listOf(sample("one")), mutableListOf(nullCursor))
 
@@ -128,7 +128,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `concurrent later insert is never covered by an earlier exact ID delete`() {
+    fun concurrentLaterInsertIsNeverCoveredByAnEarlierExactIDDelete() {
         val destination = Destination(1)
         val harness = Harness(
             listOf(sample("first", "2026-07-14T12:00:00Z")),
@@ -152,7 +152,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `disabled destination holds rows without repeatedly uploading acknowledged enabled destination`() {
+    fun disabledDestinationHoldsRowsWithoutRepeatedlyUploadingAcknowledgedEnabledDestination() {
         val active = Destination(1)
         val paused = Destination(2)
         val harness = Harness(listOf(sample("one")), mutableListOf(active, paused))
@@ -174,7 +174,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `new enrollment generation invalidates an old destination receipt`() {
+    fun newEnrollmentGenerationInvalidatesAnOldDestinationReceipt() {
         val original = Destination(1, generation = 0)
         val harness = Harness(listOf(sample("one")), mutableListOf(original, Destination(2)))
         harness.drain(listOf(original))
@@ -190,7 +190,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `zero enabled destinations retains without loading or deleting`() {
+    fun zeroEnabledDestinationsRetainsWithoutLoadingOrDeleting() {
         var loaded = false
         var acknowledged = false
 
@@ -216,7 +216,7 @@ class SensorBatchDrainTest {
     }
 
     @Test
-    fun `malformed-only batch is counted and removed only after acknowledgement`() {
+    fun malformedOnlyBatchIsCountedAndRemovedOnlyAfterAcknowledgement() {
         val destination = Destination(1)
         val harness = Harness(listOf(sample("bad")), mutableListOf(destination))
 

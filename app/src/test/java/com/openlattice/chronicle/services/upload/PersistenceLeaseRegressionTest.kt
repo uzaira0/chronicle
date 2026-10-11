@@ -57,6 +57,8 @@ class PersistenceLeaseRegressionTest {
         ))
         server = db.uploadServerDao().getById(id)!!
         store = LocalUploadDiagnosticsStore.of(context)
+        com.openlattice.chronicle.collection.state.MinimalPlayArtifactState.markBoundaryApplied(context)
+        com.openlattice.chronicle.collection.state.MinimalPlayArtifactState.markPolicyCompatible(context)
     }
 
     @After fun tearDown() {
@@ -65,6 +67,24 @@ class PersistenceLeaseRegressionTest {
             .set(EncryptedPrefsHelper, null)
         db.close()
     }
+
+    @Test fun persistenceGateCountsDirectWriteFailuresAndPropagatesSinkFailures() =
+        com.openlattice.chronicle.collection.state.onPersistenceWorker {
+            val directFailure = java.io.IOException("direct write failed")
+            org.junit.Assert.assertFalse(ResearchPersistenceGate.persistIfActive(context, records = 7, expectedOwner = server) {
+                throw directFailure
+            })
+            fun lost() = db.uploadDiagnosticDao().forEnrollment(server.studyId, server.participantId,
+                server.sourceDeviceId, "${server.id}:${server.createdAt}")
+                .filter { it.issueCode == LocalOperationalIssue.LOCAL_WRITE_FAILED.name }.sumOf { it.count }
+            assertEquals(7, lost())
+            val queue = com.openlattice.chronicle.collection.sink.FakeStorageQueue().apply { failNextInsert = true }
+            val result = UsageEventSink(queue, NoOpCollectionLog, ResearchPersistenceGate.guard(context))
+                .write(listOf(QueueEntry(1, 1, byteArrayOf(1))))
+            assertTrue(result is com.openlattice.chronicle.collection.core.ModuleResult.Failed)
+            assertEquals("simulated dataQueue write failure", (result as com.openlattice.chronicle.collection.core.ModuleResult.Failed).error.message)
+            assertEquals("a retryable sink failure is not a direct-write loss", 7, lost())
+        }
 
     @Test fun usageSingleConnectionAdmissionCompletesWithQueuedWriter() {
         val barrier = ResearchPersistenceGate::class.java.getDeclaredField("barrier")

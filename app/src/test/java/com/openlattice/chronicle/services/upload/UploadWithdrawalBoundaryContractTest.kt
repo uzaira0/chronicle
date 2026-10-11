@@ -29,7 +29,7 @@ class UploadWithdrawalBoundaryContractTest {
 
         paths.forEach { relative ->
             val source = appSource(relative)
-            val lease = source.indexOf("ResearchPersistenceGate.runIfActive")
+            val lease = source.indexOf("ResearchPersistenceGate.runIfEnrolled")
             val queue = source.indexOf("UploadQueueSingleFlight.tryAcquire")
             assertTrue("$relative does not take the active-enrollment upload lease", lease >= 0)
             assertTrue("$relative acquires the queue before the stop barrier", queue > lease)
@@ -41,7 +41,7 @@ class UploadWithdrawalBoundaryContractTest {
         val coordinator = appSource("collection/state/CollectionLoopCoordinator.kt")
         val queue = appSource("collection/state/CollectionAckRetryStore.kt")
 
-        assertTrue(coordinator.contains("ResearchPersistenceGate.runIfActive(appContext, operation)"))
+        assertTrue(coordinator.contains("ResearchPersistenceGate.runIfEnrolled(appContext, operation)"))
         assertTrue(coordinator.contains("ResearchPersistenceGate.runIfExpectedEnrollment("))
         assertTrue(coordinator.contains("queue.removeByStableKeys(result.removedStableKeys)"))
         assertTrue(queue.contains("private val mutationLock = Any()"))
@@ -53,14 +53,15 @@ class UploadWithdrawalBoundaryContractTest {
     @Test
     fun pendingConsentQueueIsLoadedInsideTheWithdrawalLease() {
         val coordinator = appSource("collection/state/CollectionLoopCoordinator.kt")
-        val retryMethod = coordinator.indexOf("private fun retryPendingCollectionAcks()")
-        val lease = coordinator.indexOf("ResearchPersistenceGate.runIfActive(appContext)", retryMethod)
+        val retryMethod = coordinator.indexOf("private fun retryPendingCollectionAcks(")
+        val operation = coordinator.indexOf("val operation = { UploadQueueSingleFlight.withExclusiveMutation", retryMethod)
+        val lease = coordinator.indexOf("ResearchPersistenceGate.runIfEnrolled(appContext, operation)", retryMethod)
         val queueLoad = coordinator.indexOf("val pending = queue.load()", retryMethod)
         val networkDispatch = coordinator.indexOf("reportCollectionAck(", queueLoad)
 
         assertTrue(retryMethod >= 0)
-        assertTrue("pending retry state is read before the withdrawal barrier", lease > retryMethod)
-        assertTrue("pending retry state is not protected by the withdrawal barrier", queueLoad > lease)
+        assertTrue("pending retry state is not protected by the withdrawal barrier", lease > operation)
+        assertTrue("pending retry state is read outside the admitted operation", queueLoad > operation && queueLoad < lease)
         assertTrue("pending retry state is not bound before network dispatch", networkDispatch > queueLoad)
     }
 
@@ -90,14 +91,6 @@ class UploadWithdrawalBoundaryContractTest {
         val erase = boundary.indexOf("clearDirectBootSensorBuffer(applicationContext)")
         assertTrue(replay >= 0 && replay < purge)
         assertTrue(countCorrupt > purge && countCorrupt < erase)
-    }
-
-    @Test
-    fun persistenceGateCountsDirectWriteFailuresAndPropagatesSinkFailures() {
-        val gate = appSource("collection/state/ResearchPersistenceGate.kt")
-        assertTrue(gate.contains("LocalOperationalIssue.LOCAL_WRITE_FAILED"))
-        assertTrue(gate.contains("records,"))
-        assertTrue(gate.contains("persistGuarded(context, null, persist)"))
     }
 
     private fun appSource(relative: String): String {

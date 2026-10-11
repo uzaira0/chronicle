@@ -24,6 +24,13 @@ import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.quarantineMalformedSample
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.interactionSampleDao
+import com.openlattice.chronicle.services.upload.UploadRetryGate
+import com.openlattice.chronicle.services.upload.acknowledgePendingUploadBatch
+import com.openlattice.chronicle.services.upload.handleRejectedUploadBatch
+import com.openlattice.chronicle.services.upload.pendingUploadBatchVersion
+import com.openlattice.chronicle.services.upload.pendingUploadBatchIdentity
+import com.openlattice.chronicle.services.upload.quarantineRejectedRows
+import com.openlattice.chronicle.services.upload.selectPendingUploadBatch
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -58,7 +65,7 @@ class InteractionUploadWorker(context: Context, workerParameters: WorkerParamete
 
     override fun runWork(): Result {
         return try {
-            val result = ResearchPersistenceGate.runIfActive(applicationContext) {
+            val result = ResearchPersistenceGate.runIfEnrolled(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(INTERACTION_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Interaction upload deferred because the queue is already being drained")
                     Result.retry()
@@ -101,14 +108,22 @@ internal class InteractionUploadWorkerDelegate(
         val dao = db.interactionSampleDao()
         val serverDao = db.uploadServerDao()
         val servers = listOfNotNull(serverDao.getEnabledServer()).filter {
-            com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, LocalUploadModuleFamily.INTERACTION, db) }
+            UploadRetryGate.shouldAttempt(context, it, LocalUploadModuleFamily.INTERACTION, db) }
 
         if (servers.isEmpty()) {
             Log.i(TAG, "No enabled upload servers; skipping interaction upload")
             return 0
         }
 
-        val pending = dao.getOldest(INTERACTION_UPLOAD_MAX_BATCH)
+        val pending = selectPendingUploadBatch(
+            db, servers.single(), EncryptedPayloadType.INTERACTION,
+            loadNew = {
+                dao.getOldest(UploadRetryGate.batchLimit(
+                    context, servers.single(), LocalUploadModuleFamily.INTERACTION, INTERACTION_UPLOAD_MAX_BATCH,
+                ))
+            },
+            loadByIds = dao::getByIds, idOf = { it.id },
+        )
         if (pending.isEmpty()) {
             return 0
         }
@@ -153,28 +168,39 @@ internal class InteractionUploadWorkerDelegate(
                             payloadType = EncryptedPayloadType.INTERACTION,
                             plaintext = plaintext,
                             sampleCount = events.size,
+                            batchIdentity = pendingUploadBatchIdentity(db, server, EncryptedPayloadType.INTERACTION),
                         )
                         studyApi.uploadAndroidEncryptedData(
-                            studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope),
+                            studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope), pendingUploadBatchVersion(db,
+                                server, EncryptedPayloadType.INTERACTION),
                         )
                     } else {
                         restrictedStudyApi.uploadAndroidInteractionData(
-                            studyId, server.participantId, server.sourceDeviceId, server.apiKey, events,
+                            studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, pendingUploadBatchVersion(db, server,
+                                EncryptedPayloadType.INTERACTION),
                         )
                     }
                     Log.i(TAG, "[${server.name}] Uploaded ${events.size} interaction event(s)")
                 }
             } catch (e: Exception) {
+                if (handleRejectedUploadBatch(context, db, server, EncryptedPayloadType.INTERACTION, e, validIds.size) { status ->
+                    quarantineRejectedRows(db, server, EncryptedPayloadType.INTERACTION, status, "interaction_samples",
+                        pending.filter { it.id in validIds }, { it.id }, dao::deleteByIds)
+                }) return 0
                 failureCount++
-                com.openlattice.chronicle.services.upload.UploadRetryGate.recordFailure(context, server, LocalUploadModuleFamily.INTERACTION, e, db)
-                com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore.of(context).recordFailure(LocalUploadModuleFamily.INTERACTION, e)
+                UploadRetryGate.recordFailure(context, server, LocalUploadModuleFamily.INTERACTION, e, db)
+                com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore.of(context).recordFailure(LocalUploadModuleFamily.INTERACTION,
+                    e)
                 Log.e(TAG, "[${server.name}] Interaction upload failed", e)
             }
         }
 
         // Delete the batch only after the active study server received it (idempotent server-side).
         if (failureCount == 0) {
-            dao.deleteByIds(validIds)
+            db.runInTransaction {
+                dao.deleteByIds(validIds)
+                acknowledgePendingUploadBatch(db, servers.single(), EncryptedPayloadType.INTERACTION, context)
+            }
         }
         Log.i(TAG, "Interaction upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount

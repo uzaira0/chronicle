@@ -53,7 +53,10 @@ private const val EXTRA_SERVER_NAME = "server_name"
 private const val EXTRA_SERVER_URL = "server_url"
 private const val EXTRA_STUDY_ID = "study_id"
 private const val EXTRA_PARTICIPANT_ID = "participant_id"
-private const val EXTRA_MOBILE_SIGNING_SECRET_OVERRIDE = "mobile_signing_secret_override"
+    // Intent extra name selects a caller-supplied signing override; it contains no credential.
+    // nosemgrep: chronicle-hardcoded-password-kotlin
+private const val EXTRA_MOBILE_SIGNING_SECRET_OVERRIDE =
+    "mobile_signing_secret_override"
 private const val EXTRA_ENABLED = "enabled"
 private const val EXTRA_SET_PRIMARY = "set_primary"
 private const val EXTRA_ACCEPT_OPTIONAL_MODULES = "accept_optional_modules"
@@ -106,7 +109,8 @@ class DebugSyncConfigReceiver : BroadcastReceiver() {
             intervalMinutes = interval,
             requiresBatteryNotLow = batteryNotLow
         )
-        Log.i(TAG, "Saved sync config strategy=${config.strategy.configValue} interval=${config.intervalMinutes}m batteryNotLow=${config.requiresBatteryNotLow}")
+        Log.i(TAG,
+            "Saved sync config strategy=${config.strategy.configValue} interval=${config.intervalMinutes}m batteryNotLow=${config.requiresBatteryNotLow}")
 
         if (intent.getBooleanExtra(EXTRA_RESCHEDULE, true)) {
             scheduleChronicleSyncWork(context)

@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.work.Configuration
 import com.openlattice.chronicle.services.crypto.FileSealedEnvelopeStore
 import com.openlattice.chronicle.services.crypto.PayloadSealer
+import com.openlattice.chronicle.services.upload.installLegacyCrashHandler
 import java.io.File
 
 /**
@@ -28,6 +29,7 @@ class ChronicleApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        installLegacyCrashHandler(this)
         registerActivityLifecycleCallbacks(SystemBarInsets)
         // Path only; nothing is read or written until an upload worker seals a batch after unlock.
         // dataDir/no_backup is noBackupFilesDir, so the envelopes never enter a backup.

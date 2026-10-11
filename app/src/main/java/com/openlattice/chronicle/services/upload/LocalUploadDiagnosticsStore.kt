@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import retrofit2.HttpException
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 
 private const val DIAGNOSTICS_TAG = "LocalUploadDiagnostics"
 private const val PREF_LOCAL_UPLOAD_ISSUES = "local_upload_issue_history"
@@ -47,7 +48,7 @@ internal fun acknowledgeDeliveredReplaySelection(
     acknowledged: Set<String>,
 ): Boolean {
     if (submitted != selection.ids || !acknowledged.containsAll(submitted)) return false
-    check(prefs.edit().putInt(PREF_DELIVERED_REPLAY_OFFSET, selection.nextOffset)
+    checkLocalStoreWrite(prefs.edit().putInt(PREF_DELIVERED_REPLAY_OFFSET, selection.nextOffset)
         .putString(PREF_DELIVERED_REPLAY_DAY, selection.day).commit())
     return true
 }
@@ -235,7 +236,8 @@ class LocalUploadDiagnosticsStore(private val persistence: LocalUploadDiagnostic
         val loaded = persistence.load().toMutableList()
         val key = stableKey(day.toString(), moduleFamily.name, issueCode, httpStatus, errorType)
         while (remaining > 0) {
-            val index = loaded.indexOfLast { !it.sealedForUpload && it.deliveryState == "PENDING" && it.stableKey() == key && it.count < Int.MAX_VALUE }
+            val index = loaded.indexOfLast { !it.sealedForUpload && it.deliveryState == "PENDING" && it.stableKey() == key &&
+                it.count < Int.MAX_VALUE }
             val old = loaded.getOrNull(index)
             val room = Int.MAX_VALUE.toLong() - (old?.count ?: 0)
             val addition = minOf(room, remaining).toInt()
@@ -388,10 +390,10 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
     private val prefs: SharedPreferences = EncryptedPrefsHelper.getEncryptedPrefs(context)
     private val db = ChronicleDb.getInstance(context)
     private var replaySelection: DeliveredReplaySelection? = null
-    private val expectedServer: UploadServerEntity? = runBlocking(Dispatchers.IO) {
+    private val expectedServer: UploadServerEntity? = onIo {
         db.uploadServerDao().getConfiguredServer()
     }
-    private val owner: Owner? = runBlocking(Dispatchers.IO) {
+    private val owner: Owner? = onIo {
         val server = expectedServer
         val study = prefs.getString(STUDY_ID, null)
         val participant = prefs.getString(PARTICIPANT_ID, null)
@@ -506,7 +508,7 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
         val offset = prefs.getInt(PREF_PARKED_PROBE_OFFSET, 0).coerceAtLeast(0) % count
         val selected = dao.parked(scope.study, scope.participant, scope.device, scope.epoch, offset)
         val next = if (offset + selected.size >= count) 0 else offset + selected.size
-        check(prefs.edit().putInt(PREF_PARKED_PROBE_OFFSET, next).commit())
+        checkLocalStoreWrite(prefs.edit().putInt(PREF_PARKED_PROBE_OFFSET, next).commit())
         selected.map { it.toBucket() }
     }
 
@@ -597,7 +599,7 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
                 db.localDataQuarantineDao().eraseEnrollment(scope.study, scope.participant)
             }
         }
-        check(prefs.edit().remove(PREF_LOCAL_UPLOAD_ISSUES).remove(PREF_PARKED_PROBE_OFFSET)
+        checkLocalStoreWrite(prefs.edit().remove(PREF_LOCAL_UPLOAD_ISSUES).remove(PREF_PARKED_PROBE_OFFSET)
             .remove(PREF_DELIVERED_REPLAY_OFFSET).remove(PREF_DELIVERED_REPLAY_DAY).commit())
     }
 
@@ -606,7 +608,7 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
         val digest = MessageDigest.getInstance("SHA-256").digest(json.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 0xff) }
         onIo {
             if (db.uploadDiagnosticDao().checkpoint(digest) != null) {
-                check(prefs.edit().remove(PREF_LOCAL_UPLOAD_ISSUES).commit())
+                checkLocalStoreWrite(prefs.edit().remove(PREF_LOCAL_UPLOAD_ISSUES).commit())
                 return@onIo
             }
             val parsed = parseLegacyDiagnosticJson(json, digest, owner?.device?.isNotBlank() == true)
@@ -615,6 +617,7 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
                 var id = bucket.id
                 var collision = 0
                 while (id in usedIds || db.uploadDiagnosticDao().get(id) != null) {
+                    // nosemgrep: chronicle-uuid-from-string -- Legacy import coordinates identify one bucket consistently when the import transaction is replayed.
                     id = UUID.nameUUIDFromBytes("legacy:$digest:$index:${bucket.id}:$collision".toByteArray()).toString()
                     collision++
                 }
@@ -651,11 +654,12 @@ private class RoomUploadDiagnosticsPersistence(context: Context) : LocalUploadDi
                 db.localDataQuarantineDao().get("legacy_upload_diagnostics", id)
                     ?.rawData?.contentEquals(raw.toByteArray()) == true
             })
-            check(prefs.edit().remove(PREF_LOCAL_UPLOAD_ISSUES).commit())
+            checkLocalStoreWrite(prefs.edit().remove(PREF_LOCAL_UPLOAD_ISSUES).commit())
         }
     }
 
-    private inline fun <T> onIo(crossinline action: () -> T): T = runBlocking(Dispatchers.IO) { action() }
+    private inline fun <T> onIo(crossinline action: () -> T): T =
+        if (db.inTransaction()) action() else runBlocking(Dispatchers.IO) { action() }
     private data class Owner(val study: String, val participant: String, val device: String, val epoch: String)
     private fun LocalUploadIssueBucket.toEntity(scope: Owner) = UploadDiagnosticEntity(
         id, scope.study, scope.participant, scope.device, scope.epoch, day, moduleFamily,

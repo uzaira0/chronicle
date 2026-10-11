@@ -10,6 +10,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [26])
 class ProcessExitDiagnosticsTest {
     private class MemoryPersistence : LocalUploadDiagnosticsPersistence {
         var buckets: List<LocalUploadIssueBucket> = emptyList()
@@ -86,6 +88,35 @@ class ProcessExitDiagnosticsTest {
         recordProcessExits(store, listOf(exit), watermarkMillis = 0)
         recordProcessExits(store, listOf(exit), watermarkMillis = 0)
 
+        assertEquals(1, store.pending(LocalDate.now()).single().count)
+    }
+
+    @Test fun preRCrashHandlerStoresOnlyATimestampAndChainsThePreviousHandler() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val prefs = context.createDeviceProtectedStorageContext()
+            .getSharedPreferences(PROCESS_EXIT_PREFS, android.content.Context.MODE_PRIVATE)
+        prefs.edit().clear().commit()
+        val failure = IllegalStateException("private-crash-sentinel")
+        var chained = 0
+        val previous = Thread.UncaughtExceptionHandler { thread, error ->
+            assertEquals(Thread.currentThread(), thread); assertEquals(failure, error); chained++
+        }
+        val original = Thread.getDefaultUncaughtExceptionHandler()
+        try {
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+            installLegacyCrashHandler(context)
+            Thread.getDefaultUncaughtExceptionHandler()!!.uncaughtException(Thread.currentThread(), failure)
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(original)
+        }
+        assertEquals(1, chained)
+        assertEquals(setOf(LEGACY_CRASH_TIMESTAMP), prefs.all.keys)
+        val timestamp = prefs.getLong(LEGACY_CRASH_TIMESTAMP, 0)
+        assertTrue(timestamp > 0)
+        val store = LocalUploadDiagnosticsStore(MemoryPersistence())
+        val exit = ProcessExit(ApplicationExitInfo.REASON_CRASH, timestamp)
+        val watermark = recordProcessExits(store, listOf(exit), 0)
+        recordProcessExits(store, listOf(exit), watermark)
         assertEquals(1, store.pending(LocalDate.now()).single().count)
     }
 }

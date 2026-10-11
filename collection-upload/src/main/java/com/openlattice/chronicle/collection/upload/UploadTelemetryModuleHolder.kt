@@ -29,20 +29,24 @@ public object UploadTelemetryModuleHolder {
      * Returns the shared [UploadTelemetryCollectionModule], building it on first use from
      * the application context of [context].
      */
-    public fun get(context: Context): UploadTelemetryCollectionModule {
+    public fun get(context: Context,
+                   periodicWorkName: () -> String = { COMBINED_UPLOAD_WORK_NAME },
+                   immediateWorkName: () -> String = { COMBINED_UPLOAD_IMMEDIATE_WORK_NAME }): UploadTelemetryCollectionModule {
         instance?.let { return it }
         return synchronized(this) {
-            instance ?: build(context.applicationContext).also { instance = it }
+            instance ?: build(context.applicationContext, periodicWorkName, immediateWorkName).also { instance = it }
         }
     }
 
-    private fun build(appContext: Context): UploadTelemetryCollectionModule {
+    private fun build(
+        appContext: Context, periodicWorkName: () -> String, immediateWorkName: () -> String,
+    ): UploadTelemetryCollectionModule {
         val db = ChronicleDb.getInstance(appContext)
         return UploadTelemetryCollectionModule(
             uploadState = RoomUploadStateProbe(db),
             // WorkManager.getInstance returns a process-wide singleton; holding it is not
             // holding a Context.
-            workProbe = WorkManagerUploadProbe(WorkManager.getInstance(appContext)),
+            workProbe = WorkManagerUploadProbe(WorkManager.getInstance(appContext), periodicWorkName, immediateWorkName),
         )
     }
 }
@@ -68,8 +72,6 @@ public class RoomUploadStateProbe(
                 enabled = server.enabled,
                 consecutiveFailures = server.consecutiveFailures,
                 sensorConsecutiveFailures = server.sensorConsecutiveFailures,
-                lastUsageUploadTime = server.lastUploadTime,
-                lastSensorUploadTime = server.lastSensorUploadTime,
                 // Only a boolean "had an error" — never the error text (it is an
                 // exception message that could embed a host/body/header).
                 hasUsageUploadError = server.lastUploadError != null,
@@ -97,13 +99,15 @@ public class RoomUploadStateProbe(
  */
 public class WorkManagerUploadProbe(
     private val workManager: WorkManager,
+    private val periodicWorkName: () -> String = { COMBINED_UPLOAD_WORK_NAME },
+    private val immediateWorkName: () -> String = { COMBINED_UPLOAD_IMMEDIATE_WORK_NAME },
 ) : UploadWorkProbe {
 
     override fun periodicUploadStatus(): CombinedUploadWorkStatus? =
-        statusOf(COMBINED_UPLOAD_WORK_NAME)
+        statusOf(periodicWorkName())
 
     override fun immediateUploadStatus(): CombinedUploadWorkStatus? =
-        statusOf(COMBINED_UPLOAD_IMMEDIATE_WORK_NAME)
+        statusOf(immediateWorkName())
 
     private fun statusOf(workName: String): CombinedUploadWorkStatus? {
         val infos: List<WorkInfo> = runCatching {

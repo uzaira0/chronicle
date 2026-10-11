@@ -3,6 +3,8 @@ package com.openlattice.chronicle.services.sensors
 import android.content.Context
 import android.util.Log
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.android.SensorUploadReceipt
+import com.openlattice.chronicle.collection.CollectionUploadEvidence
 import com.openlattice.chronicle.android.AndroidSensorSample
 import com.openlattice.chronicle.collection.sensors.SensorUploadModule
 import com.openlattice.chronicle.collection.sensors.SensorUploadResult
@@ -29,6 +31,14 @@ import com.openlattice.chronicle.storage.SensorSampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.UploadStatsEntity
 import com.openlattice.chronicle.storage.insertOwnedDay
+import com.openlattice.chronicle.services.upload.UploadRetryGate
+import com.openlattice.chronicle.services.upload.acknowledgePendingUploadBatch
+import com.openlattice.chronicle.services.upload.handleRejectedUploadBatch
+import com.openlattice.chronicle.services.upload.pendingUploadBatchVersion
+import com.openlattice.chronicle.services.upload.uploadHttpStatus
+import com.openlattice.chronicle.services.upload.pendingUploadBatchIdentity
+import com.openlattice.chronicle.services.upload.quarantineRejectedRows
+import com.openlattice.chronicle.services.upload.selectPendingUploadBatch
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.*
@@ -248,7 +258,7 @@ class SensorUploadWorkerDelegate internal constructor(
 
         val configuredServers = listOfNotNull(serverDao.getConfiguredServer())
         val servers = configuredServers.filter { it.enabled &&
-            com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, LocalUploadModuleFamily.SENSOR, chronicleDb) }
+            UploadRetryGate.shouldAttempt(context, it, LocalUploadModuleFamily.SENSOR, chronicleDb) }
         if (servers.isEmpty()) {
             Log.i(TAG, "No enabled upload servers, skipping sensor upload")
             return 0
@@ -261,11 +271,31 @@ class SensorUploadWorkerDelegate internal constructor(
             server.id to server.lastUploadedSensorId
         }.toMutableMap()
         var statsFailureCount = 0
+        val heldReceipts = mutableMapOf<Long, Set<String>>()
+        val receiptVersions = mutableMapOf<Long, Int>()
 
         val heldTypes = com.openlattice.chronicle.services.upload.UploadDispositionPolicy(chronicleDb).heldSensorTypes
         val result = drainSensorBatches(
             enabledDestinations = servers,
-            loadOldest = { limit -> dao.getOldestExcludingTypes(limit, heldTypes) },
+            loadOldest = { limit ->
+                fun selectBatch() = selectPendingUploadBatch(
+                    chronicleDb, servers.single(), EncryptedPayloadType.SENSOR,
+                    loadNew = {
+                        dao.getOldestExcludingTypes(UploadRetryGate.batchLimit(
+                            context, servers.single(), LocalUploadModuleFamily.SENSOR, limit,
+                        ), heldTypes)
+                    },
+                    loadByIds = dao::getByIds, idOf = { it.id },
+                )
+                var rows = selectBatch()
+                if (rows.any { it.sensorType in heldTypes }) {
+                    chronicleDb.runInTransaction {
+                        acknowledgePendingUploadBatch(chronicleDb, servers.single(), EncryptedPayloadType.SENSOR, context)
+                    }
+                    rows = selectBatch()
+                }
+                rows
+            },
             isAcknowledged = { server, sampleIds ->
                 dao.countDeliveriesForServer(
                     server.id, server.sensorDeliveryGeneration, sampleIds,
@@ -282,24 +312,45 @@ class SensorUploadWorkerDelegate internal constructor(
                     currentFailureCounts = currentFailureCounts,
                     diagnosticCursors = diagnosticCursors,
                     onStatsFailure = { statsFailureCount++ },
+                onReceipt = { receipt ->
+                    val idsByWireId = samples.zip(batch).associate { (sample, row) -> sample.id to row.id }
+                    heldReceipts[server.id] = receipt.heldIds.mapTo(linkedSetOf()) { idsByWireId.getValue(it) }
+                    receiptVersions[server.id] = receipt.settingsVersion
+                },
                 )
             },
             acknowledgeAndDelete = { acknowledgedServers, sampleIds ->
-                if (acknowledgedServers.isEmpty()) {
-                    dao.deleteFullyDeliveredByIds(sampleIds)
-                } else {
-                    val deliveredAt = OffsetDateTime.now().toString()
-                    val deliveries = acknowledgedServers.flatMap { server ->
-                        sampleIds.map { sampleId ->
-                            SensorSampleDeliveryEntity(
-                                sampleId,
-                                server.id,
-                                server.sensorDeliveryGeneration,
-                                deliveredAt,
-                            )
-                        }
+                chronicleDb.runInTransaction<Int> {
+                    val heldIds = acknowledgedServers.flatMap { heldReceipts[it.id].orEmpty() }.toSet()
+                    val handledIds = sampleIds.filterNot { it in heldIds }
+                    if (heldIds.isNotEmpty()) {
+                        val oldEvidence = chronicleDb.uploadQueueEvidenceDao().get(EncryptedPayloadType.SENSOR.name, heldIds.toList())
+                            .associateBy { it.rowId }
+                        chronicleDb.uploadQueueEvidenceDao().put(heldIds.map { id ->
+                            com.openlattice.chronicle.storage.UploadQueueEvidence(EncryptedPayloadType.SENSOR.name, id,
+                                oldEvidence[id]?.settingsVersion, receiptVersions.getValue(servers.single().id))
+                        })
                     }
-                    dao.acknowledgeAndDeleteFullyDelivered(deliveries, sampleIds)
+                    val deleted = if (acknowledgedServers.isEmpty()) {
+                        dao.deleteFullyDeliveredByIds(handledIds)
+                    } else {
+                        val deliveredAt = OffsetDateTime.now().toString()
+                        val deliveries = acknowledgedServers.flatMap { server ->
+                            handledIds.map { sampleId ->
+                                SensorSampleDeliveryEntity(
+                                    sampleId,
+                                    server.id,
+                                    server.sensorDeliveryGeneration,
+                                    deliveredAt,
+                                )
+                            }
+                        }
+                        dao.acknowledgeAndDeleteFullyDelivered(deliveries, handledIds)
+                    }
+                    acknowledgePendingUploadBatch(
+                        chronicleDb, servers.single(), EncryptedPayloadType.SENSOR, context,
+                    )
+                    deleted + heldIds.size
                 }
             },
             quarantineMalformed = { malformed ->
@@ -330,6 +381,7 @@ class SensorUploadWorkerDelegate internal constructor(
         currentFailureCounts: MutableMap<Long, Int>,
         diagnosticCursors: MutableMap<Long, String?>,
         onStatsFailure: () -> Unit,
+        onReceipt: (SensorUploadReceipt) -> Unit,
     ): Boolean {
         return try {
             val studyId = UUID.fromString(server.studyId)
@@ -350,28 +402,33 @@ class SensorUploadWorkerDelegate internal constructor(
             }
 
             val encrypted = encryptionRouting == PayloadSealer.EncryptionRouting.ENCRYPT
+            val version = pendingUploadBatchVersion(chronicleDb, server, EncryptedPayloadType.SENSOR)
             val acceptedCount = if (encrypted) {
-                // Seal the EXACT bytes the plaintext path would post.
-                val plaintext = JsonSerializer.serializeToBytes(samples)
                 val envelope = PayloadSealer.seal(
-                    setting = encryptionSetting!!,
-                    studyId = studyId,
-                    participantId = participantId,
-                    payloadType = EncryptedPayloadType.SENSOR,
-                    plaintext = plaintext,
+                    setting = encryptionSetting!!, studyId = studyId, participantId = participantId,
+                    payloadType = EncryptedPayloadType.SENSOR, plaintext = JsonSerializer.serializeToBytes(samples),
                     sampleCount = samples.size,
+                    batchIdentity = pendingUploadBatchIdentity(chronicleDb, server, EncryptedPayloadType.SENSOR),
                 )
-                studyApi.uploadAndroidEncryptedData(
-                    studyId, participantId, deviceId, server.apiKey, listOf(envelope),
+                val count = studyApi.uploadAndroidEncryptedData(
+                    studyId, participantId, deviceId, server.apiKey, listOf(envelope), version,
                 )
+                check(isCompleteSensorUploadAcceptance(true, samples.size, count)) { "Incomplete encrypted sensor upload" }
+                samples.size
             } else {
-                restrictedStudyApi.uploadAndroidSensorData(
-                    studyId, participantId, deviceId, server.apiKey, samples,
-                )
-            }
-            check(isCompleteSensorUploadAcceptance(encrypted, samples.size, acceptedCount)) {
-                val expectedCount = if (encrypted) 1 else samples.size
-                "Sensor upload acceptance mismatch: expected $expectedCount, received $acceptedCount"
+                val receipt = try {
+                    restrictedStudyApi.uploadAndroidSensorDataReceipt(studyId, participantId, deviceId, server.apiKey, samples, version)
+                } catch (error: Exception) {
+                    if (uploadHttpStatus(error) != java.net.HttpURLConnection.HTTP_NOT_FOUND) throw error
+                    // Older servers acknowledge counts. A short count cannot safely identify handled rows.
+                    val count = restrictedStudyApi.uploadAndroidSensorData(studyId, participantId, deviceId, server.apiKey, samples, version)
+                    check(isCompleteSensorUploadAcceptance(false, samples.size, count)) { "Incomplete legacy sensor upload" }
+                    SensorUploadReceipt(samples.mapTo(linkedSetOf()) { it.id }, emptySet(), emptySet(), version ?:
+                        CollectionUploadEvidence.UNKNOWN_SETTINGS_VERSION)
+                }
+                receipt.validateSubmitted(samples.mapTo(linkedSetOf()) { it.id })
+                onReceipt(receipt)
+                receipt.acceptedIds.size
             }
             Log.i(TAG, "[${server.name}] Uploaded ${samples.size} sensor samples")
 
@@ -387,7 +444,7 @@ class SensorUploadWorkerDelegate internal constructor(
             diagnosticCursors[server.id] = diagnosticCursor
             currentFailureCounts[server.id] = 0
             serverDao.recordSensorUploadSuccess(
-                server.id, OffsetDateTime.now().toString(), diagnosticCursor, samples.size,
+                server.id, OffsetDateTime.now().toString(), diagnosticCursor, acceptedCount,
             )
 
             val today = LocalDate.now().toString()
@@ -395,7 +452,7 @@ class SensorUploadWorkerDelegate internal constructor(
                 UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId,
                     participantId = server.participantId, deviceId = server.sourceDeviceId,
                     enrollmentEpoch = "${server.id}:${server.createdAt}"),
-                samples.size,
+                acceptedCount,
             )
             if (statsResult is ModuleResult.Failed) {
                 Log.e(TAG, "[${server.name}] Failed to record sensor upload stats", statsResult.error)
@@ -403,6 +460,10 @@ class SensorUploadWorkerDelegate internal constructor(
             }
             true
         } catch (e: Exception) {
+            if (handleRejectedUploadBatch(context, chronicleDb, server, EncryptedPayloadType.SENSOR, e, batch.size) { status ->
+                quarantineRejectedRows(chronicleDb, server, EncryptedPayloadType.SENSOR, status, "sensor_samples",
+                    batch, { it.id }, chronicleDb.sensorSampleDao()::deleteByIds)
+            }) return false
             var updatedFailureCount = currentFailureCounts[server.id]
                 ?: server.sensorConsecutiveFailures
             try {
@@ -411,7 +472,7 @@ class SensorUploadWorkerDelegate internal constructor(
                     TAG,
                     server,
                     e,
-                    LocalUploadModuleFamily.DEVICE_TELEMETRY,
+                    LocalUploadModuleFamily.SENSOR,
                     updatedFailureCount,
                 ) { failures, errorMsg ->
                     updatedFailureCount = failures
@@ -426,7 +487,8 @@ class SensorUploadWorkerDelegate internal constructor(
             currentFailureCounts[server.id] = updatedFailureCount
             val today = LocalDate.now().toString()
             try {
-                chronicleDb.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                chronicleDb.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId,
+                    participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
                 chronicleDb.uploadStatsDao().incrementSensorFailureCount(server.id, today, 1)
             } catch (statsError: Exception) {
                 Log.e(TAG, "[${server.name}] Failed to record sensor upload failure stats", statsError)

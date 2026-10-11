@@ -37,7 +37,7 @@ class UploadQueueSingleFlightTest {
             )
             assertTrue(
                 "$path must reject stale/orphaned enrollment work",
-                source.contains("ResearchPersistenceGate.runIfActive("),
+                source.contains("ResearchPersistenceGate.runIfEnrolled("),
             )
         }
     }

@@ -3,9 +3,8 @@ package com.openlattice.chronicle.services.upload
 import android.content.Context
 import android.util.Log
 import com.openlattice.chronicle.constants.TelemetryEvents
-import com.openlattice.chronicle.preferences.*
+import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.storage.ChronicleDb
-import com.openlattice.chronicle.storage.UploadStatsEntity
 import com.openlattice.chronicle.storage.insertOwnedDay
 import com.openlattice.chronicle.telemetry.LocalTelemetry
 import com.openlattice.chronicle.utils.Utils.updateUploadQueueSize
@@ -65,7 +64,7 @@ class UploadWorkerDelegate(
                     )
                 }
                 val today = LocalDate.now().toString()
-                chronicleDb.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                chronicleDb.uploadStatsDao().insertOwnedDay(server, today)
                 chronicleDb.uploadStatsDao().incrementUsageFailureCount(server.id, today, 1)
             },
             afterUploads = {

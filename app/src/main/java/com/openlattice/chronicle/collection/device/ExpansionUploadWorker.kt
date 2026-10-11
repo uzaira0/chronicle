@@ -24,6 +24,13 @@ import com.openlattice.chronicle.services.upload.quarantineMalformedSample
 import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServerResolution
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.services.upload.UploadRetryGate
+import com.openlattice.chronicle.services.upload.acknowledgePendingUploadBatch
+import com.openlattice.chronicle.services.upload.handleRejectedUploadBatch
+import com.openlattice.chronicle.services.upload.pendingUploadBatchVersion
+import com.openlattice.chronicle.services.upload.pendingUploadBatchIdentity
+import com.openlattice.chronicle.services.upload.quarantineRejectedRows
+import com.openlattice.chronicle.services.upload.selectPendingUploadBatch
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -54,7 +61,7 @@ class ExpansionUploadWorker(context: Context, workerParameters: WorkerParameters
                     collectExpansionSamples(applicationContext)
                 }
             }
-            val result = ResearchPersistenceGate.runIfActive(applicationContext) {
+            val result = ResearchPersistenceGate.runIfEnrolled(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(EXPANSION_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Expansion upload deferred because the queue is already being drained")
                     Result.retry()
@@ -105,14 +112,15 @@ class ExpansionUploadWorkerDelegate(
         failures += uploadStream(
             servers,
             getOldest = { db.connectivityStateSampleDao().getOldest(it) },
+            getByIds = { db.connectivityStateSampleDao().getByIds(it) },
             idOf = { it.id },
             toDto = { it.toAndroidConnectivityStateEvent() },
             payloadType = EncryptedPayloadType.CONNECTIVITY_STATE,
             deleteByIds = { db.connectivityStateSampleDao().deleteByIds(it) },
-            plainUpload = { studyId, server, events ->
+            plainUpload = { studyId, server, events, version ->
                 UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
                     .uploadAndroidConnectivityStateData(
-                        studyId, server.participantId, server.sourceDeviceId, server.apiKey, events,
+                        studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, version,
                     )
             },
             label = "connectivity_state",
@@ -120,14 +128,15 @@ class ExpansionUploadWorkerDelegate(
         failures += uploadStream(
             servers,
             getOldest = { db.deviceSettingsSampleDao().getOldest(it) },
+            getByIds = { db.deviceSettingsSampleDao().getByIds(it) },
             idOf = { it.id },
             toDto = { it.toAndroidDeviceSettingsEvent() },
             payloadType = EncryptedPayloadType.DEVICE_SETTINGS,
             deleteByIds = { db.deviceSettingsSampleDao().deleteByIds(it) },
-            plainUpload = { studyId, server, events ->
+            plainUpload = { studyId, server, events, version ->
                 UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
                     .uploadAndroidDeviceSettingsData(
-                        studyId, server.participantId, server.sourceDeviceId, server.apiKey, events,
+                        studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, version,
                     )
             },
             label = "device_settings",
@@ -138,17 +147,22 @@ class ExpansionUploadWorkerDelegate(
     internal fun <T, D> uploadStream(
         servers: List<UploadServerEntity>,
         getOldest: (Int) -> List<T>,
+        getByIds: (List<String>) -> List<T>,
         idOf: (T) -> String,
         toDto: (T) -> D,
         payloadType: EncryptedPayloadType,
         deleteByIds: (List<String>) -> Unit,
-        plainUpload: (UUID, UploadServerEntity, List<D>) -> Unit,
+        plainUpload: (UUID, UploadServerEntity, List<D>, Int?) -> Unit,
         label: String,
     ): Int {
         if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db).allows(payloadType)) return 0
-        val family = com.openlattice.chronicle.services.upload.UploadRetryGate.familyFor(payloadType)
-        if (servers.any { !com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, family, db) }) return 0
-        val pending = getOldest(EXPANSION_UPLOAD_MAX_BATCH)
+        val family = UploadRetryGate.familyFor(payloadType)
+        if (servers.any { !UploadRetryGate.shouldAttempt(context, it, family, db) }) return 0
+        val pending = selectPendingUploadBatch(
+            db, servers.single(), payloadType,
+            loadNew = { getOldest(UploadRetryGate.batchLimit(context, servers.single(), family, EXPANSION_UPLOAD_MAX_BATCH)) },
+            loadByIds = getByIds, idOf = idOf,
+        )
         if (pending.isEmpty()) return 0
 
         var malformed = 0
@@ -161,14 +175,7 @@ class ExpansionUploadWorkerDelegate(
                 Log.w(TAG, "Quarantining corrupt $label sample ${idOf(entry)}", e)
                 quarantineMalformedSample(db, servers.single(), label, idOf(entry),
                     serializeMalformedRow(entry as Any),
-                    when (payloadType) {
-                        EncryptedPayloadType.CONNECTIVITY_STATE -> LocalUploadModuleFamily.CONNECTIVITY
-                        EncryptedPayloadType.DEVICE_SETTINGS -> LocalUploadModuleFamily.DEVICE_SETTINGS
-                        EncryptedPayloadType.APP_NETWORK_USAGE -> LocalUploadModuleFamily.APP_NETWORK
-                        EncryptedPayloadType.SLEEP -> LocalUploadModuleFamily.SLEEP
-                        EncryptedPayloadType.ACTIVITY_RECOGNITION -> LocalUploadModuleFamily.ACTIVITY_RECOGNITION
-                        else -> LocalUploadModuleFamily.HEALTH
-                    }) {
+                    family) {
                     deleteByIds(listOf(idOf(entry)))
                 }
                 null
@@ -196,18 +203,24 @@ class ExpansionUploadWorkerDelegate(
                                 payloadType = payloadType,
                                 plaintext = plaintext,
                                 sampleCount = events.size,
+                                batchIdentity = pendingUploadBatchIdentity(db, server, payloadType),
                             )
                             studyApi.uploadAndroidEncryptedData(
-                                studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope),
+                                studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope), pendingUploadBatchVersion(db,
+                                    server, payloadType),
                             )
                         }
-                        else -> plainUpload(studyId, server, events)
+                        else -> plainUpload(studyId, server, events, pendingUploadBatchVersion(db, server, payloadType))
                     }
                     Log.i(TAG, "[${server.name}] Uploaded ${events.size} $label sample(s)")
                 }
             } catch (e: Exception) {
+                if (handleRejectedUploadBatch(context, db, server, payloadType, e, validIds.size) { status ->
+                    quarantineRejectedRows(db, server, payloadType, status, label,
+                        pending.filter { idOf(it) in validIds }, idOf, deleteByIds)
+                }) return 0
                 failureCount++
-                com.openlattice.chronicle.services.upload.UploadRetryGate.recordFailure(context, server, family, e, db)
+                UploadRetryGate.recordFailure(context, server, family, e, db)
                 LocalUploadDiagnosticsStore.of(context).recordFailure(
                     LocalUploadModuleFamily.DEVICE_TELEMETRY,
                     e,
@@ -216,7 +229,10 @@ class ExpansionUploadWorkerDelegate(
             }
         }
 
-        if (failureCount == 0) deleteByIds(validIds)
+        if (failureCount == 0) db.runInTransaction {
+            deleteByIds(validIds)
+            acknowledgePendingUploadBatch(db, servers.single(), payloadType, context)
+        }
         Log.i(TAG, "$label upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount
     }

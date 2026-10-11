@@ -12,7 +12,6 @@ import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.openlattice.chronicle.collection.CollectionModules
 import com.openlattice.chronicle.collection.device.EXPANSION_UPLOAD_WORK_NAME
@@ -20,7 +19,6 @@ import com.openlattice.chronicle.collection.device.ExpansionUploadWorker
 import com.openlattice.chronicle.collection.device.INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD
 import com.openlattice.chronicle.collection.state.CollectionSettingsSyncWorker
 import com.openlattice.chronicle.services.upload.COMBINED_UPLOAD_WORK_NAME
-import com.openlattice.chronicle.services.upload.CombinedUploadWorker
 import com.openlattice.chronicle.services.upload.LEGACY_SENSOR_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.services.lifecycle.DeviceLifecycleEventRecorder
 import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
@@ -209,7 +207,8 @@ fun scheduleChronicleSyncWork(context: Context) {
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request
             )
-            Log.i(TAG, "Scheduled strategy=${config.strategy.configValue} interval=${config.intervalMinutes}m batteryNotLow=${config.requiresBatteryNotLow}")
+            Log.i(TAG,
+                "Scheduled strategy=${config.strategy.configValue} interval=${config.intervalMinutes}m batteryNotLow=${config.requiresBatteryNotLow}")
             operation
         }
     }

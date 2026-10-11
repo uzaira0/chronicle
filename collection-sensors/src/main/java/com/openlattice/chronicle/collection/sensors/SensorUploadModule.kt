@@ -43,7 +43,4 @@ public interface SensorUploadModule {
 public data class SensorUploadResult(
     val serverFailureCount: Int,
     val malformedSampleCount: Int,
-) {
-    /** Whether every server succeeded. */
-    public val isFullSuccess: Boolean get() = serverFailureCount == 0
-}
+)

@@ -6,6 +6,9 @@ import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.crypto.EncryptedEnvelope
 import com.openlattice.chronicle.crypto.EnvelopeCipher
 import com.openlattice.chronicle.study.StudyEncryptionSetting
+import com.openlattice.chronicle.crypto.EncryptedPayloadType
+import com.openlattice.chronicle.services.crypto.InMemorySealedEnvelopeStore
+import com.openlattice.chronicle.services.crypto.PayloadSealer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
@@ -57,19 +60,7 @@ class ChronicleUploadSinkRetryTest {
     private val studyId = UUID.fromString("22222222-2222-2222-2222-222222222222")
     private val participantId = "participant-retry"
 
-    private val setting: StudyEncryptionSetting = run {
-        val rsa = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
-        val pem = "-----BEGIN PUBLIC KEY-----\n" +
-            Base64.getEncoder().encodeToString(rsa.public.encoded).chunked(64).joinToString("\n") +
-            "\n-----END PUBLIC KEY-----\n"
-        StudyEncryptionSetting(
-            enabled = true,
-            keyId = "retry-key",
-            algorithm = EnvelopeCipher.DEFAULT_ALG,
-            publicKeyPem = pem,
-            mlkemPublicKey = EnvelopeCipher.encodeMlkemPublicKey(EnvelopeCipher.generateMlkemKeyPair().first),
-        )
-    }
+    private val setting = UploadEncryptionFixture.setting
 
     private fun event(app: String) = ChronicleUsageEvent(
         studyId = studyId,
@@ -120,4 +111,44 @@ class ChronicleUploadSinkRetryTest {
 
         assertNotEquals(posted[0].ciphertext, posted[1].ciphertext)
     }
+
+    @Test fun pendingBatchCannotBeResealedAfterItsBytesChange() {
+        val previous = PayloadSealer.sealedEnvelopeStore
+        PayloadSealer.sealedEnvelopeStore =
+            InMemorySealedEnvelopeStore()
+        try {
+            fun seal(bytes: ByteArray) = PayloadSealer.seal(
+                setting, studyId, participantId, EncryptedPayloadType.USAGE,
+                bytes, 1, batchIdentity = "pending-retry",
+            )
+            val envelope = seal(byteArrayOf(1))
+            assertEquals(envelope, seal(byteArrayOf(1)))
+            org.junit.Assert.assertThrows(IllegalStateException::class.java) { seal(byteArrayOf(2)) }
+            assertEquals(envelope, seal(byteArrayOf(1)))
+        } finally {
+            PayloadSealer.sealedEnvelopeStore = previous
+        }
+    }
+}
+
+internal object UploadEncryptionFixture {
+    private val rsaKeys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+    private val mlkemKeys = EnvelopeCipher.generateMlkemKeyPair()
+    val setting: StudyEncryptionSetting = run {
+        val rsa = rsaKeys
+        val pem = "-----BEGIN PUBLIC KEY-----\n" +
+            Base64.getEncoder().encodeToString(rsa.public.encoded).chunked(64).joinToString("\n") +
+            "\n-----END PUBLIC KEY-----\n"
+        StudyEncryptionSetting(
+            enabled = true,
+            keyId = "retry-key",
+            algorithm = EnvelopeCipher.DEFAULT_ALG,
+            publicKeyPem = pem,
+            mlkemPublicKey = EnvelopeCipher.encodeMlkemPublicKey(mlkemKeys.first),
+        )
+    }
+
+    fun decrypt(envelope: EncryptedEnvelope, studyId: UUID, participantId: String): ByteArray =
+        EnvelopeCipher.open(rsaKeys.private as java.security.interfaces.RSAPrivateKey, mlkemKeys.second,
+            envelope, EnvelopeCipher.aad(EnvelopeCipher.ENVELOPE_VERSION, studyId, participantId, envelope.payloadType))
 }

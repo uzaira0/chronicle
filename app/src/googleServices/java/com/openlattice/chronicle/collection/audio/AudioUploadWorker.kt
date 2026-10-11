@@ -26,6 +26,13 @@ import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.audioActivitySampleDao
 import com.openlattice.chronicle.storage.audioContentSampleDao
 import com.openlattice.chronicle.storage.notificationActivitySampleDao
+import com.openlattice.chronicle.services.upload.UploadRetryGate
+import com.openlattice.chronicle.services.upload.acknowledgePendingUploadBatch
+import com.openlattice.chronicle.services.upload.handleRejectedUploadBatch
+import com.openlattice.chronicle.services.upload.pendingUploadBatchVersion
+import com.openlattice.chronicle.services.upload.pendingUploadBatchIdentity
+import com.openlattice.chronicle.services.upload.quarantineRejectedRows
+import com.openlattice.chronicle.services.upload.selectPendingUploadBatch
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -72,7 +79,7 @@ class AudioUploadWorker(context: Context, workerParameters: WorkerParameters) :
 
     override fun runWork(): Result {
         return try {
-            val result = ResearchPersistenceGate.runIfActive(applicationContext) {
+            val result = ResearchPersistenceGate.runIfEnrolled(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(AUDIO_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Audio upload deferred because the queue is already being drained")
                     Result.retry()
@@ -118,36 +125,39 @@ class AudioUploadWorkerDelegate(
         failures += uploadStream(
             servers,
             getOldest = { db.audioActivitySampleDao().getOldest(it) },
+            getByIds = { db.audioActivitySampleDao().getByIds(it) },
             idOf = { it.id },
             toDto = { it.toAndroidAudioActivityEvent() },
             payloadType = EncryptedPayloadType.AUDIO_ACTIVITY,
             deleteByIds = { db.audioActivitySampleDao().deleteByIds(it) },
-            plainUpload = { api, studyId, server, events ->
-                api.uploadAndroidAudioActivityData(studyId, server.participantId, server.sourceDeviceId, server.apiKey, events)
+            plainUpload = { api, studyId, server, events, version ->
+                api.uploadAndroidAudioActivityData(studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, version)
             },
             label = "audio_activity",
         )
         failures += uploadStream(
             servers,
             getOldest = { db.audioContentSampleDao().getOldest(it) },
+            getByIds = { db.audioContentSampleDao().getByIds(it) },
             idOf = { it.id },
             toDto = { it.toAndroidAudioContentEvent() },
             payloadType = EncryptedPayloadType.AUDIO_CONTENT,
             deleteByIds = { db.audioContentSampleDao().deleteByIds(it) },
-            plainUpload = { api, studyId, server, events ->
-                api.uploadAndroidAudioContentData(studyId, server.participantId, server.sourceDeviceId, server.apiKey, events)
+            plainUpload = { api, studyId, server, events, version ->
+                api.uploadAndroidAudioContentData(studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, version)
             },
             label = "audio_content",
         )
         failures += uploadStream(
             servers,
             getOldest = { db.notificationActivitySampleDao().getOldest(it) },
+            getByIds = { db.notificationActivitySampleDao().getByIds(it) },
             idOf = { it.id },
             toDto = { it.toAndroidNotificationActivityEvent() },
             payloadType = EncryptedPayloadType.NOTIFICATION_ACTIVITY,
             deleteByIds = { db.notificationActivitySampleDao().deleteByIds(it) },
-            plainUpload = { api, studyId, server, events ->
-                api.uploadAndroidNotificationActivityData(studyId, server.participantId, server.sourceDeviceId, server.apiKey, events)
+            plainUpload = { api, studyId, server, events, version ->
+                api.uploadAndroidNotificationActivityData(studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, version)
             },
             label = "notification_activity",
         )
@@ -158,17 +168,22 @@ class AudioUploadWorkerDelegate(
     private fun <T, D> uploadStream(
         servers: List<UploadServerEntity>,
         getOldest: (Int) -> List<T>,
+        getByIds: (List<String>) -> List<T>,
         idOf: (T) -> String,
         toDto: (T) -> D,
         payloadType: EncryptedPayloadType,
         deleteByIds: (List<String>) -> Unit,
-        plainUpload: (RestrictedChronicleStudyApi, UUID, UploadServerEntity, List<D>) -> Unit,
+        plainUpload: (RestrictedChronicleStudyApi, UUID, UploadServerEntity, List<D>, Int?) -> Unit,
         label: String,
     ): Int {
         if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db).allows(payloadType)) return 0
-        val family = com.openlattice.chronicle.services.upload.UploadRetryGate.familyFor(payloadType)
-        if (servers.any { !com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, it, family, db) }) return 0
-        val pending = getOldest(AUDIO_UPLOAD_MAX_BATCH)
+        val family = UploadRetryGate.familyFor(payloadType)
+        if (servers.any { !UploadRetryGate.shouldAttempt(context, it, family, db) }) return 0
+        val pending = selectPendingUploadBatch(
+            db, servers.single(), payloadType,
+            loadNew = { getOldest(UploadRetryGate.batchLimit(context, servers.single(), family, AUDIO_UPLOAD_MAX_BATCH)) },
+            loadByIds = getByIds, idOf = idOf,
+        )
         if (pending.isEmpty()) return 0
 
         var malformed = 0
@@ -219,23 +234,32 @@ class AudioUploadWorkerDelegate(
                                 payloadType = payloadType,
                                 plaintext = plaintext,
                                 sampleCount = events.size,
+                                batchIdentity = pendingUploadBatchIdentity(db, server, payloadType),
                             )
                             studyApi.uploadAndroidEncryptedData(
-                                studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope),
+                                studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope), pendingUploadBatchVersion(db,
+                                    server, payloadType),
                             )
                         }
-                        else -> plainUpload(restrictedStudyApi, studyId, server, events)
+                        else -> plainUpload(restrictedStudyApi, studyId, server, events, pendingUploadBatchVersion(db, server, payloadType))
                     }
                     Log.i(TAG, "[${server.name}] Uploaded ${events.size} $label sample(s)")
                 }
             } catch (e: Exception) {
+                if (handleRejectedUploadBatch(context, db, server, payloadType, e, uploadedIds.size) { status ->
+                    quarantineRejectedRows(db, server, payloadType, status, label,
+                        pending.filter { idOf(it) in uploadedIds }, idOf, deleteByIds)
+                }) return 0
                 failureCount++
-                com.openlattice.chronicle.services.upload.UploadRetryGate.recordFailure(context, server, family, e, db)
+                UploadRetryGate.recordFailure(context, server, family, e, db)
                 Log.e(TAG, "[${server.name}] $label upload failed", e)
             }
         }
 
-        if (failureCount == 0) deleteByIds(uploadedIds)
+        if (failureCount == 0) db.runInTransaction {
+            deleteByIds(uploadedIds)
+            acknowledgePendingUploadBatch(db, servers.single(), payloadType, context)
+        }
         Log.i(TAG, "$label upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount
     }

@@ -17,6 +17,9 @@ internal fun quarantineMalformedSample(
     rawData: ByteArray,
     family: LocalUploadModuleFamily,
     count: Int = 1,
+    reason: String = LocalOperationalIssue.SAMPLE_QUARANTINED.name,
+    httpStatus: Int? = null,
+    settingsVersion: Int? = null,
     removeFromActiveQueue: () -> Unit = {},
 ) {
     val now = OffsetDateTime.now()
@@ -30,8 +33,9 @@ internal fun quarantineMalformedSample(
             participantId = server.participantId,
             deviceId = server.sourceDeviceId,
             rawData = rawData,
-            reason = "SAMPLE_QUARANTINED",
+            reason = reason,
             createdAt = now.toString(),
+            settingsVersion = settingsVersion,
         ))
         removeFromActiveQueue()
         if (inserted != -1L) {
@@ -47,7 +51,7 @@ internal fun quarantineMalformedSample(
                 count = count,
                 firstOccurredAt = now.toString(),
                 lastOccurredAt = now.toString(),
-                httpStatus = null,
+                httpStatus = httpStatus,
                 errorType = null,
             ))
         }

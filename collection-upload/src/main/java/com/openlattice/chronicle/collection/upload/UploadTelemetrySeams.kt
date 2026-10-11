@@ -33,10 +33,6 @@ package com.openlattice.chronicle.collection.upload
  * @property enabled whether the server is currently enabled for upload.
  * @property consecutiveFailures consecutive usage-upload failure counter.
  * @property sensorConsecutiveFailures consecutive sensor-upload failure counter.
- * @property lastUsageUploadTime ISO-8601 timestamp string of the last usage upload, or
- *   `null`; an opaque timestamp, no participant data.
- * @property lastSensorUploadTime ISO-8601 timestamp string of the last sensor upload, or
- *   `null`.
  * @property hasUsageUploadError whether the server's last usage upload recorded an error.
  * @property hasSensorUploadError whether the server's last sensor upload recorded an error.
  */
@@ -45,8 +41,6 @@ public data class UploadServerTelemetry(
     val enabled: Boolean,
     val consecutiveFailures: Int,
     val sensorConsecutiveFailures: Int,
-    val lastUsageUploadTime: String?,
-    val lastSensorUploadTime: String?,
     val hasUsageUploadError: Boolean,
     val hasSensorUploadError: Boolean,
 )

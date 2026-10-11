@@ -157,7 +157,7 @@ class ImmediateSyncFanoutTest {
             val source = executableSource("$sourceRoot/com/openlattice/chronicle/$path")
             assertTrue(source.contains("UploadQueueSingleFlight.tryAcquire($owner)"))
             assertTrue(source.contains("UploadQueueSingleFlight.release($owner)"))
-            assertTrue(source.contains("ResearchPersistenceGate.runIfActive(applicationContext)"))
+            assertTrue(source.contains("ResearchPersistenceGate.runIfEnrolled(applicationContext)"))
         }
     }
 }

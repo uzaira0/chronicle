@@ -12,16 +12,21 @@ import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.android.fromInteractionType
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.preferences.*
-import com.openlattice.chronicle.sensors.*
+import com.openlattice.chronicle.sensors.APP_NAME
+import com.openlattice.chronicle.sensors.GENERAL_NAME
+import com.openlattice.chronicle.sensors.IMPORTANCE
+import com.openlattice.chronicle.sensors.TIMESTAMP
+import com.openlattice.chronicle.sensors.TIMEZONE
+import com.openlattice.chronicle.sensors.USER
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
 import com.openlattice.chronicle.services.sinks.ChronicleUploadSink
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
-import com.openlattice.chronicle.storage.UploadStatsEntity
 import com.openlattice.chronicle.storage.insertOwnedDay
 import com.openlattice.chronicle.telemetry.LocalTelemetry
 import com.openlattice.chronicle.utils.Utils.updateUploadInfo
+import com.openlattice.chronicle.crypto.EncryptedPayloadType
 import java.io.IOException
 import java.time.Instant
 import java.time.LocalDate
@@ -51,16 +56,14 @@ class UploadExecutor(
         val studyApi = studyApiFor(server)
         val queue = chronicleDb.queueEntryData()
         val disposition = UploadDispositionPolicy(chronicleDb)
-        var heldBeforeCursor = false
         var safeTimestamp = server.lastUploadedTimestamp
         var safeId = server.lastUploadedQueueId
-        fun retainHeldRows(entries: List<com.openlattice.chronicle.storage.QueueEntry>, held: Map<com.openlattice.chronicle.storage.QueueEntry, ByteArray>) {
+        fun retainHeldRows(entries: List<com.openlattice.chronicle.storage.QueueEntry>, held: Map<com.openlattice.chronicle.storage.QueueEntry,
+            ByteArray>) {
             entries.forEach { entry ->
                 val retained = held[entry]
                 if (retained == null) queue.deleteEntry(entry)
-                else chronicleDb.openHelper.writableDatabase.execSQL(
-                    "UPDATE dataQueue SET data = ? WHERE writeTimestamp = ? AND id = ?",
-                    arrayOf(retained, entry.writeTimestamp, entry.id))
+                else queue.updateData(entry.writeTimestamp, entry.id, retained)
             }
         }
 
@@ -68,7 +71,21 @@ class UploadExecutor(
 
         var cursorTimestamp = server.lastUploadedTimestamp
         var cursorId = server.lastUploadedQueueId
-        var nextEntries = queue.getEntriesAfter(cursorTimestamp, cursorId, BATCH_SIZE)
+        fun nextBatch() = selectPendingUploadBatch(chronicleDb, server, EncryptedPayloadType.USAGE,
+            loadNew = {
+                queue.getEntriesAfter(cursorTimestamp, cursorId, UploadRetryGate.batchLimit(
+                    context, server, LocalUploadModuleFamily.USAGE_LIFECYCLE, BATCH_SIZE,
+                ))
+            },
+            loadByIds = queue::getByKeys, idOf = { "${it.writeTimestamp}:${it.id}" })
+        var nextEntries = nextBatch()
+        // A resumed pending batch may skip rows retained by a previous run's hold policy.
+        var heldBeforeCursor = nextEntries.firstOrNull()?.let { first ->
+            queue.getEntriesAfter(cursorTimestamp, cursorId, 1).any { earlier ->
+                earlier.writeTimestamp < first.writeTimestamp ||
+                    (earlier.writeTimestamp == first.writeTimestamp && earlier.id < first.id)
+            }
+        } ?: false
         var latestTimestampUploadedOverall: OffsetDateTime? = null
         // Read the study's cached payload-encryption setting (HIPAA-2028 W2). When e2ee is on
         // for the study the sink seals each batch and posts to the encrypted endpoint; otherwise
@@ -80,6 +97,8 @@ class UploadExecutor(
         val encryptionRequired = encryptionStore.isEncryptionRequired(studyId)
         val sink = ChronicleUploadSink(
             studyId, participantId, deviceId, apiKey, studyApi, encryptionSetting, encryptionRequired,
+            batchVersion = { pendingUploadBatchVersion(chronicleDb, server, EncryptedPayloadType.USAGE) },
+            batchIdentity = { pendingUploadBatchIdentity(chronicleDb, server, EncryptedPayloadType.USAGE) },
             onShortWrite = { count ->
                 LocalUploadDiagnosticsStore.of(context).recordOperational(
                     LocalUploadModuleFamily.USAGE_LIFECYCLE,
@@ -89,7 +108,8 @@ class UploadExecutor(
             },
         )
 
-        while (nextEntries.isNotEmpty()) {
+        var batches = 0
+        while (nextEntries.isNotEmpty() && batches++ < MAX_USAGE_BATCHES_PER_RUN) {
             limiter.acquire()
             val w = com.google.common.base.Stopwatch.createStarted()
             val heldRows = linkedMapOf<com.openlattice.chronicle.storage.QueueEntry, ByteArray>()
@@ -192,13 +212,23 @@ class UploadExecutor(
                         safeId = maxQueueCursor.id
                     }
                     if (disposition.sharedHeld.isNotEmpty()) retainHeldRows(nextEntries, heldRows)
+                    acknowledgePendingUploadBatch(chronicleDb, server, EncryptedPayloadType.USAGE, context)
                 }
                 cursorTimestamp = maxQueueCursor.writeTimestamp
                 cursorId = maxQueueCursor.id
-                nextEntries = queue.getEntriesAfter(cursorTimestamp, cursorId, BATCH_SIZE)
+                nextEntries = nextBatch()
                 continue
             }
-            val result = sink.submit(data)
+            val result = try { sink.submit(data) } catch (error: Exception) {
+                if (!handleRejectedUploadBatch(context, chronicleDb, server, EncryptedPayloadType.USAGE, error, nextEntries.size) { status ->
+                    quarantineRejectedRows(chronicleDb, server, EncryptedPayloadType.USAGE, status,
+                        "dataQueue", nextEntries, { "${it.writeTimestamp}:${it.id}" },
+                        remove = { ids -> queue.deleteEntries(nextEntries.filter { "${it.writeTimestamp}:${it.id}" in ids }) },
+                        rawOf = { it.data })
+                }) throw error
+                nextEntries = nextBatch()
+                continue
+            }
 
             if (result[ChronicleUploadSink::class.java.name] == true) {
                 val latestTimestampBatch: OffsetDateTime? =
@@ -219,8 +249,9 @@ class UploadExecutor(
                             if (heldBeforeCursor) safeTimestamp else maxQueueCursor.writeTimestamp,
                             if (heldBeforeCursor) safeId else maxQueueCursor.id, data.size,
                         ) == 1)
+                        acknowledgePendingUploadBatch(chronicleDb, server, EncryptedPayloadType.USAGE, context)
                         val statsDao = chronicleDb.uploadStatsDao()
-                        statsDao.insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                        statsDao.insertOwnedDay(server, today)
                         statsDao.incrementUsageCount(server.id, today, data.size)
                         if (disposition.sharedHeld.isNotEmpty()) retainHeldRows(nextEntries, heldRows)
                         if (!heldBeforeCursor) {
@@ -236,7 +267,7 @@ class UploadExecutor(
                 cursorId = maxQueueCursor.id
 
                 Log.i(UPLOAD_EXECUTOR_TAG, "[${server.name}] Uploaded ${data.size} items in ${w.elapsed(TimeUnit.MILLISECONDS)}ms")
-                nextEntries = queue.getEntriesAfter(cursorTimestamp, cursorId, BATCH_SIZE)
+                nextEntries = nextBatch()
 
                 LocalTelemetry.logEvent(TelemetryEvents.UPLOAD_SUCCESS, Bundle().apply {
                     putInt("size", data.size)
@@ -260,7 +291,8 @@ class UploadExecutor(
             val user = getFirstValueOrNull(datum, USER)
             val applicationLabel = getFirstValueOrNull(datum, APP_NAME)
 
-            if (appPackageName != null && interactionType != null && timestamp != null && timezone != null && user != null && applicationLabel != null) {
+            if (appPackageName != null && interactionType != null && timestamp != null && timezone != null && user != null &&
+                applicationLabel != null) {
                 // Legacy SetMultimap queue entries carry no raw event-type int; leave eventType at
                 // its -1 default so mapToModel falls back to deriving it from interactionType.
                 ExtractedUsageEvent(
@@ -286,6 +318,8 @@ class UploadExecutor(
         return null
     }
 }
+
+internal const val MAX_USAGE_BATCHES_PER_RUN = 5
 
 /** A malformed array element never hides valid siblings, and quarantine failure aborts the row. */
 internal fun <T> mapLegacyQueueItems(

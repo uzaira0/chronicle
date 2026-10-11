@@ -3,7 +3,7 @@ package com.openlattice.chronicle.services.upload
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.openlattice.chronicle.ui.PermissionStatus
+import com.openlattice.chronicle.collection.capability.PermissionStatus
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,17 +40,19 @@ class AccessLossDiagnosticsTest {
             33, com.openlattice.chronicle.collection.capability.DistributionChannel.RESEARCH, true, true, true, true,
             emptySet(), true, true, restrictedCollectorsCompiledIn = true)
         val expected = setOf(LocalUploadModuleFamily.ACTIVITY_RECOGNITION, LocalUploadModuleFamily.SLEEP)
-        val missing = missingAccessFamilies(com.openlattice.chronicle.ui.activeModulePermissionStatus(states, environment))
+        val missing = missingAccessFamilies(com.openlattice.chronicle.collection.capability.activeModulePermissionStatus(states, environment))
         assertEquals(expected, missing)
         recordAccessEpisodes(store, prefs, "s:p", missing, expected, t0)
         recordAccessEpisodes(store, prefs, "s:p", missing, expected, t0.plusMinutes(1))
         assertEquals(2, accessMissing().size)
-        val recovered = missingAccessFamilies(com.openlattice.chronicle.ui.activeModulePermissionStatus(states,
-            environment.copy(grantedRuntimePermissions = setOf(com.openlattice.chronicle.collection.permissions.ModulePermissions.ACTIVITY_RECOGNITION))))
+        val recovered = missingAccessFamilies(com.openlattice.chronicle.collection.capability.activeModulePermissionStatus(states,
+            environment.copy(grantedRuntimePermissions = setOf(
+                com.openlattice.chronicle.collection.permissions.ModulePermissions.ACTIVITY_RECOGNITION))))
         assertEquals(emptySet<LocalUploadModuleFamily>(), recovered)
         recordAccessEpisodes(store, prefs, "s:p", recovered, expected, t0.plusMinutes(2))
         assertEquals(0, prefs.all.keys.count { !it.contains("granted|") })
-        assertEquals(emptySet<LocalUploadModuleFamily>(), missingAccessFamilies(com.openlattice.chronicle.ui.activeModulePermissionStatus(
+        assertEquals(emptySet<LocalUploadModuleFamily>(), missingAccessFamilies(
+            com.openlattice.chronicle.collection.capability.activeModulePermissionStatus(
             states.map { it.copy(serverEnabled = false) }, environment)))
     }
 

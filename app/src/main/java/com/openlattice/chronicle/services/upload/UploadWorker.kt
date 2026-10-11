@@ -2,7 +2,13 @@ package com.openlattice.chronicle.services.upload
 
 import android.content.Context
 import android.util.Log
-import androidx.work.*
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequest
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.ServerMigrationHelper
 import com.openlattice.chronicle.telemetry.LocalTelemetry
@@ -46,7 +52,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : com.openlattice
 
     override fun runWork(): Result {
         return try {
-            val result = ResearchPersistenceGate.runIfActive(applicationContext) {
+            val result = ResearchPersistenceGate.runIfEnrolled(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(LEGACY_USAGE_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Legacy usage upload deferred because the queue is already being drained")
                     Result.retry()
@@ -121,7 +127,7 @@ internal fun nextConsecutiveUploadFailureCount(currentFailures: Int): Int =
     if (currentFailures >= Int.MAX_VALUE) Int.MAX_VALUE else currentFailures + 1
 
 internal fun persistedUploadFailureCode(error: Exception): String =
-    classifyUploadFailure(error, (error as? retrofit2.HttpException)?.code())
+    classifyUploadFailure(error, uploadHttpStatus(error))
 
 fun scheduleUploadWork(context: Context) {
     val workRequest: PeriodicWorkRequest =

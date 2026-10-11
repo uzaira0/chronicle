@@ -32,11 +32,15 @@ class ChronicleUploadSink(
      */
     private val encryptionRequired: Boolean = false,
     private val onShortWrite: (Int) -> Unit,
+    private val batchIdentity: () -> String = { "" },
+    private val batchVersion: () -> Int? = { null },
 ) : DataSink {
     override fun submit(data: List<ChronicleSample>): Map<String, Boolean> {
         // The encrypted route acknowledges envelopes (one per batch), not events.
         var sealed = false
-        val written = try {
+        // Counts acknowledge handled rows, including permanent cutoff discards. Retrying a
+        // successful mixed batch would strand its valid siblings and resurrect discarded data.
+        val acknowledged = try {
             when (PayloadSealer.routing(encryptionSetting, encryptionRequired)) {
                 PayloadSealer.EncryptionRouting.ENCRYPT -> {
                     sealed = true
@@ -50,6 +54,7 @@ class ChronicleUploadSink(
                         payloadType = EncryptedPayloadType.USAGE,
                         plaintext = plaintext,
                         sampleCount = data.size,
+                        batchIdentity = batchIdentity(),
                     )
                     studyApi.uploadAndroidEncryptedData(
                         studyId,
@@ -57,6 +62,7 @@ class ChronicleUploadSink(
                         deviceId,
                         apiKey,
                         listOf(envelope),
+                        batchVersion(),
                     )
                 }
                 PayloadSealer.EncryptionRouting.FAIL_CLOSED ->
@@ -70,7 +76,8 @@ class ChronicleUploadSink(
                         participantId,
                         deviceId,
                         apiKey,
-                        ChronicleData(data)
+                        ChronicleData(data),
+                        batchVersion(),
                     )
             }
         } catch (e: Exception) {
@@ -79,15 +86,15 @@ class ChronicleUploadSink(
             Log.i(javaClass.name, "Exception when uploading data", e)
             throw e
         }
-        if (!sealed && written < data.size) {
+        if (!sealed && acknowledged < data.size) {
             try {
-                onShortWrite(data.size - written)
+                onShortWrite(data.size - acknowledged)
             } catch (error: Exception) {
                 Log.e(javaClass.name, "Server accepted usage batch but short-write diagnostic failed", error)
             }
         }
         return mapOf(
-            ChronicleUploadSink::class.java.name to (written > 0)
+            ChronicleUploadSink::class.java.name to (acknowledged > 0)
         )
     }
 }

@@ -24,7 +24,7 @@ interface SealedEnvelopeStore {
     fun erase(types: Set<EncryptedPayloadType>)
 }
 
-data class SealedEnvelopeEntry(val batchDigest: String, val envelope: EncryptedEnvelope)
+data class SealedEnvelopeEntry(val batchDigest: String, val envelope: EncryptedEnvelope, val batchIdentity: String = "")
 
 class InMemorySealedEnvelopeStore : SealedEnvelopeStore {
     private val entries = ConcurrentHashMap<String, SealedEnvelopeEntry>()
@@ -45,7 +45,7 @@ class FileSealedEnvelopeStore(private val dir: File) : SealedEnvelopeStore {
     override fun load(stream: String): SealedEnvelopeEntry? = synchronized(this) {
         val file = file(stream)
         if (!file.isFile) return null
-        runCatching { JsonSerializer.fromJson<SealedEnvelopeEntry>(file.readText()) }.getOrNull()
+        checkNotNull(JsonSerializer.fromJson<SealedEnvelopeEntry>(file.readText()))
     }
 
     override fun save(stream: String, entry: SealedEnvelopeEntry) = synchronized(this) {
@@ -57,7 +57,8 @@ class FileSealedEnvelopeStore(private val dir: File) : SealedEnvelopeStore {
     }
 
     override fun clear() = synchronized(this) {
-        dir.listFiles()?.forEach { com.openlattice.chronicle.storage.checkLocalStoreWrite(it.delete() || !it.exists()) { "Sealed envelope erasure failed" } }
+        dir.listFiles()?.forEach { com.openlattice.chronicle.storage.checkLocalStoreWrite(it.delete() || !it.exists()) {
+            "Sealed envelope erasure failed" } }
         Unit
     }
 
@@ -154,6 +155,7 @@ object PayloadSealer {
         payloadType: EncryptedPayloadType,
         plaintext: ByteArray,
         sampleCount: Int,
+        batchIdentity: String = "",
     ): EncryptedEnvelope {
         check(isEncryptionEnabled(setting)) {
             "PayloadSealer.seal called for a study without enabled encryption"
@@ -161,17 +163,20 @@ object PayloadSealer {
         // Same stream + same keys + same bytes = a retry of the batch: resend what was sealed.
         val stream = "$studyId|$participantId|${payloadType.name}"
         val batchDigest = sha256Hex(
-            listOf(setting.keyId, setting.publicKeyPem, setting.mlkemPublicKey, sampleCount.toString())
+            listOf(setting.keyId, setting.publicKeyPem, setting.mlkemPublicKey, sampleCount.toString(), batchIdentity)
                 .joinToString("\u0000").toByteArray() + plaintext,
         )
         val store = sealedEnvelopeStore
-        runCatching { store.load(stream) }.getOrNull()
+        val cached = store.load(stream)
+        cached
             ?.takeIf { it.batchDigest == batchDigest }
             ?.let { return it.envelope }
+        check(batchIdentity.isEmpty() || cached?.batchIdentity != batchIdentity) {
+            "Pending encrypted batch changed before acknowledgment"
+        }
         val envelope = sealFresh(setting, studyId, participantId, payloadType, plaintext, sampleCount)
-        // If this write fails the retry reseals and the server may store a duplicate batch; the
-        // upload itself must not fail over it.
-        runCatching { store.save(stream, SealedEnvelopeEntry(batchDigest, envelope)) }
+        // Persist before sending; an unsaved envelope cannot be retried byte-for-byte.
+        store.save(stream, SealedEnvelopeEntry(batchDigest, envelope, batchIdentity))
         return envelope
     }
 

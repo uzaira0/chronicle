@@ -14,7 +14,7 @@ internal class UploadDiagnosticsUploader(
     private val db: ChronicleDb,
 ) {
     /** Returns zero on success/no work and one when diagnostics remain pending after this attempt. */
-    fun execute(): Int = ResearchPersistenceGate.runIfActive(context) { executeActive() } ?: 0
+    fun execute(): Int = ResearchPersistenceGate.runIfEnrolled(context) { executeActive() } ?: 0
 
     private fun executeActive(): Int {
         val server = exactActiveEnrollmentServer(context, db) ?: return 0

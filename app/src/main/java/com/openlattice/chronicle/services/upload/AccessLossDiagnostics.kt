@@ -6,16 +6,17 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
+import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.capability.CollectionCapabilityResolver
+import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
 import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.services.notifications.CHANNEL_ID
-import com.openlattice.chronicle.ui.PermissionStatus
-import com.openlattice.chronicle.ui.activeModulePermissionStatus
-import com.openlattice.chronicle.utils.Utils
+import com.openlattice.chronicle.collection.capability.PermissionStatus
+import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
+import com.openlattice.chronicle.services.notifications.postNotificationIfPermitted
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
@@ -23,6 +24,11 @@ import java.util.UUID
 private const val ACCESS_TAG = "AccessLossDiagnostics"
 private const val PREFS = "chronicle_access_missing_episodes"
 private const val NOTIFICATION_ID_ACCESS = 47_004
+
+internal fun clearAccessLossEpisodes(context: Context) {
+    com.openlattice.chronicle.storage.checkLocalStoreWrite(
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit())
+}
 
 /** Families whose accepted, ACTIVE module lacks the special Android access it collects through. */
 internal fun missingAccessFamilies(status: PermissionStatus): Set<LocalUploadModuleFamily> = buildSet {
@@ -46,6 +52,7 @@ internal fun missingAccessFamilies(status: PermissionStatus): Set<LocalUploadMod
  * in onboarding) is reported to the server only. An episode ends when access returns; the next loss
  * is a new episode. The episode is persisted before it is recorded, and its stable ID makes a retry
  * after process death safe. [required] is every family an ACTIVE module needs access for.
+ * [notifyInitiallyMissing] also notifies for a service that needs a foreground restart.
  */
 internal fun recordAccessEpisodes(
     store: LocalUploadDiagnosticsStore,
@@ -54,6 +61,7 @@ internal fun recordAccessEpisodes(
     missing: Set<LocalUploadModuleFamily>,
     required: Set<LocalUploadModuleFamily>,
     now: OffsetDateTime = OffsetDateTime.now(ZoneOffset.UTC),
+    notifyInitiallyMissing: Set<LocalUploadModuleFamily> = emptySet(),
 ): Set<LocalUploadModuleFamily> {
     val prefix = "$ownerScope|"
     val grantedPrefix = "${prefix}granted|"
@@ -63,7 +71,7 @@ internal fun recordAccessEpisodes(
     val stale = prefs.all.keys - keep
     if (stale.isNotEmpty()) check(prefs.edit().apply { stale.forEach(::remove) }.commit())
     val began = missing.filterTo(linkedSetOf()) { prefs.getString(prefix + it.name, null) == null }
-    val lost = began.filterTo(linkedSetOf()) { prefs.contains(grantedPrefix + it.name) }
+    val lost = began.filterTo(linkedSetOf()) { it in notifyInitiallyMissing || prefs.contains(grantedPrefix + it.name) }
     if (began.isNotEmpty() || granted.isNotEmpty()) {
         check(prefs.edit().apply {
             began.forEach { putString(prefix + it.name, now.toString()) }
@@ -72,6 +80,7 @@ internal fun recordAccessEpisodes(
     }
     missing.forEach { family ->
         val startedAt = prefs.getString(prefix + family.name, null) ?: return@forEach
+        // nosemgrep: chronicle-uuid-from-string -- Access-loss episode key deduplicates repeated reports for this owner, family and start time.
         val id = UUID.nameUUIDFromBytes("access-missing:$prefix${family.name}:$startedAt".toByteArray()).toString()
         store.recordOperationalOnce(
             id, family, LocalOperationalIssue.COLLECTION_ACCESS_MISSING, OffsetDateTime.parse(startedAt),
@@ -81,19 +90,21 @@ internal fun recordAccessEpisodes(
     return lost
 }
 
-/** Reports and notifies when an accepted module lost the Android access it needs. Never throws. */
+/** Reports missing Android access or a stopped sensor service for accepted modules. Never throws. */
 fun recordCollectionAccessLoss(context: Context) {
     try {
         val owner = ResearchPersistenceGate.captureOwner(context) ?: return
         val states = CollectionLoopStore.of(context).loadAll().values.toList()
         val environment = CollectionCapabilityResolver.snapshot(context)
-        val missing = missingAccessFamilies(activeModulePermissionStatus(states, environment))
+        val sensors = if (CollectionLoopCoordinator(context).anySensorCollects()) setOf(LocalUploadModuleFamily.SENSOR) else emptySet()
+        val stoppedSensors = sensors.takeIf { !DistributionRestrictedRuntime.hardwareSensorsRunning(context) }.orEmpty()
+        val missing = missingAccessFamilies(activeModulePermissionStatus(states, environment)) + stoppedSensors
         // The same check with every grant denied names every family an active module needs.
         val required = missingAccessFamilies(activeModulePermissionStatus(states, environment.copy(
             grantedRuntimePermissions = emptySet(),
             healthConnectGranted = false, usageAccessGranted = false,
             notificationListenerEnabled = false, accessibilityEnabled = false,
-        )))
+        ))) + sensors
         if (missing.isNotEmpty()) Log.i(ACCESS_TAG, "Collection access missing: ${missing.map { it.name }}")
         val lost = recordAccessEpisodes(
             LocalUploadDiagnosticsStore.of(context),
@@ -101,6 +112,7 @@ fun recordCollectionAccessLoss(context: Context) {
             "${owner.studyId}:${owner.participantId}",
             missing,
             required,
+            notifyInitiallyMissing = stoppedSensors,
         )
         if (lost.isNotEmpty()) notifyAccessMissing(context.applicationContext)
     } catch (e: Exception) {
@@ -109,7 +121,6 @@ fun recordCollectionAccessLoss(context: Context) {
 }
 
 private fun notifyAccessMissing(appContext: Context) {
-    Utils.createNotificationChannel(appContext)
     val intent = Intent(appContext, MainActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         .putExtra(MainActivity.EXTRA_SELECT_TAB, R.id.nav_data_sharing)
@@ -126,10 +137,6 @@ private fun notifyAccessMissing(appContext: Context) {
         .setAutoCancel(true)
         .setContentIntent(pending)
         .build()
-    try {
-        NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID_ACCESS, notification)
-    } catch (e: SecurityException) {
-        // POST_NOTIFICATIONS not granted: the Overview card and the server diagnostic still show it.
-        Log.w(ACCESS_TAG, "Access notification suppressed (permission not granted)", e)
-    }
+    // Without the permission the Overview card and the server diagnostic still show it.
+    postNotificationIfPermitted(appContext, NOTIFICATION_ID_ACCESS, notification)
 }

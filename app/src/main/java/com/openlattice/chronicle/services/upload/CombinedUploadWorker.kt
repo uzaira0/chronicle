@@ -2,7 +2,13 @@ package com.openlattice.chronicle.services.upload
 
 import android.content.Context
 import android.util.Log
-import androidx.work.*
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ListenableWorker
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.battery.BatteryUploadWorkerDelegate
 import com.openlattice.chronicle.collection.battery.BATTERY_UPLOAD_WORK_NAME
@@ -19,11 +25,13 @@ import com.openlattice.chronicle.preferences.SensorSettings
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.ServerMigrationHelper
 import com.openlattice.chronicle.telemetry.LocalTelemetry
+import com.openlattice.chronicle.security.CallDeadline
 import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 
 private val COMBINED_UPLOAD_WORKER_TAG = CombinedUploadWorker::class.java.simpleName
 private const val COMBINED_UPLOAD_INTERVAL_MIN = 15L
+internal const val UPLOAD_STREAM_DEADLINE_MS = 15_000L
 // Owned by :collection-base CollectionConstants (referenced by :collection-upload);
 // re-exported here so existing import sites stay unchanged.
 const val COMBINED_UPLOAD_WORK_NAME = com.openlattice.chronicle.constants.COMBINED_UPLOAD_WORK_NAME
@@ -54,7 +62,7 @@ class CombinedUploadWorker(context: Context, params: WorkerParameters) : com.ope
 }
 
 fun runCombinedUpload(context: Context, runAttemptCount: Int): ListenableWorker.Result {
-    val result = ResearchPersistenceGate.runIfActive(context) {
+    val result = ResearchPersistenceGate.runIfEnrolled(context) {
         if (!UploadQueueSingleFlight.tryAcquire(COMBINED_UPLOAD_WORK_NAME)) {
             Log.i(COMBINED_UPLOAD_WORKER_TAG, "Combined upload deferred because the queue is already being drained")
             ListenableWorker.Result.retry()
@@ -82,7 +90,9 @@ private fun runCombinedUploadOwned(context: Context, runAttemptCount: Int): List
     val runUsageUpload: () -> Int = {
         try {
             LocalTelemetry.logEvent(TelemetryEvents.UPLOAD_START, null)
-            UploadWorkerDelegate(context, chronicleDb).execute()
+            CallDeadline.within(UPLOAD_STREAM_DEADLINE_MS) {
+                UploadWorkerDelegate(context, chronicleDb).execute()
+            }
         } catch (e: Exception) {
             Log.e(COMBINED_UPLOAD_WORKER_TAG, "Usage upload failed", e)
             LocalTelemetry.recordException(e)
@@ -95,7 +105,9 @@ private fun runCombinedUploadOwned(context: Context, runAttemptCount: Int): List
     val runSensorUpload: () -> Int = {
         try {
             LocalTelemetry.logEvent(TelemetryEvents.SENSOR_UPLOAD_START, null)
-            val sensorFailures = DistributionRestrictedRuntime.uploadSensors(context, chronicleDb)
+            val sensorFailures = CallDeadline.within(UPLOAD_STREAM_DEADLINE_MS) {
+                DistributionRestrictedRuntime.uploadSensors(context, chronicleDb)
+            }
             if (sensorFailures == 0) {
                 LocalTelemetry.logEvent(TelemetryEvents.SENSOR_UPLOAD_SUCCESS, null)
                 SensorSettings(context).setLastSensorUpload(OffsetDateTime.now().toString())
@@ -120,7 +132,9 @@ private fun runCombinedUploadOwned(context: Context, runAttemptCount: Int): List
         } else {
             try {
                 collectBatterySampleIfDue(context)
-                BatteryUploadWorkerDelegate(context, chronicleDb).execute()
+                CallDeadline.within(UPLOAD_STREAM_DEADLINE_MS) {
+                    BatteryUploadWorkerDelegate(context, chronicleDb).execute()
+                }
             } catch (e: Exception) {
                 Log.e(COMBINED_UPLOAD_WORKER_TAG, "Battery upload failed", e)
                 LocalTelemetry.recordException(e)
@@ -151,7 +165,9 @@ private fun runCombinedUploadOwned(context: Context, runAttemptCount: Int): List
     } else {
         legacyRunCombinedUpload(runAttemptCount, runUsageUpload, runSensorUpload, runBatteryUpload, cleanupStats)
     }
-    val diagnosticFailures = UploadDiagnosticsUploader(context, chronicleDb).execute()
+    val diagnosticFailures = CallDeadline.within(UPLOAD_STREAM_DEADLINE_MS) {
+        UploadDiagnosticsUploader(context, chronicleDb).execute()
+    }
     return mergeDiagnosticUploadResult(runAttemptCount, primaryResult, diagnosticFailures)
 }
 

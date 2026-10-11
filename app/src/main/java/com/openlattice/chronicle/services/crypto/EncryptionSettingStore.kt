@@ -81,7 +81,7 @@ class EncryptionSettingStore internal constructor(private val prefs: SharedPrefe
         if (json != null) {
             return try {
                 (JsonSerializer.fromJson<StudyEncryptionSetting>(json)
-                    ?: throw IllegalStateException("Cached encryption setting decoded as null"))
+                    ?: error("Cached encryption setting decoded as null"))
                     .also { memoryCache[studyId] = it }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read cached encryption setting", e)

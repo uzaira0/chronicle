@@ -12,6 +12,11 @@ import com.openlattice.chronicle.collection.identification.UserIdentificationMod
 import com.openlattice.chronicle.collection.lifecycle.DeviceLifecycleModuleHolder
 import com.openlattice.chronicle.collection.notifications.QuestionnaireModuleHolder
 import com.openlattice.chronicle.collection.upload.UploadTelemetryModuleHolder
+import com.openlattice.chronicle.services.sync.CHRONICLE_SYNC_IMMEDIATE_WORK_NAME
+import com.openlattice.chronicle.services.sync.CHRONICLE_SYNC_WORK_NAME
+import com.openlattice.chronicle.services.sync.ChronicleSyncStrategy
+import com.openlattice.chronicle.services.sync.SyncRuntimeConfig
+import com.openlattice.chronicle.services.upload.COMBINED_UPLOAD_WORK_NAME
 
 /**
  * Process-wide runtime [CollectionModuleRegistry] over the active, holder-backed collection
@@ -62,7 +67,15 @@ public object CollectionModules {
             putAll(linkedMapOf(
             CollectionModuleId.BATTERY_TELEMETRY to { ctx: Context -> BatteryTelemetryModuleHolder.get(ctx) },
             CollectionModuleId.DEVICE_LIFECYCLE to { ctx: Context -> DeviceLifecycleModuleHolder.get(ctx) },
-            CollectionModuleId.UPLOAD_TELEMETRY to { ctx: Context -> UploadTelemetryModuleHolder.get(ctx) },
+            CollectionModuleId.UPLOAD_TELEMETRY to { ctx: Context -> UploadTelemetryModuleHolder.get(ctx,
+                periodicWorkName = {
+                    if (SyncRuntimeConfig.load(ctx).strategy ==
+                        ChronicleSyncStrategy.SPLIT_PERIODIC) {
+                        COMBINED_UPLOAD_WORK_NAME
+                    } else CHRONICLE_SYNC_WORK_NAME
+                },
+                immediateWorkName = { CHRONICLE_SYNC_IMMEDIATE_WORK_NAME },
+            ) },
             CollectionModuleId.USER_IDENTIFICATION to { ctx: Context -> UserIdentificationModuleHolder.get(ctx) },
             CollectionModuleId.CONNECTIVITY_STATE to { ctx: Context -> ConnectivityStateModuleHolder.get(ctx) },
             CollectionModuleId.DEVICE_SETTINGS to { ctx: Context -> DeviceSettingsModuleHolder.get(ctx) },

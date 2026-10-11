@@ -23,8 +23,14 @@ import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServerReso
 import com.openlattice.chronicle.services.upload.handleServerUploadFailure
 import com.openlattice.chronicle.services.upload.quarantineMalformedSample
 import com.openlattice.chronicle.storage.ChronicleDb
-import com.openlattice.chronicle.storage.UploadStatsEntity
 import com.openlattice.chronicle.storage.insertOwnedDay
+import com.openlattice.chronicle.services.upload.UploadRetryGate
+import com.openlattice.chronicle.services.upload.acknowledgePendingUploadBatch
+import com.openlattice.chronicle.services.upload.handleRejectedUploadBatch
+import com.openlattice.chronicle.services.upload.pendingUploadBatchVersion
+import com.openlattice.chronicle.services.upload.pendingUploadBatchIdentity
+import com.openlattice.chronicle.services.upload.quarantineRejectedRows
+import com.openlattice.chronicle.services.upload.selectPendingUploadBatch
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -64,7 +70,7 @@ class BatteryUploadWorker(context: Context, workerParameters: WorkerParameters) 
 
     override fun runWork(): Result {
         return try {
-            val result = ResearchPersistenceGate.runIfActive(applicationContext) {
+            val result = ResearchPersistenceGate.runIfEnrolled(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(BATTERY_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Battery upload deferred because the queue is already being drained")
                     Result.retry()
@@ -125,9 +131,17 @@ class BatteryUploadWorkerDelegate(
         }
         val servers = listOf(server)
 
-        if (!com.openlattice.chronicle.services.upload.UploadRetryGate.shouldAttempt(context, server,
+        if (!UploadRetryGate.shouldAttempt(context, server,
                 LocalUploadModuleFamily.BATTERY, db)) return 0
-        val pending = dao.getOldest(BATTERY_UPLOAD_MAX_BATCH)
+        val pending = selectPendingUploadBatch(
+            db, server, EncryptedPayloadType.BATTERY,
+            loadNew = {
+                dao.getOldest(UploadRetryGate.batchLimit(
+                    context, server, LocalUploadModuleFamily.BATTERY, BATTERY_UPLOAD_MAX_BATCH,
+                ))
+            },
+            loadByIds = dao::getByIds, idOf = { it.id },
+        )
         if (pending.isEmpty()) {
             return 0
         }
@@ -181,9 +195,11 @@ class BatteryUploadWorkerDelegate(
                             payloadType = EncryptedPayloadType.BATTERY,
                             plaintext = plaintext,
                             sampleCount = samples.size,
+                            batchIdentity = pendingUploadBatchIdentity(db, server, EncryptedPayloadType.BATTERY),
                         )
                         studyApi.uploadAndroidEncryptedData(
-                            studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope),
+                            studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope), pendingUploadBatchVersion(db,
+                                server, EncryptedPayloadType.BATTERY),
                         )
                     } else {
                         studyApi.uploadAndroidBatteryData(
@@ -192,6 +208,7 @@ class BatteryUploadWorkerDelegate(
                             server.sourceDeviceId,
                             server.apiKey,
                             samples,
+                            pendingUploadBatchVersion(db, server, EncryptedPayloadType.BATTERY),
                         )
                     }
                     Log.i(TAG, "[${server.name}] Uploaded ${samples.size} battery sample(s)")
@@ -203,13 +220,17 @@ class BatteryUploadWorkerDelegate(
                 )
                 try {
                     val today = LocalDate.now().toString()
-                    db.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                    db.uploadStatsDao().insertOwnedDay(server, today)
                     db.uploadStatsDao().incrementBatteryCount(server.id, today, samples.size)
                 } catch (statsError: Exception) {
                     statsFailureCount++
                     Log.e(TAG, "[${server.name}] Server accepted battery batch but stats write failed", statsError)
                 }
             } catch (e: Exception) {
+                if (handleRejectedUploadBatch(context, db, server, EncryptedPayloadType.BATTERY, e, validIds.size) { status ->
+                    quarantineRejectedRows(db, server, EncryptedPayloadType.BATTERY, status, "battery_samples",
+                        pending.filter { it.id in validIds }, { it.id }, dao::deleteByIds)
+                }) return 0
                 failureCount++
                 handleServerUploadFailure(
                     context,
@@ -223,7 +244,7 @@ class BatteryUploadWorkerDelegate(
                 }
                 try {
                     val today = LocalDate.now().toString()
-                    db.uploadStatsDao().insertOwnedDay(UploadStatsEntity(serverId = server.id, date = today, studyId = server.studyId, participantId = server.participantId, deviceId = server.sourceDeviceId, enrollmentEpoch = "${server.id}:${server.createdAt}"))
+                    db.uploadStatsDao().insertOwnedDay(server, today)
                     db.uploadStatsDao().incrementBatteryFailureCount(server.id, today, 1)
                 } catch (statsError: Exception) {
                     statsFailureCount++
@@ -236,7 +257,10 @@ class BatteryUploadWorkerDelegate(
         // rows are kept and re-uploaded next run (idempotent server-side). Corrupt rows
         // that produced no sample are still purged here, so they are not retried forever.
         if (failureCount == 0) {
-            dao.deleteByIds(validIds)
+            db.runInTransaction {
+                dao.deleteByIds(validIds)
+                acknowledgePendingUploadBatch(db, server, EncryptedPayloadType.BATTERY, context)
+            }
         }
         Log.i(TAG, "Battery upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
         return failureCount + statsFailureCount

@@ -5,6 +5,7 @@ import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsPersisten
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadIssueBucket
 import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.storage.SensorSampleDeliveryEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -12,6 +13,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.android.SensorUploadReceipt
+import com.openlattice.chronicle.android.AndroidSensorSample
 import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.api.RestrictedChronicleStudyApi
 import com.openlattice.chronicle.layout.TestStores
@@ -21,37 +24,66 @@ import com.openlattice.chronicle.study.StudyEncryptionSetting
 import java.lang.reflect.Proxy
 import java.util.UUID
 import java.time.LocalDate
+import java.time.OffsetDateTime
 
 /** Dead-lettered sensor samples must reach the operator, not only logcat. */
 @RunWith(RobolectricTestRunner::class)
 class SensorUploadWorkerDelegateTest {
+    private val unusedStudyApi = Proxy.newProxyInstance(
+        ChronicleStudyApi::class.java.classLoader, arrayOf(ChronicleStudyApi::class.java),
+    ) { _, method, _ -> error("plaintext study must not call ${method.name}") } as ChronicleStudyApi
+
+    private fun acceptedSensorApi(onUpload: (Int) -> Unit = {}): RestrictedChronicleStudyApi = Proxy.newProxyInstance(
+        RestrictedChronicleStudyApi::class.java.classLoader, arrayOf(RestrictedChronicleStudyApi::class.java),
+    ) { _, method, args ->
+        check(method.name == "uploadAndroidSensorDataReceipt") { "unexpected call ${method.name}" }
+        @Suppress("UNCHECKED_CAST") val samples = args[4] as List<AndroidSensorSample>
+        onUpload(samples.size)
+        SensorUploadReceipt(samples.mapTo(linkedSetOf()) { it.id }, emptySet(), emptySet(), 1)
+    } as RestrictedChronicleStudyApi
+
+    @Test fun successfulAndAlreadyAcknowledgedBatchesDrainPastTheFirstBatch() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        TestStores.install(context, enrolled = true)
+        val db = ChronicleDb.getInstance(context)
+        val server = db.uploadServerDao().getConfiguredServer()!!
+        EncryptionSettingStore.of(context).put(UUID.fromString(server.studyId), StudyEncryptionSetting(enabled = false))
+        val uploads = mutableListOf<Int>()
+        val accepted = acceptedSensorApi { uploads += it }
+        val delegate = SensorUploadWorkerDelegate(
+            context, db,
+            studyApiFor = { unusedStudyApi },
+            restrictedApiFor = { accepted },
+        )
+
+        for (alreadyAcknowledged in listOf(false, true)) {
+            val samples = (0..SENSOR_UPLOAD_BATCH_SIZE).map { validSample(UUID.randomUUID().toString()) }
+            db.sensorSampleDao().insertAll(samples)
+            if (alreadyAcknowledged) {
+                db.sensorSampleDao().insertDeliveries(samples.map {
+                    SensorSampleDeliveryEntity(it.id, server.id, server.sensorDeliveryGeneration, OffsetDateTime.now().toString())
+                })
+            }
+            assertEquals(0, delegate.execute())
+            assertEquals("deletion count must allow the drain to reach the next batch", 0, db.sensorSampleDao().count())
+        }
+        assertEquals(listOf(SENSOR_UPLOAD_BATCH_SIZE, 1), uploads)
+    }
+
     @Test fun acceptedSensorBatchWithStatsFailureIsAcknowledgedButReportedAsFailedWork() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         TestStores.install(context, enrolled = true)
         val db = ChronicleDb.getInstance(context)
         val server = db.uploadServerDao().getConfiguredServer()!!
         EncryptionSettingStore.of(context).put(UUID.fromString(server.studyId), StudyEncryptionSetting(enabled = false))
-        db.sensorSampleDao().insertAll(listOf(SensorSampleEntry(
-            id = UUID.randomUUID().toString(), sensorType = "accelerometer",
-            timestamp = "2026-09-24T10:00:00Z", timezone = "UTC",
-            x = 1f, y = 2f, z = 3f, w = null, accuracy = 3, valuesJson = null,
-        )))
+        db.sensorSampleDao().insertAll(listOf(validSample(UUID.randomUUID().toString())))
         db.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER fail_stats BEFORE INSERT ON upload_stats BEGIN SELECT RAISE(ABORT, 'stats down'); END",
         )
-        val accepted = Proxy.newProxyInstance(
-            RestrictedChronicleStudyApi::class.java.classLoader, arrayOf(RestrictedChronicleStudyApi::class.java),
-        ) { _, method, args ->
-            check(method.name == "uploadAndroidSensorData") { "unexpected call ${method.name}" }
-            (args[4] as List<*>).size
-        } as RestrictedChronicleStudyApi
+        val accepted = acceptedSensorApi()
 
         val failed = SensorUploadWorkerDelegate(context, db,
-            studyApiFor = {
-                Proxy.newProxyInstance(ChronicleStudyApi::class.java.classLoader, arrayOf(ChronicleStudyApi::class.java)) { _, method, _ ->
-                    error("plaintext study must not call ${method.name}")
-                } as ChronicleStudyApi
-            },
+            studyApiFor = { unusedStudyApi },
             restrictedApiFor = { accepted },
         ).execute()
 
@@ -75,6 +107,10 @@ class SensorUploadWorkerDelegateTest {
         x = null, y = null, z = null, w = null,
         accuracy = null,
         valuesJson = "broken",
+    )
+
+    private fun validSample(id: String) = sample(id).copy(
+        sensorType = "accelerometer", timestamp = "2026-09-24T10:00:00Z", valuesJson = null,
     )
 
     @Test

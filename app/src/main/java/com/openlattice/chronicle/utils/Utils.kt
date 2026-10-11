@@ -128,7 +128,7 @@ object Utils {
         val hash = digest.digest(value.toByteArray())
         return buildString(16) {
             for (i in 0 until 8) {
-                append(String.format("%02x", hash[i]))
+                append(String.format(java.util.Locale.ROOT, "%02x", hash[i]))
             }
         }
     }

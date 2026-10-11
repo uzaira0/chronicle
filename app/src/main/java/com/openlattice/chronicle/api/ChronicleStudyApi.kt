@@ -10,6 +10,7 @@ import com.openlattice.chronicle.collection.AndroidDeviceSettingsEvent
 import com.openlattice.chronicle.collection.AndroidUploadDiagnosticEvent
 import com.openlattice.chronicle.collection.BatterySample
 import com.openlattice.chronicle.collection.CollectionAcknowledgment
+import com.openlattice.chronicle.collection.CollectionUploadEvidence
 import com.openlattice.chronicle.crypto.EncryptedEnvelope
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.study.StudyEncryptionSetting
@@ -19,7 +20,13 @@ import com.openlattice.chronicle.participantaccess.MobileReminderConfiguration
 import com.openlattice.chronicle.participantaccess.ParticipantFormAccessCodeResponse
 import com.openlattice.chronicle.sources.SourceDevice
 import org.apache.olingo.commons.api.edm.FullQualifiedName
-import retrofit2.http.*
+import retrofit2.http.Body
+import retrofit2.http.DELETE
+import retrofit2.http.GET
+import retrofit2.http.Header
+import retrofit2.http.Headers
+import retrofit2.http.POST
+import retrofit2.http.Path
 import java.util.*
 
 interface ChronicleStudyApi {
@@ -33,6 +40,8 @@ interface ChronicleStudyApi {
         const val STUDY_ID = "studyId"
         const val PARTICIPANT_ID = "participantId"
         const val SOURCE_DEVICE_ID = "sourceDeviceId"
+        const val DEVICE_ID_HEADER = "X-Chronicle-Device-Id"
+        const val API_KEY_HEADER = "X-Api-Key"
 
         const val STUDY_ID_PATH = "/{$STUDY_ID}"
         const val PARTICIPANT_ID_PATH = "/{$PARTICIPANT_ID}"
@@ -50,7 +59,6 @@ interface ChronicleStudyApi {
         const val SETTINGS_PATH = "/settings"
         const val COLLECTION_ACK_PATH = "/collection-ack"
         const val AVAILABILITY_PATH = "/availability"
-        const val VERIFY_PATH = "/verify"
         const val STATUS_PATH = "/status"
         const val NOTIFICATIONS_PATH = "/notifications"
         const val QUESTIONNAIRES_PATH = "/questionnaires"
@@ -72,7 +80,7 @@ interface ChronicleStudyApi {
     fun enroll(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") deviceInstanceId: String,
+        @Header(DEVICE_ID_HEADER) deviceInstanceId: String,
         @Body datasource: SourceDevice,
         @Header("X-Chronicle-Enrollment-Code") enrollmentCode: String? = null,
         @Header("X-Chronicle-Manifest-Digest") manifestDigest: String? = null,
@@ -89,8 +97,8 @@ interface ChronicleStudyApi {
 
     @DELETE("/chronicle/v4/mobile/enrollments/current")
     fun withdrawCurrentEnrollment(
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String,
         @Header("X-Chronicle-Withdrawal-Request-Id") withdrawalRequestId: String,
     ): EnrollmentWithdrawalResponse
 
@@ -98,16 +106,16 @@ interface ChronicleStudyApi {
     fun getMobileReminderConfiguration(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String,
     ): MobileReminderConfiguration
 
     @GET(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + "/reminders")
     fun getMobileReminderSchedule(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String,
     ): MobileReminderConfiguration
 
     /** Mints one form's code; unlike the reminder manifest it leaves the device's other forms' codes live. */
@@ -115,24 +123,19 @@ interface ChronicleStudyApi {
     fun createParticipantFormAccessCode(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String,
         @Body request: CreateParticipantFormAccessCodeRequest,
     ): ParticipantFormAccessCodeResponse
 
     @GET(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + STATUS_PATH)
+    @Headers(ParticipationStatus.ERASURE_STATUS_VERSION_HEADER + ": " + ParticipationStatus.ERASURE_STATUS_VERSION)
     fun getDeviceParticipationStatus(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String,
     ): ParticipationStatus
-
-    @GET(V3_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + VERIFY_PATH)
-    fun isKnownParticipant(
-        @Path(STUDY_ID) studyId: UUID,
-        @Path(PARTICIPANT_ID) participantId: String,
-    ): Boolean
 
     // Upload methods accept BOTH X-Chronicle-Device-Id (used by upstream Chronicle) AND X-Api-Key
     // (used by current self-host servers). The client passes whichever matches the server auth mode;
@@ -141,44 +144,48 @@ interface ChronicleStudyApi {
     fun uploadAndroidUsageEventData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body data: ChronicleData,
+        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
     ): Int
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + BATTERY_PATH)
     fun uploadAndroidBatteryData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body data: List<BatterySample>,
+        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
     ): Int
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + CONNECTIVITY_STATE_PATH)
     fun uploadAndroidConnectivityStateData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body data: List<AndroidConnectivityStateEvent>,
+        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
     ): Int
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + DEVICE_SETTINGS_PATH)
     fun uploadAndroidDeviceSettingsData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body data: List<AndroidDeviceSettingsEvent>,
+        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
     ): Int
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + UPLOAD_DIAGNOSTICS_PATH)
     fun uploadAndroidUploadDiagnostics(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body data: List<AndroidUploadDiagnosticEvent>,
     ): List<String>
 
@@ -186,9 +193,10 @@ interface ChronicleStudyApi {
     fun uploadAndroidEncryptedData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body data: List<EncryptedEnvelope>,
+        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
     ): Int
 
     @GET(V3_BASE + STUDY_ID_PATH + SETTINGS_PATH + "/type/AndroidSensor")
@@ -220,8 +228,8 @@ interface ChronicleStudyApi {
     fun reportCollectionAck(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body acknowledgment: CollectionAcknowledgment,
     ): OK
 
@@ -230,8 +238,8 @@ interface ChronicleStudyApi {
     fun reportAndroidSensorAvailability(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Device-Id") sourceDeviceId: String,
-        @Header("X-Api-Key") apiKey: String?,
+        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(API_KEY_HEADER) apiKey: String?,
         @Body availability: AndroidDeviceSensorAvailability,
     ): Int
 

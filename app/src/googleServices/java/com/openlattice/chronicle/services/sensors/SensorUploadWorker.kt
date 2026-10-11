@@ -2,7 +2,11 @@ package com.openlattice.chronicle.services.sensors
 
 import android.content.Context
 import android.util.Log
-import androidx.work.*
+import androidx.work.BackoffPolicy
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import com.openlattice.chronicle.collection.sensors.SensorUploadMigration
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.constants.TelemetryEvents
@@ -25,7 +29,7 @@ class SensorUploadWorker(context: Context, params: WorkerParameters) : com.openl
         LocalTelemetry.logEvent(TelemetryEvents.SENSOR_UPLOAD_START, null)
 
         return try {
-            val result = ResearchPersistenceGate.runIfActive(applicationContext) {
+            val result = ResearchPersistenceGate.runIfEnrolled(applicationContext) {
                 if (!UploadQueueSingleFlight.tryAcquire(LEGACY_SENSOR_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Sensor upload deferred because the queue is already being drained")
                     Result.retry()

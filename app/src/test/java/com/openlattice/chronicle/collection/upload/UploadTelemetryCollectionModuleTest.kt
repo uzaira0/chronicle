@@ -43,8 +43,6 @@ class UploadTelemetryCollectionModuleTest {
         enabled = enabled,
         consecutiveFailures = usageFailures,
         sensorConsecutiveFailures = sensorFailures,
-        lastUsageUploadTime = "2026-05-20T10:00:00Z",
-        lastSensorUploadTime = "2026-05-20T10:05:00Z",
         hasUsageUploadError = usageError,
         hasSensorUploadError = sensorError,
     )

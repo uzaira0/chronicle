@@ -52,7 +52,9 @@ internal fun recordPolicyErasureCountInTransaction(
     while (remaining > 0) {
         val batchCount = minOf(remaining, Int.MAX_VALUE.toLong()).toInt()
         db.uploadDiagnosticDao().upsert(UploadDiagnosticEntity(
+            // nosemgrep: chronicle-uuid-from-string -- Split erasure count chunks require stable receipt IDs to make retry accounting idempotent.
             id = if (part == 0) eventId else UUID.nameUUIDFromBytes("$eventId:$part".toByteArray()).toString(),
+
             studyId = server?.studyId,
             participantId = server?.participantId,
             deviceId = server?.sourceDeviceId,

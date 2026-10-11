@@ -26,7 +26,7 @@ class UploadWorkerDelegateCoreTest {
             servers = listOf(server(1), server(2), server(3)),
             uploadForServer = { server ->
                 attempted.add(server.id)
-                if (server.id == 2L) throw IllegalStateException("server 2 failed")
+                if (server.id == 2L) error("server 2 failed")
             },
             recordFailure = { server, _ -> failed.add(server.id) },
             afterUploads = { cleanedUp = true },
@@ -45,7 +45,7 @@ class UploadWorkerDelegateCoreTest {
 
         val failureCount = runUsageUploadForEligibleServers(
             servers = listOf(server(1), server(2), server(3)),
-            uploadForServer = { throw IllegalStateException("failed") },
+            uploadForServer = { error("failed") },
             recordFailure = { server, _ -> failed.add(server.id) },
             afterUploads = { cleanedUp = true },
         )
