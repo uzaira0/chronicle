@@ -176,7 +176,7 @@ def verify(root: Path, sealed: bool) -> None:
     data_safety_path = play_dir / "data-safety.md"
     data_safety = normalized_text(data_safety_path)
     require(
-        "They are uploaded after connectivity recovers and deleted from the device after acknowledgment or after 30 days."
+        "They are uploaded after connectivity recovers and kept on the device until the study's retention period ends or the data is erased."
         in listing,
         "listing does not disclose deferred upload-diagnostic delivery and retention",
     )

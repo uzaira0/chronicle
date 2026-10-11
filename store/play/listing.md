@@ -34,8 +34,8 @@ FEATURES IN THIS RELEASE
   upload diagnostics record the affected upload family, failure category and count, timing, HTTP
   status when available, and bounded exception class. They do not include server URLs or free-form
   error text. They are
-  uploaded after connectivity recovers and deleted from the device after acknowledgment or after
-  30 days.
+  uploaded after connectivity recovers and kept on the device until the study's retention period
+  ends or the data is erased.
 
 NOT COLLECTED AND NOT PLANNED
 

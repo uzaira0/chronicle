@@ -15,8 +15,9 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
 - [x] The August 26 independent Android/Play review found no P0 issue. Its implementable P1
   findings are addressed in the current `develop` change: participant-form/questionnaire runtime
   removal, withdrawal-safe enrollment monitoring, mandatory disclosed upload diagnostics,
-  structured diagnostic minimization, physical 30-day pruning, and removal of unsupported legacy
-  Firebase/Crashlytics claims. Final artifact/reviewer/Play-delivery findings remain gates below.
+  structured diagnostic minimization, 30-day pruning (superseded 2026-09-28: diagnostics follow
+  study retention or explicit erasure), and removal of unsupported legacy Firebase/Crashlytics
+  claims. Final artifact/reviewer/Play-delivery findings remain gates below.
 - [x] Android `develop` contains the reviewed minimal-public-artifact and sealed-submission work
   through `99c6d4f94b8dcb364ffbd7b98f5b5cb461e74822` (PRs #46 through #50).
 - [x] The permanent package ID is `com.bcm.chronicle`; the current diagnostic candidate is
@@ -100,8 +101,8 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
 - [x] The approved public modules are exactly app-usage events, in-app activity class, device
   lifecycle, unlock user identification, battery telemetry, connectivity state, and device
   settings. Per-app network usage is excluded. Upload diagnostics use bounded encrypted local
-  persistence, authenticated delivery to the exact enrolled study server, full acknowledgment
-  before local deletion and 30-day retention. Uninstall removes app-local data but cannot notify the
+  persistence, authenticated delivery to the exact enrolled study server, local retention
+  until study retention ends or explicit erasure. Uninstall removes app-local data but cannot notify the
   server or request server erasure. Their payload is limited to a
   closed issue code, count, times, optional HTTP status, and bounded exception class; it contains
   no free-form error text, server URL, credentials, or stack trace. Participant/device identity is

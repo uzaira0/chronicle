@@ -1,6 +1,6 @@
 # Data Safety form source of truth
 
-This is the approved Play Console declaration completed by the account owner for the current
+This is the proposed Play Console declaration for owner review against the current
 `playRelease` contract. Reconcile it against the final AAB and every supported deployment model
 again before submission. In Play's terminology, data sent from the device to an enrolled Chronicle
 server is "collected" even when encrypted and used only for research.
@@ -30,15 +30,15 @@ server is "collected" even when encrypted and used only for research.
 | Personal info > User IDs | Study ID, participant ID | Collected and shared with the enrolled study server | Required | App functionality |
 | Device or other IDs | App-generated source-device/device-instance UUID | Collected and shared with the enrolled study server | Required | App functionality; fraud prevention, security, and compliance |
 | App activity > App interactions | App foreground/background transitions and optional in-app activity class | Collected and shared with the enrolled study server | Required | App functionality; analytics |
-| App activity > Installed apps | Package names observed in app-usage records | Collected and shared with the enrolled study server | Required in the submitted Console declaration | App functionality |
+| App activity > Installed apps | Package names observed in app-usage records | Collected and shared with the enrolled study server | Study-dependent; declare the approved study requirement | App functionality |
 | App activity > Other actions | Whether the person using the device selects study participant or someone else after unlock | Collected and shared with the enrolled study server | Optional | App functionality |
-| App info and performance > Diagnostics | Battery state, thermal state, free storage, connectivity state, and bounded upload-failure category/count/timing/status/exception class | Collected and shared because approved device telemetry and upload diagnostics are sent to the enrolled study server | Required | App functionality; analytics |
+| App info and performance > Diagnostics | Battery and connectivity state; device-settings snapshots (display, sound, accessibility, rotation, battery saver, location-services state, thermal state, free/total storage); bounded upload-failure category/count/timing/status/exception class | Collected and shared because approved device telemetry and upload diagnostics are sent to the enrolled study server | Required | App functionality; analytics |
 
 The app keeps a live local view of queue, retry, and connection state. When a research-data upload
 fails, it also stores a bounded aggregate containing the affected upload family, failure category
 and count, first/last occurrence, HTTP status when available, and bounded exception class. That aggregate is later transmitted to the
-exact enrolled study server under the active participant/device enrollment and retained there only
-until the earlier of 30 days from its last occurrence or 30 days from its first server receipt.
+exact enrolled study server under the active participant/device enrollment and retained there through the study’s data-retention period or explicit erasure, as disclosed
+in the approved-module registry and the study consent.
 Participant identity and device identity come from the authenticated request rather
 than being duplicated inside the diagnostic body; the destination is inherent in the authenticated
 connection. Server URLs, free-form error text, invitation secrets, API keys, authorization tokens,

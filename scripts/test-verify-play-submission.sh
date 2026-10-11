@@ -81,7 +81,7 @@ PY
 }
 
 python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$ROOT_DIR" >/dev/null
-python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$ROOT_DIR" --sealed >/dev/null
+# The live tree is sealed only after owner approval; sealed success is covered by approved_fixture.
 
 pending_fixture="$TEST_ROOT/pending"
 copy_fixture "$pending_fixture"
@@ -160,7 +160,7 @@ import sys
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
 updated, count = re.subn(
-    r"They are\s+uploaded after connectivity recovers and deleted from the device after acknowledgment or after\s+30 days\.",
+    r"They are\s+uploaded after connectivity recovers and kept on the device until the study's retention period\s+ends or the data is erased\.",
     "They remain only on the device.",
     source,
     count=1,
