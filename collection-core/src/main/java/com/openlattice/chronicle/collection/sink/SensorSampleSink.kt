@@ -3,11 +3,12 @@ package com.openlattice.chronicle.collection.sink
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
-import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
+import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.storage.SensorSampleDao
 import com.openlattice.chronicle.storage.SensorSampleEntry
 
 private const val TAG = "SensorSampleSink"
+private const val SENSOR_PERSISTENCE_REFUSAL = "active enrollment or sensor persistence gate closed"
 
 /**
  * The sanctioned writer for hardware sensor samples into the `sensor_samples` table
@@ -55,20 +56,13 @@ public open class SensorSampleSink(
             return ModuleResult.Ok(items = 0)
         }
         return try {
-            var persistedCount = 0
-            val admitted = persistenceGuard.persistResult {
+            persistenceGuard.writeObservation(SENSOR_PERSISTENCE_REFUSAL) {
                 val allowed = samples.filter { isCurrent(it) && sampleAllowedAtPersistence(it) }
-                if (allowed.isNotEmpty()) {
+                if (allowed.isEmpty()) ModuleResult.Skipped(SENSOR_PERSISTENCE_REFUSAL)
+                else {
                     sensorSampleDao.insertAll(allowed)
-                    persistedCount = allowed.size
+                    ModuleResult.Ok(items = allowed.size)
                 }
-            }
-            if (admitted == CollectionPersistenceResult.STORAGE_UNAVAILABLE) {
-                ModuleResult.Retry("local storage temporarily unavailable")
-            } else if (admitted == CollectionPersistenceResult.REFUSED || persistedCount == 0) {
-                ModuleResult.Skipped("active enrollment or sensor persistence gate closed")
-            } else {
-                ModuleResult.Ok(items = persistedCount)
             }
         } catch (e: Exception) {
             log.error(TAG, "Failed to persist ${samples.size} sensor sample(s) to sensor_samples", e)

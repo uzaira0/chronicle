@@ -59,7 +59,7 @@ class SensorSampleSinkTest {
         val sink = SensorSampleSink(dao, NoOpCollectionLog,
             persistenceGuard = CollectionPersistenceGuard { persist ->
                 persist()
-                throw IllegalStateException("commit outcome unknown")
+                error("commit outcome unknown")
             })
         assertTrue(sink.write(listOf(sample("a"))) is ModuleResult.Failed)
     }

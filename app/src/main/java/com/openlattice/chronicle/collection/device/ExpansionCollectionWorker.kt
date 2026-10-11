@@ -50,7 +50,8 @@ class ExpansionCollectionWorker(context: Context, workerParameters: WorkerParame
 fun collectExpansionSamples(context: Context, schedule: ExpansionPullSchedule? = null): Boolean {
     val appContext = context.applicationContext
     val now = System.currentTimeMillis()
-    val connectivity = pullExpansionModule(CollectionModuleId.CONNECTIVITY_STATE, schedule, now) { ConnectivityStateModuleHolder.get(appContext).sample() }
+    val connectivity = pullExpansionModule(CollectionModuleId.CONNECTIVITY_STATE, schedule, now) { ConnectivityStateModuleHolder.get(
+        appContext).sample() }
     val settings = pullExpansionModule(CollectionModuleId.DEVICE_SETTINGS, schedule, now) { DeviceSettingsModuleHolder.get(appContext).sample() }
     val additional = DistributionCollectionContributions.collectAdditionalSamples(appContext, schedule, now)
     return connectivity && settings && additional

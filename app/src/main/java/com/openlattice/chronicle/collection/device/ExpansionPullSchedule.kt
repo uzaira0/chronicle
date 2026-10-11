@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.collection.device
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
 import com.openlattice.chronicle.collection.CollectionCadenceModules
 import com.openlattice.chronicle.collection.CollectionModuleId
@@ -54,7 +55,7 @@ public class ExpansionPullSchedule(context: Context) {
         val claimedMs = prefs.getLong(claimKey(moduleId), 0L)
         if (claimedMs > 0L && kotlin.math.abs(nowMs - claimedMs) < CLAIM_ABANDONED_MS) return@synchronized null
         if (!isDue(moduleId, nowMs)) return@synchronized null
-        check(prefs.edit().putLong(claimKey(moduleId), nowMs).commit()) { "Unable to claim $moduleId run" }
+        checkLocalStoreWrite(prefs.edit().putLong(claimKey(moduleId), nowMs).commit()) { "Unable to claim $moduleId run" }
         nowMs
     }
 

@@ -90,7 +90,7 @@ class AppNetworkUsageCollectionModuleTest {
 
         override fun acknowledgeRead() {
             acknowledgments += 1
-            if (failAcknowledge) throw IllegalStateException("checkpoint unavailable")
+            if (failAcknowledge) error("checkpoint unavailable")
         }
 
         override fun rejectRead() {
@@ -108,6 +108,7 @@ class AppNetworkUsageCollectionModuleTest {
     }
 
     private class FakeDao : AppNetworkUsageSampleDao {
+        override fun getByIds(ids: List<String>): List<AppNetworkUsageSampleEntry> = emptyList()
         override fun getOldest(limit: Int): List<AppNetworkUsageSampleEntry> = emptyList()
         override fun insertAll(samples: List<AppNetworkUsageSampleEntry>) = Unit
         override fun deleteByIds(ids: List<String>) = Unit

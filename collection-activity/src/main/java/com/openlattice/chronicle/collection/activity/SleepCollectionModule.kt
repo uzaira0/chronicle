@@ -14,8 +14,6 @@ import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.storage.SleepSampleEntry
 import java.time.OffsetDateTime
 
-private const val QUEUE_DEPTH_UNAVAILABLE = -1
-
 /**
  * The `sleep` collection module (Play Services Sleep API). **Push-style**: the device delivers
  * sleep updates asynchronously to an app-side receiver that persists rows, so this module does no
@@ -34,16 +32,7 @@ public class SleepCollectionModule(
 
     override fun status(): CollectionModuleStatus = CollectionModuleStatus.IDLE
 
-    override fun diagnostics(): CollectionModuleDiagnostics = CollectionModuleDiagnostics(
-        moduleId = id,
-        privacyClass = privacyClass,
-        lastRunEpochMs = null,
-        lastResult = ModuleResult.Skipped("push-captured").label,
-        itemsCollected = 0,
-        queueDepth = runCatching { queueDepth() }.getOrDefault(QUEUE_DEPTH_UNAVAILABLE),
-        lastError = null,
-        redactedParticipantRef = null,
-    )
+    override fun diagnostics(): CollectionModuleDiagnostics = activityCaptureDiagnostics(id, queueDepth)
 
     /** Push-style: capture is delivered to the app receiver, not polled. */
     override fun poll(context: Context, window: CollectionWindow): ModuleResult =

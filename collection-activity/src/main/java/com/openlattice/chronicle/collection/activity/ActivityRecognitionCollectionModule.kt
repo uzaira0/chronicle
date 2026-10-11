@@ -33,16 +33,7 @@ public class ActivityRecognitionCollectionModule(
 
     override fun status(): CollectionModuleStatus = CollectionModuleStatus.IDLE
 
-    override fun diagnostics(): CollectionModuleDiagnostics = CollectionModuleDiagnostics(
-        moduleId = id,
-        privacyClass = privacyClass,
-        lastRunEpochMs = null,
-        lastResult = ModuleResult.Skipped("push-captured").label,
-        itemsCollected = 0,
-        queueDepth = runCatching { queueDepth() }.getOrDefault(QUEUE_DEPTH_UNAVAILABLE),
-        lastError = null,
-        redactedParticipantRef = null,
-    )
+    override fun diagnostics(): CollectionModuleDiagnostics = activityCaptureDiagnostics(id, queueDepth)
 
     override fun poll(context: Context, window: CollectionWindow): ModuleResult =
         ModuleResult.Skipped("activity_recognition is push-style (Play Services Activity Transition API)")
@@ -69,4 +60,16 @@ public fun ActivityRecognitionSampleEntry.toAndroidActivityRecognitionEvent(): A
         activityType = DetectedActivityType.valueOf(activityType),
         confidence = confidence,
         transitionType = transitionType?.let { ActivityTransitionType.valueOf(it) },
+    )
+
+internal fun activityCaptureDiagnostics(id: CollectionModuleId, queueDepth: () -> Int): CollectionModuleDiagnostics =
+    CollectionModuleDiagnostics(
+        moduleId = id,
+        privacyClass = id.privacyClass,
+        lastRunEpochMs = null,
+        lastResult = ModuleResult.Skipped("push-captured").label,
+        itemsCollected = 0,
+        queueDepth = runCatching(queueDepth).getOrDefault(QUEUE_DEPTH_UNAVAILABLE),
+        lastError = null,
+        redactedParticipantRef = null,
     )

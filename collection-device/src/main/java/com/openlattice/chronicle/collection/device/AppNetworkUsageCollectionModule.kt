@@ -1,17 +1,12 @@
 package com.openlattice.chronicle.collection.device
 
-import android.content.Context
 import com.openlattice.chronicle.collection.AndroidAppNetworkUsageEvent
-import com.openlattice.chronicle.collection.CollectionModuleDiagnostics
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.CollectionPrivacyClass
 import com.openlattice.chronicle.collection.NetworkUsageType
 import com.openlattice.chronicle.collection.core.CollectionClock
 import com.openlattice.chronicle.collection.core.CollectionLog
-import com.openlattice.chronicle.collection.core.CollectionModuleStatus
-import com.openlattice.chronicle.collection.core.CollectionWindow
-import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.core.PullCollectionModule
 import com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink
 import com.openlattice.chronicle.storage.AppNetworkUsageSampleEntry
 import java.nio.charset.StandardCharsets
@@ -22,7 +17,6 @@ import java.util.TimeZone
 import java.util.UUID
 
 private const val TAG = "AppNetworkUsageCollectionModule"
-private const val QUEUE_DEPTH_UNAVAILABLE = -1
 
 /**
  * The `app_network_usage` collection module — a **pull-style** module mirroring
@@ -34,38 +28,14 @@ public class AppNetworkUsageCollectionModule(
     private val sink: AppNetworkUsageSampleSink,
     private val source: AppNetworkUsageSource,
     private val enrolled: () -> Boolean,
-    private val clock: CollectionClock = CollectionClock.SYSTEM,
+    clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
     private val sampleLease: (() -> ModuleResult) -> ModuleResult = { it() },
-) : DataCollectionModule {
+) : PullCollectionModule(CollectionModuleId.APP_NETWORK_USAGE, clock, sink::queueDepth) {
 
-    override val id: CollectionModuleId = CollectionModuleId.APP_NETWORK_USAGE
-    override val privacyClass: CollectionPrivacyClass = id.privacyClass
+    override fun sample(): ModuleResult = sampleLease { synchronized(this) { super.sample() } }
 
-    private data class SampleState(
-        val lastRunEpochMs: Long?,
-        val lastResult: ModuleResult,
-        val itemsCollected: Int,
-        val lastError: String?,
-    )
-
-    @Volatile
-    private var state: SampleState = SampleState(null, ModuleResult.Skipped("not yet run"), 0, null)
-
-    public fun sample(): ModuleResult = sampleLease { synchronized(this) {
-        val now = clock.nowEpochMs()
-        val result = runSample(now)
-        state = SampleState(
-            lastRunEpochMs = now,
-            lastResult = result,
-            itemsCollected = if (result is ModuleResult.Ok) result.items else 0,
-            lastError = if (result is ModuleResult.Failed) result.redactedMessage else null,
-        )
-        result
-    }
-    }
-
-    private fun runSample(now: Long): ModuleResult {
+    override fun runSample(now: Long): ModuleResult {
         if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
 
         val readings: List<AppNetworkUsageReading> = try {
@@ -142,31 +112,6 @@ public class AppNetworkUsageCollectionModule(
             .onFailure { log.error(TAG, "Failed to reject app-network-usage read window", it) }
     }
 
-    override fun status(): CollectionModuleStatus = when (state.lastResult) {
-        is ModuleResult.Failed -> CollectionModuleStatus.FAILED
-        is ModuleResult.Ok -> CollectionModuleStatus.IDLE
-        is ModuleResult.Retry -> CollectionModuleStatus.DEGRADED
-        is ModuleResult.Skipped -> CollectionModuleStatus.IDLE
-    }
-
-    override fun diagnostics(): CollectionModuleDiagnostics {
-        val snapshot = state
-        return CollectionModuleDiagnostics(
-            moduleId = id,
-            privacyClass = privacyClass,
-            lastRunEpochMs = snapshot.lastRunEpochMs,
-            lastResult = snapshot.lastResult.label,
-            itemsCollected = snapshot.itemsCollected,
-            queueDepth = runCatching { sink.queueDepth() }.getOrDefault(QUEUE_DEPTH_UNAVAILABLE),
-            lastError = snapshot.lastError,
-            redactedParticipantRef = null,
-        )
-    }
-
-    override fun poll(context: Context, window: CollectionWindow): ModuleResult = sample()
-    override fun start(context: Context): ModuleResult = ModuleResult.Skipped("app_network_usage is pull-style")
-    override fun stop(context: Context): ModuleResult = ModuleResult.Skipped("app_network_usage is pull-style")
-    override fun flush(context: Context): ModuleResult = ModuleResult.Skipped("app_network_usage buffers nothing")
 }
 
 /** Stable local/server dedup key for retries of the same app/network/time window. */
@@ -177,6 +122,7 @@ public fun stableAppNetworkUsageSampleId(reading: AppNetworkUsageReading): Strin
         reading.bucketStartMillis.toString(),
         reading.bucketEndMillis.toString(),
     ).joinToString("\u001f")
+    // nosemgrep: chronicle-uuid-from-string -- App, network and bucket endpoints must deduplicate the same source window after a checkpoint retry.
     return UUID.nameUUIDFromBytes(identity.toByteArray(StandardCharsets.UTF_8)).toString()
 }
 

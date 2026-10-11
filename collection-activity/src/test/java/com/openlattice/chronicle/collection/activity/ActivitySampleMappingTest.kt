@@ -39,4 +39,19 @@ class ActivitySampleMappingTest {
         assertEquals(SleepSegmentStatus.UNKNOWN, sleepSegmentStatusFor(3))
         assertEquals(SleepSegmentStatus.UNKNOWN, sleepSegmentStatusFor(-1))
     }
+
+    @Test fun pushModulesShareRedactedQueueDiagnostics() {
+        for (create in listOf<(() -> Int) -> com.openlattice.chronicle.collection.core.DataCollectionModule>(
+            { ActivityRecognitionCollectionModule(it) }, { SleepCollectionModule(it) },
+        )) {
+            val module = create { 3 }
+            val diagnostics = module.diagnostics()
+            assertEquals(module.id, diagnostics.moduleId)
+            assertEquals(module.id.privacyClass, diagnostics.privacyClass)
+            assertEquals(3, diagnostics.queueDepth)
+            assertEquals("SKIPPED", diagnostics.lastResult)
+            assertEquals(-1, create { throw java.io.IOException("queue unavailable") }.diagnostics().queueDepth)
+        }
+    }
+
 }

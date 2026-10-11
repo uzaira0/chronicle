@@ -1,13 +1,15 @@
 package com.openlattice.chronicle.sensors
 
 import android.app.ActivityManager
-import android.app.ActivityManager.RunningAppProcessInfo.*
+import android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+import android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
+import android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE
+import android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE_PRE_26
+import android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_TOP_SLEEPING
+import android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
 import android.content.Context
 import com.openlattice.chronicle.android.ChronicleData
-import com.openlattice.chronicle.android.ChronicleSample
 import com.openlattice.chronicle.models.ExtractedActivities
-import com.openlattice.chronicle.storage.UserStorageQueue
-import org.apache.olingo.commons.api.edm.FullQualifiedName
 import java.util.*
 
 

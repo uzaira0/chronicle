@@ -35,6 +35,7 @@ class BatteryTelemetryCollectionModuleTest {
         }
 
         override fun count(): Int = inserted.size
+        override fun getByIds(ids: List<String>): List<BatterySampleEntry> = inserted.filter { it.id in ids }
         override fun getOldest(limit: Int): List<BatterySampleEntry> = inserted.take(limit)
         override fun deleteByIds(ids: List<String>) {}
         override fun deleteOlderThan(cutoffTimestamp: String): Int = 0

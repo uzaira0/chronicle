@@ -1,11 +1,8 @@
 package com.openlattice.chronicle.services.usage
 
 import android.content.Context
-import android.os.Bundle
 import android.util.Log
 import com.google.common.base.Stopwatch
-import com.google.common.collect.ImmutableMap
-import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.state.CollectionGate
@@ -17,21 +14,10 @@ import com.openlattice.chronicle.collection.usage.UsageEventsCollectionModule
 import com.openlattice.chronicle.collection.usage.UsageModulePersistence
 import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.data.ParticipationStatus
-import com.openlattice.chronicle.preferences.EnrollmentSettings
-import com.openlattice.chronicle.sensors.PROPERTY_TYPE_IDS
-import com.openlattice.chronicle.sensors.PROPERTY_TYPES
 import com.openlattice.chronicle.sensors.UsageEventsChronicleSensor
-import com.openlattice.chronicle.services.upload.UploadWorker
-import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
-import com.openlattice.chronicle.storage.StorageQueue
-import com.openlattice.chronicle.storage.UserStorageQueue
 import com.openlattice.chronicle.telemetry.LocalTelemetry
-import com.openlattice.chronicle.utils.Utils
-import org.apache.olingo.commons.api.edm.FullQualifiedName
-import java.security.SecureRandom
 import java.util.TreeMap
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -61,57 +47,11 @@ import java.util.concurrent.TimeUnit
  *    `UsageMonitoringWorker` TAG log lines (operational telemetry parity).
  *
  */
-class UsageModuleCollectionDelegate(private val context: Context) {
-    private val sw = Stopwatch.createStarted()
-    private val rand = SecureRandom()
-    private val serviceId = rand.nextLong()
-
-    private lateinit var chronicleApi: ChronicleStudyApi
-
-    private lateinit var propertyTypeIds: Map<FullQualifiedName, UUID>
-    private lateinit var chronicleDb: ChronicleDb
-    private lateinit var storageQueue: StorageQueue
-    private lateinit var userStorageQueue: UserStorageQueue
-    private lateinit var settings: EnrollmentSettings
+class UsageModuleCollectionDelegate(context: Context) : UsageCollectionDelegateBase(context) {
     private lateinit var usageModule: UsageEventsCollectionModule
     private lateinit var usageEventSink: UsageEventSink
 
-    /**
-     * @return true if usage data was collected (or not needed), false if a retryable
-     *   condition was hit — same contract as [UsageCollectionDelegate.execute].
-     */
-    fun execute(): Boolean {
-        try {
-            settings = EnrollmentSettings(context)
-            chronicleDb = ChronicleDb.getInstance(context)
-            chronicleDb.uploadServerDao().getEnabledServer()
-                ?.takeIf { it.studyId == settings.getStudyId().toString() }
-                ?.let { primary ->
-                    chronicleApi = UploadWorker.getChronicleStudyApi(
-                        primary.url,
-                        primary.mobileSigningSecretOverride
-                    )
-                }
-            propertyTypeIds = getPropertyTypeIds()
-            storageQueue = chronicleDb.queueEntryData()
-            userStorageQueue = chronicleDb.userQueueEntryData()
-            val collected = monitorUsage()
-            if (!collected) {
-                return false
-            }
-        } catch (e: Exception) {
-            LocalTelemetry.recordException(e)
-            if (::settings.isInitialized) {
-                Log.i(TAG, "usage monitoring worker failed for enrolled device", e)
-            }
-            Log.i(TAG, "usage monitoring worker failed with an exception", e)
-            LocalTelemetry.logEvent(TelemetryEvents.USAGE_FAILURE, null)
-            throw e
-        }
-        return true
-    }
-
-    private fun monitorUsage(): Boolean {
+    override fun monitorUsage(): Boolean {
         Log.i(TAG, "usage monitoring worker initialized")
         LocalTelemetry.logEvent(TelemetryEvents.USAGE_START, null)
 
@@ -151,7 +91,8 @@ class UsageModuleCollectionDelegate(private val context: Context) {
             collectActivityClass = ResearchPersistenceGate.collectsNow(context, CollectionModuleId.IN_APP_ACTIVITY_CLASS)
             collectUser = settings.isUserIdentificationEnabled() &&
                 ResearchPersistenceGate.collectsNow(context, CollectionModuleId.USER_IDENTIFICATION)
-            val checkpoints = DaoUsagePollCheckpointStore(chronicleDb.usagePollCheckpointDao(), scope.first, scope.second, com.openlattice.chronicle.collection.state.ResearchErasureFence(context).legacyCheckpointOwner())
+            val checkpoints = DaoUsagePollCheckpointStore(chronicleDb.usagePollCheckpointDao(), scope.first, scope.second,
+                com.openlattice.chronicle.collection.state.ResearchErasureFence(context).legacyCheckpointOwner())
             val initialStart = checkpoints.readOrRememberStart {
                 maxOf(scope.second, UsageEventsChronicleSensor(context).previousPollTimestamp())
             }
@@ -181,7 +122,7 @@ class UsageModuleCollectionDelegate(private val context: Context) {
         val outcome = usageModule.pollWindow(
             users,
             CollectionWindow(startEpochMs = 0L, endEpochMs = currentPollTimestamp),
-        )
+        ) ?: return true
         // Project using capture-time admission. The sink revalidates the optional fields'
         // owner, erasure epochs and observation floors during insertion.
         val gatedUsageEvents = gateActivityClass(outcome.events, collectActivityClass)
@@ -202,26 +143,7 @@ class UsageModuleCollectionDelegate(private val context: Context) {
         ) { rand.nextLong() }
         if (!persistUsageQueueAndCheckpoint(queueEntries, currentPollTimestamp)) return true
 
-        queueEntry.asSequence().chunked(1000).forEach { chunk ->
-            Log.d(
-                javaClass.name,
-                "Persisting ${chunk.size} usage information elements took ${w.elapsed(TimeUnit.MILLISECONDS)} millis."
-            )
-            LocalTelemetry.logEvent(TelemetryEvents.USAGE_SUCCESS, Bundle().apply {
-                putInt("size", chunk.size)
-            })
-        }
-
-        // Update "items remaining" only after successfully persisting collected data.
-        Utils.updateUploadQueueSize(context, storageQueue.getSize())
-
-        val lowestTimestamp = users.lowerEntry(currentPollTimestamp)?.key
-        lowestTimestamp?.let {
-            usageEventSink.withAdmission { userStorageQueue.deleteEntriesWithLowerTimestamp(currentPollTimestamp) }
-        }
-        users.clear() //Release references for GC
-
-        return true
+        return finishUsageCollection(queueEntry, w, users, currentPollTimestamp, usageEventSink)
     }
 
     /**
@@ -242,21 +164,4 @@ class UsageModuleCollectionDelegate(private val context: Context) {
             transaction = { body -> chronicleDb.runInTransaction(body) },
         )
 
-    private fun getPropertyTypeIds(): Map<FullQualifiedName, UUID> {
-        var propertyTypeIds = settings.getPropertyTypeIds()
-        if (propertyTypeIds.size != PROPERTY_TYPES.size) {
-            Log.i(javaClass.name, "Loading BCM property types cache")
-            propertyTypeIds = PROPERTY_TYPE_IDS
-                .filterKeys { it in PROPERTY_TYPES }
-                .ifEmpty {
-                    if (::chronicleApi.isInitialized) {
-                        chronicleApi.getPropertyTypeIds(PROPERTY_TYPES) ?: ImmutableMap.of()
-                    } else {
-                        ImmutableMap.of()
-                    }
-                }
-            settings.setPropertyTypeIds(propertyTypeIds)
-        }
-        return propertyTypeIds
-    }
 }

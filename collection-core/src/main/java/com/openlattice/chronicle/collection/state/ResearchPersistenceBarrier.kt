@@ -75,14 +75,18 @@ public fun interface CollectionPersistenceGuard {
     }
 }
 
+public const val SINK_PERSISTENCE_REFUSAL = "active enrollment persistence gate closed"
+
 /** Keep origin validation and the complete write/acknowledgement in the same read lease. */
 public fun CollectionPersistenceGuard.writeObservation(
+    refusedReason: String = "observation authorization retired",
     write: () -> com.openlattice.chronicle.collection.core.ModuleResult,
 ): com.openlattice.chronicle.collection.core.ModuleResult {
     var result: com.openlattice.chronicle.collection.core.ModuleResult? = null
     return when (persistResult { result = write() }) {
         CollectionPersistenceResult.PERSISTED -> checkNotNull(result)
-        CollectionPersistenceResult.REFUSED -> com.openlattice.chronicle.collection.core.ModuleResult.Skipped("observation authorization retired")
-        CollectionPersistenceResult.STORAGE_UNAVAILABLE -> com.openlattice.chronicle.collection.core.ModuleResult.Retry("local storage temporarily unavailable")
+        CollectionPersistenceResult.REFUSED -> com.openlattice.chronicle.collection.core.ModuleResult.Skipped(refusedReason)
+        CollectionPersistenceResult.STORAGE_UNAVAILABLE -> com.openlattice.chronicle.collection.core.ModuleResult.Retry(
+            "local storage temporarily unavailable")
     }
 }

@@ -1,14 +1,15 @@
 package com.openlattice.chronicle.services.usage
 
 import android.content.Context
-import android.os.Bundle
 import android.util.Log
-import androidx.work.*
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequest
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import com.google.common.base.Stopwatch
-import com.google.common.collect.ImmutableMap
 import com.openlattice.chronicle.android.ChronicleData
 import com.openlattice.chronicle.android.ChronicleSample
-import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
@@ -17,24 +18,11 @@ import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.hasUsageSettingPermission
-import com.openlattice.chronicle.preferences.EnrollmentSettings
-import com.openlattice.chronicle.sensors.ChronicleSensor
-import com.openlattice.chronicle.sensors.PROPERTY_TYPE_IDS
-import com.openlattice.chronicle.sensors.PROPERTY_TYPES
 import com.openlattice.chronicle.sensors.UsageEventsChronicleSensor
-import com.openlattice.chronicle.sensors.USAGE_EVENTS_SENSOR_CHECKPOINT
 import com.openlattice.chronicle.serialization.JsonSerializer
-import com.openlattice.chronicle.services.upload.UploadWorker
-import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
 import com.openlattice.chronicle.storage.QueueEntry
-import com.openlattice.chronicle.storage.StorageQueue
-import com.openlattice.chronicle.storage.UsagePollCheckpointEntity
-import com.openlattice.chronicle.storage.UserStorageQueue
 import com.openlattice.chronicle.telemetry.LocalTelemetry
-import com.openlattice.chronicle.utils.Utils
-import org.apache.olingo.commons.api.edm.FullQualifiedName
-import java.security.SecureRandom
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -99,61 +87,14 @@ class UsageMonitoringWorker(context: Context, workerParameters: WorkerParameters
     }
 }
 
-class UsageCollectionDelegate(private val context: Context) {
+class UsageCollectionDelegate(context: Context) : UsageCollectionDelegateBase(context) {
     private lateinit var observationSink: com.openlattice.chronicle.collection.sink.UsageEventSink
     private lateinit var observationCheckpoint: com.openlattice.chronicle.collection.usage.DaoUsagePollCheckpointStore
-    private val sw = Stopwatch.createStarted()
-    private val rand = SecureRandom()
-    private val serviceId = rand.nextLong()
-
-    private lateinit var chronicleApi: ChronicleStudyApi
-
-    private lateinit var propertyTypeIds: Map<FullQualifiedName, UUID>
-    private lateinit var chronicleDb: ChronicleDb
-    private lateinit var storageQueue: StorageQueue
-    private lateinit var userStorageQueue: UserStorageQueue
-    private lateinit var sensors: Set<ChronicleSensor>
-    private lateinit var settings: EnrollmentSettings
-
-    fun execute(): Boolean {
-        try {
-            settings = EnrollmentSettings(context)
-            chronicleDb = ChronicleDb.getInstance(context)
-            chronicleDb.uploadServerDao().getEnabledServer()
-                ?.takeIf { it.studyId == settings.getStudyId().toString() }
-                ?.let { primary ->
-                    chronicleApi = UploadWorker.getChronicleStudyApi(
-                        primary.url,
-                        primary.mobileSigningSecretOverride
-                    )
-                }
-            propertyTypeIds = getPropertyTypeIds()
-            storageQueue = chronicleDb.queueEntryData()
-            userStorageQueue = chronicleDb.userQueueEntryData()
-            sensors = mutableSetOf(
-                UsageEventsChronicleSensor(context)
-            )
-            val collected = monitorUsage()
-            if (!collected) {
-                return false
-            }
-
-        } catch (e: Exception) {
-            LocalTelemetry.recordException(e)
-            if (::settings.isInitialized) {
-                Log.i(TAG, "usage monitoring worker failed for enrolled device", e)
-            }
-            Log.i(TAG, "usage monitoring worker failed with an exception", e)
-            LocalTelemetry.logEvent(TelemetryEvents.USAGE_FAILURE, null)
-            throw e
-        }
-        return true
-    }
-
     /**
      * @return true if usage data was collected (or not needed), false if a retryable condition was hit
      */
-    private fun monitorUsage(): Boolean {
+    override fun monitorUsage(): Boolean {
+        val sensors = setOf(UsageEventsChronicleSensor(context))
 
         Log.i(TAG, "usage monitoring worker initialized")
         LocalTelemetry.logEvent(TelemetryEvents.USAGE_START, null)
@@ -183,7 +124,8 @@ class UsageCollectionDelegate(private val context: Context) {
                 ?: return@withReadLease null
             observationSink = ResearchPersistenceGate.usageSink(context)
             observationCheckpoint = com.openlattice.chronicle.collection.usage.DaoUsagePollCheckpointStore(
-                chronicleDb.usagePollCheckpointDao(), currentScope.first, currentScope.second, com.openlattice.chronicle.collection.state.ResearchErasureFence(context).legacyCheckpointOwner())
+                chronicleDb.usagePollCheckpointDao(), currentScope.first, currentScope.second,
+                    com.openlattice.chronicle.collection.state.ResearchErasureFence(context).legacyCheckpointOwner())
             currentScope
         } ?: return true
         val currentPollTimestamp = System.currentTimeMillis()
@@ -201,14 +143,9 @@ class UsageCollectionDelegate(private val context: Context) {
             it.writeTimestamp to it.user
         }
         val usageEvents = sensors.flatMap { sensor ->
-            when (sensor) {
-                is UsageEventsChronicleSensor -> {
-                    val previousPollTimestamp = observationCheckpoint.readPreviousPollTimestamp()
-                        ?: maxOf(scope.second, sensor.previousPollTimestamp())
-                    sensor.poll(previousPollTimestamp, currentPollTimestamp, users)
-                }
-                else -> sensor.poll(currentPollTimestamp, users)
-            }
+            val previousPollTimestamp = observationCheckpoint.readPreviousPollTimestamp()
+                ?: maxOf(scope.second, sensor.previousPollTimestamp())
+            sensor.poll(previousPollTimestamp, currentPollTimestamp, users) ?: return true
         }
         // in_app_activity_class field gate: strip the within-app Activity/screen class unless the
         // participant has accepted that (opt-in) module; package-level usage is unaffected.
@@ -235,29 +172,7 @@ class UsageCollectionDelegate(private val context: Context) {
             return true
         }
 
-        queueEntry.asSequence().chunked(1000).forEach { chunk ->
-            Log.d(
-                javaClass.name,
-                "Persisting ${chunk.size} usage information elements took ${w.elapsed(TimeUnit.MILLISECONDS)} millis."
-            )
-            LocalTelemetry.logEvent(TelemetryEvents.USAGE_SUCCESS, Bundle().apply {
-                putInt("size", chunk.size)
-            })
-        }
-
-        // Update "items remaining" only after successfully persisting collected data.
-        Utils.updateUploadQueueSize(context, storageQueue.getSize())
-
-        // currentPollTimestamp will be the begjnTime of UsageStatsManager.queryEvents() call in the next sensor poll
-        // We can therefore delete entries whose timestamp is less than the largest timestamp greater than currentPollTimestamp
-        // Therefore we can clear out user entries that have a lower timestamp
-        val lowestTimestamp = users.lowerEntry(currentPollTimestamp)?.key
-        lowestTimestamp?.let {
-            observationSink.withAdmission { userStorageQueue.deleteEntriesWithLowerTimestamp(currentPollTimestamp) }
-        }
-        users.clear() //Release references for GC
-
-        return true
+        return finishUsageCollection(queueEntry, w, users, currentPollTimestamp, observationSink)
     }
 
     private fun persistUsageQueueAndCheckpoint(
@@ -268,26 +183,6 @@ class UsageCollectionDelegate(private val context: Context) {
         { block -> chronicleDb.runInTransaction(block) },
     )
 
-    private fun getPropertyTypeIds(): Map<FullQualifiedName, UUID> {
-        // try retrieving cached values first
-        var propertyTypeIds = settings.getPropertyTypeIds()
-
-        if (propertyTypeIds.size != PROPERTY_TYPES.size) {
-            Log.i(javaClass.name, "Loading BCM property types cache")
-            propertyTypeIds = PROPERTY_TYPE_IDS
-                .filterKeys { it in PROPERTY_TYPES }
-                .ifEmpty {
-                    if (::chronicleApi.isInitialized) {
-                        chronicleApi.getPropertyTypeIds(PROPERTY_TYPES) ?: ImmutableMap.of()
-                    } else {
-                        ImmutableMap.of()
-                    }
-                }
-            settings.setPropertyTypeIds(propertyTypeIds)
-        }
-
-        return propertyTypeIds
-    }
 }
 
 /**

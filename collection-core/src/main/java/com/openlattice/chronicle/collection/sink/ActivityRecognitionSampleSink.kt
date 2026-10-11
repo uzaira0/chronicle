@@ -3,7 +3,8 @@ package com.openlattice.chronicle.collection.sink
 import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
-import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
+import com.openlattice.chronicle.collection.state.SINK_PERSISTENCE_REFUSAL
+import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.storage.ActivityRecognitionSampleDao
 import com.openlattice.chronicle.storage.ActivityRecognitionSampleEntry
 
@@ -27,12 +28,9 @@ public open class ActivityRecognitionSampleSink(
             return ModuleResult.Ok(items = 0)
         }
         return try {
-            when (persistenceGuard.persistResult { dao.insertAll(samples) }) {
-                CollectionPersistenceResult.PERSISTED -> ModuleResult.Ok(items = samples.size)
-                CollectionPersistenceResult.REFUSED ->
-                    ModuleResult.Skipped("active enrollment persistence gate closed")
-                CollectionPersistenceResult.STORAGE_UNAVAILABLE ->
-                    ModuleResult.Retry("local storage temporarily unavailable")
+            persistenceGuard.writeObservation(SINK_PERSISTENCE_REFUSAL) {
+                dao.insertAll(samples)
+                ModuleResult.Ok(items = samples.size)
             }
         } catch (e: Exception) {
             log.error(TAG, "Failed to persist ${samples.size} activity sample(s)", e)

@@ -54,3 +54,10 @@ public sealed class ModuleResult {
         override val label: String get() = "FAILED"
     }
 }
+
+public val ModuleResult.collectionStatus: CollectionModuleStatus
+    get() = when (this) {
+        is ModuleResult.Failed -> CollectionModuleStatus.FAILED
+        is ModuleResult.Retry -> CollectionModuleStatus.DEGRADED
+        is ModuleResult.Ok, is ModuleResult.Skipped -> CollectionModuleStatus.IDLE
+    }
