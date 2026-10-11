@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.UserIdentificationActivity
@@ -17,6 +16,7 @@ import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_NOTIFICATION_TAG
 import com.openlattice.chronicle.services.notifications.NOTIFICATION_DELETED_ACTION
+import com.openlattice.chronicle.services.notifications.postNotificationIfPermitted
 import com.openlattice.chronicle.services.notifications.userIdentificationMayRun
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 import java.util.concurrent.Executors
@@ -112,21 +112,8 @@ class UnlockDeviceReceiver : BroadcastReceiver() {
             .setDeleteIntent(createOnDismissedIntent())
             .setAutoCancel(true) // remove when user taps on notification
 
-        // POST_NOTIFICATIONS (API 33+) is a runtime permission the user may have denied; NotificationManagerCompat.notify
-        // then throws SecurityException. Handle it explicitly (same contract as CollectionLoopCoordinator.notifySafely):
-        // the identify-user reminder is best-effort, so a denied permission is logged and swallowed, never crashes the receiver.
-        try {
-            NotificationManagerCompat.from(context)
-                .notify(
-                    IDENTIFY_USER_NOTIFICATION_TAG,
-                    context.resources.getInteger(R.integer.identify_user_notification_id),
-                    notificationBuilder.build(),
-                )
-        } catch (e: SecurityException) {
-            Log.w(javaClass.name, "Identify-user notification suppressed (POST_NOTIFICATIONS not granted)", e)
-            return false
-        }
-        return true
+        return postNotificationIfPermitted(context, context.resources.getInteger(R.integer.identify_user_notification_id),
+            notificationBuilder.build(), IDENTIFY_USER_NOTIFICATION_TAG)
     }
 
     private fun createOnDismissedIntent(): PendingIntent {

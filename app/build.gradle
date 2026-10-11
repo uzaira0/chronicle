@@ -276,6 +276,9 @@ android {
         open.java.srcDir 'src/googleServices/java'
         open.kotlin.srcDir 'src/googleServices/java'
         open.res.srcDir 'src/googleServices/res'
+        ['testOpen', 'testResearch'].each {
+            maybeCreate(it).kotlin.srcDir 'src/testGoogleServices/java'
+        }
     }
     signingConfigs {
         chronicle {

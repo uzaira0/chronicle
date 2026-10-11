@@ -15,9 +15,6 @@
             android:name="com.openlattice.chronicle.services.notifications.NotificationPermissionActivity"
             tools:node="remove" />
         <receiver
-            android:name="com.openlattice.chronicle.services.notifications.NotificationPermissionListener"
-            tools:node="remove" />
-        <receiver
             android:name=".receivers.lifecycle.LockedBootReceiver"
             tools:node="remove"
             tools:ignore="MissingClass" />

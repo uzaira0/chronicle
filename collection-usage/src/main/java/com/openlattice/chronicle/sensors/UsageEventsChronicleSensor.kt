@@ -1,13 +1,13 @@
 package com.openlattice.chronicle.sensors
 
 import android.app.usage.UsageEvents
-import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.util.Log
 import com.openlattice.chronicle.android.ChronicleData
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.utils.PackageLabels.getAppFullName
+import com.openlattice.chronicle.utils.UsageAccess
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -53,8 +53,6 @@ internal const val USAGE_EVENT_NOTIFICATION_INTERRUPTION = 12
  */
 class UsageEventsChronicleSensor(context: Context) : ChronicleSensor {
     private val settings = EncryptedPrefsHelper.getEncryptedPrefs(context)
-    private val usageStatsManager =
-        context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     private val appContext = context
 
     @Synchronized
@@ -62,7 +60,7 @@ class UsageEventsChronicleSensor(context: Context) : ChronicleSensor {
         currentPollTimestamp: Long,
         users: NavigableMap<Long, String>
     ): ChronicleData {
-        return poll(previousPollTimestamp(), currentPollTimestamp, users)
+        return poll(previousPollTimestamp(), currentPollTimestamp, users) ?: ChronicleData(emptyList())
     }
 
     @Synchronized
@@ -70,9 +68,9 @@ class UsageEventsChronicleSensor(context: Context) : ChronicleSensor {
         previousPollTimestamp: Long,
         currentPollTimestamp: Long,
         users: NavigableMap<Long, String>
-    ): ChronicleData {
+    ): ChronicleData? {
         val usageEventsList: MutableList<UsageEvents.Event> = ArrayList()
-        val usageEvents = usageStatsManager.queryEvents(previousPollTimestamp, currentPollTimestamp)
+        val usageEvents = UsageAccess.queryEvents(appContext, previousPollTimestamp, currentPollTimestamp) ?: return null
         while (usageEvents.hasNextEvent()) {
             val event: UsageEvents.Event = UsageEvents.Event()
             usageEvents.getNextEvent(event)

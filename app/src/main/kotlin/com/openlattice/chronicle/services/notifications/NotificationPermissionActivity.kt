@@ -39,6 +39,7 @@ class NotificationPermissionActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_permission_notification)
+        com.openlattice.chronicle.utils.Utils.createNotificationChannel(this)
         if (hasNotificationPermission(this)) {
             doMainActivity(this, intent)
             finish()
@@ -119,20 +120,19 @@ fun hasPostNotificationsRuntimePermission(context: Context): Boolean =
         ) == PackageManager.PERMISSION_GRANTED
 
 /** Runtime permission, app-level switch, and [channelId] not muted: the notification will actually show. */
-fun hasNotificationPermission(context: Context, channelId: String = CHANNEL_ID): Boolean {
-    if (!hasPostNotificationsRuntimePermission(context)) return false
-    val notificationManagerCompat = NotificationManagerCompat.from(context)
-    if (!notificationManagerCompat.areNotificationsEnabled()) return false
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        if (
-            manager?.getNotificationChannel(channelId)?.importance ==
-            NotificationManager.IMPORTANCE_NONE
-        ) {
-            return false
-        }
-    }
-    return true
+fun hasNotificationPermission(context: Context, channelId: String = CHANNEL_ID): Boolean =
+    hasPostNotificationsRuntimePermission(context) &&
+        NotificationManagerCompat.from(context).areNotificationsEnabled() &&
+        channelDelivers(context, channelId)
+
+/** Android 8+: the channel exists, is not muted, and its group (Android 9+) is not blocked. */
+private fun channelDelivers(context: Context, channelId: String): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
+    val manager = context.getSystemService(NotificationManager::class.java) ?: return false
+    val channel = manager.getNotificationChannel(channelId) ?: return false
+    if (channel.importance == NotificationManager.IMPORTANCE_NONE) return false
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || channel.group == null) return true
+    return manager.getNotificationChannelGroup(channel.group)?.isBlocked != true
 }
 
 /**

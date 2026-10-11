@@ -24,7 +24,8 @@ import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.interactionSampleDao
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric

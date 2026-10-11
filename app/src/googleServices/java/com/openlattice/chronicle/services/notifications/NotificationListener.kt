@@ -8,7 +8,6 @@ import android.util.Log
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.NotificationEventType
 import com.openlattice.chronicle.collection.audio.AudioCaptureController
-import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.services.upload.LocalOperationalIssue
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore

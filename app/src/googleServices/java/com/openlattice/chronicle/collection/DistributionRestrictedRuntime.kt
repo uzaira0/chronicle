@@ -1,9 +1,12 @@
 package com.openlattice.chronicle.collection
 
+import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Context
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.appcompat.app.AlertDialog
+import androidx.core.app.NotificationManagerCompat
 import androidx.fragment.app.Fragment
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorType
@@ -20,11 +23,30 @@ import com.openlattice.chronicle.collection.sensors.SensorUploadMigration
 import com.openlattice.chronicle.services.sensors.HardwareSensorService
 import com.openlattice.chronicle.services.sensors.SensorAvailabilityReporter
 import com.openlattice.chronicle.services.sensors.SensorUploadWorkerDelegate
+import com.openlattice.chronicle.services.notifications.NotificationListener
+import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
+import com.openlattice.chronicle.preferences.clearDirectBootSensorSnapshot
 import com.openlattice.chronicle.services.sensors.enqueueSensorSettingsRefresh as enqueueRestrictedSensorSettingsRefresh
 import com.openlattice.chronicle.services.sensors.scheduleSensorSettingsRefreshWork as scheduleRestrictedSensorSettingsRefresh
+import com.openlattice.chronicle.storage.ActivityRecognitionSampleEntry
+import com.openlattice.chronicle.storage.AudioActivitySampleEntry
+import com.openlattice.chronicle.storage.AudioContentSampleEntry
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.HealthMetricSampleEntry
+import com.openlattice.chronicle.storage.InteractionSampleEntry
+import com.openlattice.chronicle.storage.NotificationActivitySampleEntry
+import com.openlattice.chronicle.storage.SleepSampleEntry
+import com.openlattice.chronicle.storage.activityRecognitionSampleDao
+import com.openlattice.chronicle.storage.audioActivitySampleDao
+import com.openlattice.chronicle.storage.audioContentSampleDao
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
+import com.openlattice.chronicle.storage.healthMetricSampleDao
+import com.openlattice.chronicle.storage.interactionSampleDao
+import com.openlattice.chronicle.storage.notificationActivitySampleDao
+import com.openlattice.chronicle.storage.sleepSampleDao
 import com.openlattice.chronicle.utils.Utils
 import java.util.UUID
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 
 /** Operational restricted collectors linked only into controlled research/open builds. */
 internal object DistributionRestrictedRuntime {
@@ -50,12 +72,21 @@ internal object DistributionRestrictedRuntime {
             erasurePrefs(context).getStringSet("sensor_types", emptySet()).orEmpty().toSet()
         }
 
+    fun directBootCollectableSensors(context: Context): Set<AndroidSensorType> {
+        val pending = pendingDirectBootSensorErasures(context)
+        return DirectBootSensorSnapshot(context).collectableSensors().filterNot { it.name in pending }.toSet()
+    }
+
     fun markDirectBootSensorErasures(context: Context, sensorTypes: Set<String>) {
         if (sensorTypes.isEmpty()) return
         synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-            check(erasurePrefs(context).edit().putStringSet("sensor_types",
+            checkLocalStoreWrite(erasurePrefs(context).edit().putStringSet("sensor_types",
                 pendingDirectBootSensorErasures(context) + sensorTypes).commit()) {
                 "Unable to persist direct-boot sensor erasure intent"
+            }
+            // Retire the boot permission before consent is saved, even if other sensors stay active.
+            checkLocalStoreWrite(clearDirectBootSensorSnapshot(context)) {
+                "Unable to retire direct-boot sensor snapshot"
             }
         }
     }
@@ -69,6 +100,7 @@ internal object DistributionRestrictedRuntime {
         journal: DirectBootDiagnosticsJournal = DirectBootDiagnosticsJournal(context),
         enqueueDrain: (Context) -> Unit = DirectBootDrainWorker::enqueue,
     ) {
+        markDirectBootSensorErasures(context, setOf(sensorType))
         eraseDirectBootStorageAdmission(context)
         val owner = DirectBootDiagnosticsJournal.configuredOwner(context)
         journal.quarantineCorruptJournal()
@@ -84,7 +116,7 @@ internal object DistributionRestrictedRuntime {
             },
         )
         synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-            check(erasurePrefs(context).edit().putStringSet("sensor_types",
+            checkLocalStoreWrite(erasurePrefs(context).edit().putStringSet("sensor_types",
                 pendingDirectBootSensorErasures(context) - sensorType).commit()) {
                 "Unable to complete direct-boot sensor erasure intent"
             }
@@ -92,7 +124,8 @@ internal object DistributionRestrictedRuntime {
         if (erased > 0) enqueueDrain(context)
     }
 
-    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) { com.openlattice.chronicle.collection.activity.SleepActivityCaptureController.eraseRegistration(context, module) }
+    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) {
+        com.openlattice.chronicle.collection.activity.SleepActivityCaptureController.eraseRegistration(context, module) }
 
     fun eraseHealthSource(context: Context) { com.openlattice.chronicle.collection.device.AndroidHealthMetricSource.clearCheckpoint(context) }
 
@@ -103,6 +136,21 @@ internal object DistributionRestrictedRuntime {
         } else {
             worker.execute()
         }
+    }
+
+    /** Restricted Room implementations stay outside the Play/Amazon source graph. */
+    fun restoreRejectedSample(db: ChronicleDb, sample: Any): Boolean {
+        when (sample) {
+            is InteractionSampleEntry -> db.interactionSampleDao().insertAll(listOf(sample))
+            is AudioActivitySampleEntry -> db.audioActivitySampleDao().insertAll(listOf(sample))
+            is AudioContentSampleEntry -> db.audioContentSampleDao().insertAll(listOf(sample))
+            is NotificationActivitySampleEntry -> db.notificationActivitySampleDao().insertAll(listOf(sample))
+            is SleepSampleEntry -> db.sleepSampleDao().insertAll(listOf(sample))
+            is ActivityRecognitionSampleEntry -> db.activityRecognitionSampleDao().insertAll(listOf(sample))
+            is HealthMetricSampleEntry -> db.healthMetricSampleDao().insertAll(listOf(sample))
+            else -> return false
+        }
+        return true
     }
 
     fun reportSensorAvailability(
@@ -133,6 +181,15 @@ internal object DistributionRestrictedRuntime {
 
     fun interactionAccessibilityEnabled(context: Context): Boolean =
         InteractionAccessibilityOnboarding.isServiceEnabled(context)
+
+    fun notificationListenerAccessGranted(context: Context): Boolean =
+        // Component-specific grants start at API 27: https://developer.android.com/reference/android/app/NotificationManager#isNotificationListenerAccessGranted(android.content.ComponentName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            context.getSystemService(NotificationManager::class.java)?.isNotificationListenerAccessGranted(
+                ComponentName(context, NotificationListener::class.java)) == true
+        } else {
+            NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+        }
 
     fun openInteractionAccessibilitySettings(context: Context) =
         InteractionAccessibilityOnboarding.openAccessibilitySettings(context)

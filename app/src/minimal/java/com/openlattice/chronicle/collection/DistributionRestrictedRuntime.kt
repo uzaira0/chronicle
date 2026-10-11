@@ -1,5 +1,8 @@
 package com.openlattice.chronicle.collection
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
+import com.openlattice.chronicle.collection.activity.ACTIVITY_REGISTRATION_PREFS
+
 import android.content.Context
 import android.content.Intent
 import androidx.activity.result.contract.ActivityResultContract
@@ -10,7 +13,7 @@ import java.util.UUID
 
 /** No-op implementation for functionality deliberately absent from Play and Amazon. */
 internal object DistributionRestrictedRuntime {
-    fun startHardwareSensors(context: Context): Unit = Unit
+    fun startHardwareSensors(context: Context): Boolean = false
     fun tryStartHardwareSensors(context: Context): Boolean = false
     fun stopHardwareSensors(context: Context): Unit = Unit
     fun hardwareSensorsRunning(context: Context): Boolean = false
@@ -21,11 +24,14 @@ internal object DistributionRestrictedRuntime {
     fun pendingDirectBootSensorErasures(context: Context): Set<String> = emptySet()
     fun markDirectBootSensorErasures(context: Context, sensorTypes: Set<String>): Unit = Unit
     fun eraseDirectBootSensorSamples(context: Context, sensorType: String): Unit = Unit
-    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) { check(context.getSharedPreferences("activity_registration_scopes", Context.MODE_PRIVATE).edit().remove(module.id).commit()) }
+    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) { checkLocalStoreWrite(context.getSharedPreferences(
+        ACTIVITY_REGISTRATION_PREFS, Context.MODE_PRIVATE).edit().remove(module.id).commit()) }
 
-    fun eraseHealthSource(context: Context) { check(context.getSharedPreferences("chronicle_health_connect", Context.MODE_PRIVATE).edit().clear().commit()) }
+    fun eraseHealthSource(context: Context) { checkLocalStoreWrite(context.getSharedPreferences("chronicle_health_connect",
+        Context.MODE_PRIVATE).edit().clear().commit()) }
 
     fun uploadSensors(context: Context, db: ChronicleDb): Int = 0
+    fun restoreRejectedSample(db: ChronicleDb, sample: Any): Boolean = false
 
     fun reportSensorAvailability(
         context: Context,
@@ -41,6 +47,7 @@ internal object DistributionRestrictedRuntime {
     fun activityRecognitionAvailable(context: Context): Boolean = false
     fun unregisterActivityRecognition(context: Context): Unit = Unit
     fun interactionAccessibilityEnabled(context: Context): Boolean = false
+    fun notificationListenerAccessGranted(context: Context): Boolean = false
     fun openInteractionAccessibilitySettings(context: Context): Unit = Unit
     fun showInteractionAccessibilityDisclosure(fragment: Fragment): Unit = Unit
     fun healthConnectAvailable(context: Context): Boolean = false

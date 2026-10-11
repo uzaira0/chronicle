@@ -5,7 +5,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.os.PowerManager
 import androidx.test.core.app.ApplicationProvider
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner

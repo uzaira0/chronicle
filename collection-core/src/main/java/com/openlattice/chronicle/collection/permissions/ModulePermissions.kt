@@ -50,6 +50,7 @@ public data class PermissionRequirement(public val permission: String, public va
 public object ModulePermissions {
 
     public const val ACTIVITY_RECOGNITION: String = "android.permission.ACTIVITY_RECOGNITION"
+    public const val LEGACY_ACTIVITY_RECOGNITION: String = "com.google.android.gms.permission.ACTIVITY_RECOGNITION"
     public const val PACKAGE_USAGE_STATS: String = "android.permission.PACKAGE_USAGE_STATS"
     public const val ACCESS_NETWORK_STATE: String = "android.permission.ACCESS_NETWORK_STATE"
     public const val BIND_NOTIFICATION_LISTENER_SERVICE: String =
@@ -103,14 +104,11 @@ public object ModulePermissions {
         put(CollectionModuleId.IN_APP_ACTIVITY_CLASS, listOf(usageAccess))
         put(CollectionModuleId.APP_NETWORK_USAGE, listOf(usageAccess))
 
-        // ACTIVITY_RECOGNITION (runtime, API 29+) — required by the GMS Activity/Sleep APIs AND by
-        // SensorManager for TYPE_STEP_COUNTER / TYPE_SIGNIFICANT_MOTION. Without an explicit grant the
-        // framework logs "Tried enabling a sensor … without holding android.permission.ACTIVITY_RECOGNITION"
-        // and these modules collect nothing.
+        // Activity/Sleep APIs and TYPE_STEP_COUNTER need runtime access on API 29+.
+        // TYPE_SIGNIFICANT_MOTION has no platform permission requirement.
         put(CollectionModuleId.ACTIVITY_RECOGNITION, listOf(activityRecognition))
         put(CollectionModuleId.SLEEP, listOf(activityRecognition))
         put(CollectionModuleId.SENSOR_STEP_COUNTER, listOf(activityRecognition))
-        put(CollectionModuleId.SENSOR_SIGNIFICANT_MOTION, listOf(activityRecognition))
 
         // Health Connect (own grant flow) — read-only.
         put(

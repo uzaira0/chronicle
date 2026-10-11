@@ -54,7 +54,7 @@ public object UsageModulePersistence {
                     throw result.error
                 }
                 if (result is ModuleResult.Retry) {
-                    throw IllegalStateException(result.reason)
+                    error(result.reason)
                 }
                 commitCheckpoint(currentPollTimestamp)
             }
@@ -64,7 +64,7 @@ public object UsageModulePersistence {
             // A temporary closure retains this window. Explicit erasure rotates its consent epoch.
             CollectionPersistenceResult.REFUSED -> false
             CollectionPersistenceResult.STORAGE_UNAVAILABLE ->
-                throw IllegalStateException("local storage temporarily unavailable")
+                error("local storage temporarily unavailable")
         }
     }
 }

@@ -11,6 +11,7 @@ import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.core.collectionStatus
 
 private const val TAG = "UsageEventsCollectionModule"
 
@@ -107,6 +108,7 @@ public class UsageEventsCollectionModule(
      * Only [CollectionWindow.endEpochMs] is used — it is the current poll timestamp
      * (the begin time of the *next* poll). Diagnostics (last poll, event count) are
      * updated here; the checkpoint diagnostic is updated by [commitCheckpoint].
+     * Returns null for an unavailable read, leaving the checkpoint unchanged.
      *
      * @throws Exception propagated verbatim from [UsageEventPoller.poll] — a
      *   `UsageStatsManager` failure is surfaced (and recorded in diagnostics), never
@@ -115,12 +117,17 @@ public class UsageEventsCollectionModule(
     public fun pollWindow(
         users: java.util.NavigableMap<Long, String>,
         window: CollectionWindow,
-    ): UsagePollOutcome {
+    ): UsagePollOutcome? {
         val previous = checkpointStore.readPreviousPollTimestamp() ?: previousPollTimestampFallback()
         val current = window.endEpochMs
         lastRunEpochMs = clock.nowEpochMs()
         return try {
-            val events = poller.poll(previous, current, users)
+            val events = poller.poll(previous, current, users) ?: run {
+                lastEventCount = 0
+                lastError = null
+                lastResult = ModuleResult.Skipped("usage access or provider unavailable")
+                return null
+            }
             lastEventCount = events.size
             lastError = null
             lastResult = ModuleResult.Ok(events.size)
@@ -146,12 +153,7 @@ public class UsageEventsCollectionModule(
         lastCheckpointTimestamp = currentPollTimestamp
     }
 
-    override fun status(): CollectionModuleStatus = when (lastResult) {
-        is ModuleResult.Failed -> CollectionModuleStatus.FAILED
-        is ModuleResult.Ok -> CollectionModuleStatus.IDLE
-        is ModuleResult.Retry -> CollectionModuleStatus.DEGRADED
-        is ModuleResult.Skipped -> CollectionModuleStatus.IDLE
-    }
+    override fun status(): CollectionModuleStatus = lastResult.collectionStatus
 
     override fun diagnostics(): CollectionModuleDiagnostics = CollectionModuleDiagnostics(
         moduleId = id,
@@ -178,7 +180,7 @@ public class UsageEventsCollectionModule(
      */
     override fun poll(context: Context, window: CollectionWindow): ModuleResult {
         return try {
-            val outcome = pollWindow(java.util.TreeMap(), window)
+            val outcome = pollWindow(java.util.TreeMap(), window) ?: return lastResult
             ModuleResult.Ok(outcome.events.size)
         } catch (e: Exception) {
             ModuleResult.Failed(e, redactedMessage = "UsageStatsManager poll failed: ${e.javaClass.simpleName}")

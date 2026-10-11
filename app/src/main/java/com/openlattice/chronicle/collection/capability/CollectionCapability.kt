@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.SensorManager
 import android.os.Build
-import androidx.core.app.NotificationManagerCompat
+import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
 import androidx.core.content.ContextCompat
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.R
@@ -178,8 +178,7 @@ public object CollectionCapabilityResolver {
             grantedRuntimePermissions = activeRuntimePermissions.filterTo(linkedSetOf()) {
                 ContextCompat.checkSelfPermission(appContext, it) == PackageManager.PERMISSION_GRANTED
             },
-            notificationListenerEnabled = NotificationManagerCompat.getEnabledListenerPackages(appContext)
-                .contains(appContext.packageName),
+            notificationListenerEnabled = hasNotificationListenerAccess(appContext),
             accessibilityEnabled = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
                 DistributionRestrictedRuntime.interactionAccessibilityEnabled(appContext),
             availableSensors = availableSensors,

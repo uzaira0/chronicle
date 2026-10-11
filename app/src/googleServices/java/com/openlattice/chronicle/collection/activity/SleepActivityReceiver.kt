@@ -43,7 +43,7 @@ public class SleepActivityReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val appContext = context.applicationContext
-        val module = CollectionModuleId.fromIdOrNull(intent.getStringExtra("registration_module") ?: "") ?: return
+        val module = CollectionModuleId.fromIdOrNull(intent.getStringExtra(ACTIVITY_REGISTRATION_MODULE_EXTRA) ?: "") ?: return
         if (module !in setOf(CollectionModuleId.SLEEP, CollectionModuleId.ACTIVITY_RECOGNITION)) return
         val observedAt = System.currentTimeMillis()
         val observedElapsed = SystemClock.elapsedRealtimeNanos()
@@ -53,7 +53,8 @@ public class SleepActivityReceiver : BroadcastReceiver() {
             var observedCount = 0
             try {
                 ResearchPersistenceGate.initialize(appContext)
-                val origin = ResearchPersistenceGate.guardForRegistration(appContext, module, intent.getStringExtra("registration_scope"))
+                val origin = ResearchPersistenceGate.guardForRegistration(appContext, module, intent.getStringExtra(
+                    ACTIVITY_REGISTRATION_SCOPE_EXTRA))
                 if (!origin.isCurrent()) return@Thread
                 owner = ResearchPersistenceGate.captureOwner(appContext)
                 val floor = ResearchPersistenceGate.observationScope(appContext, module)?.second ?: Long.MAX_VALUE
@@ -68,7 +69,7 @@ public class SleepActivityReceiver : BroadcastReceiver() {
                 handle(appContext, intent, origin, owner, floor, observedAt, observedElapsed)
             } catch (e: Exception) {
                 // The broadcast is not redelivered: whatever it carried is lost.
-                Log.e(TAG, "Sleep/activity receive failed", e)
+                Log.e(TAG, "Sleep/activity receive failed: ${e.javaClass.simpleName}")
                 com.openlattice.chronicle.services.upload.recordForExpectedOwner(
                     appContext, owner,
                     if (module == CollectionModuleId.SLEEP) LocalUploadModuleFamily.SLEEP else LocalUploadModuleFamily.ACTIVITY_RECOGNITION,

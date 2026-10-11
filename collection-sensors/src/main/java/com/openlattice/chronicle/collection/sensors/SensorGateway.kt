@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection.sensors
 
 import android.content.Context
+import android.content.pm.PackageManager
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -9,10 +10,13 @@ import android.hardware.SensorManager
 import android.hardware.TriggerEvent
 import android.hardware.TriggerEventListener
 import android.os.BatteryManager
+import android.os.Build
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import com.openlattice.chronicle.android.AndroidSensorType
+import com.openlattice.chronicle.collection.SensorCollectionModules
+import com.openlattice.chronicle.collection.permissions.ModulePermissions
 import com.openlattice.chronicle.sensors.SensorTypeMapping
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -213,9 +217,14 @@ public class AndroidSensorGateway(
         sensorType: AndroidSensorType,
         samplingPeriodUs: Int,
         maxReportLatencyUs: Int,
-    ): Boolean {
+    ): Boolean = registerIfPermitted(sensorType) {
         val androidType = SensorTypeMapping.toAndroidType(sensorType)
-        val sensor = sensorManager.getDefaultSensor(androidType) ?: return false
+        val sensor = sensorManager.getDefaultSensor(androidType) ?: return@registerIfPermitted false
+        val highSamplingRate = samplingPeriodUs < 5_000 &&
+            androidType in setOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE, Sensor.TYPE_MAGNETIC_FIELD)
+        if (Build.VERSION.SDK_INT >= 31 && highSamplingRate &&
+            appContext.checkSelfPermission(android.Manifest.permission.HIGH_SAMPLING_RATE_SENSORS) !=
+            PackageManager.PERMISSION_GRANTED) return@registerIfPermitted false
         val effectiveReportLatencyUs = dutyCycledReportLatencyUs(
             requestedLatencyUs = maxReportLatencyUs,
             samplingPeriodUs = samplingPeriodUs,
@@ -228,7 +237,7 @@ public class AndroidSensorGateway(
         continuousRawCallbacks[sensorType] = 0L
         continuousRetainedSamples[sensorType] = 0L
         val origin = captureAdmission(sensorType)
-        if (!origin.isCurrent()) return false
+        if (!origin.isCurrent()) return@registerIfPermitted false
         val registeredListener = sampleListener(throttleContinuous = true, origin)
         if (!sensorManager.registerListener(
                 registeredListener,
@@ -238,17 +247,29 @@ public class AndroidSensorGateway(
             )
         ) {
             clearContinuousMetrics(sensorType)
-            return false
+            return@registerIfPermitted false
         }
         continuousListeners.put(sensorType, registeredListener)?.let(sensorManager::unregisterListener)
-        return true
+        true
     }
 
-    override fun registerPersistentSensor(sensorType: AndroidSensorType): Boolean {
-        return if (SensorTypeMapping.isTriggerSensor(sensorType)) {
+    override fun registerPersistentSensor(sensorType: AndroidSensorType): Boolean = registerIfPermitted(sensorType) {
+        if (SensorTypeMapping.isTriggerSensor(sensorType)) {
             registerTriggerSensor(sensorType)
         } else {
             registerOnChangeSensor(sensorType)
+        }
+    }
+
+    private fun registerIfPermitted(sensorType: AndroidSensorType, register: () -> Boolean): Boolean {
+        val required = ModulePermissions.runtimePermissionsFor(
+            listOf(SensorCollectionModules.moduleFor(sensorType)), Build.VERSION.SDK_INT)
+        if (required.any { appContext.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) return false
+        return try {
+            register()
+        } catch (error: SecurityException) {
+            Log.w(TAG, "Sensor registration denied for ${sensorType.name}", error)
+            false
         }
     }
 

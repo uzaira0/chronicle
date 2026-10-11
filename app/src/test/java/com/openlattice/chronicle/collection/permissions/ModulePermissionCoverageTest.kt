@@ -223,7 +223,13 @@ class ModulePermissionCoverageTest {
         val fragment = File(buildRoot(), "app/src/main/java/com/openlattice/chronicle/ui/DataSharingFragment.kt")
         assertTrue("DataSharingFragment.kt not found at ${fragment.absolutePath}", fragment.isFile)
         val text = fragment.readText()
-        assertTrue("DataSharingFragment must request via ModulePermissions", text.contains("ModulePermissions"))
+        // The fragment's only permission source is activeModulePermissionStatus, which derives every
+        // request from ModulePermissions; an unused import used to satisfy this check.
+        assertTrue("DataSharingFragment must request via activeModulePermissionStatus",
+            text.contains("activeModulePermissionStatus("))
+        val authority = File(buildRoot(), "app/src/main/java/com/openlattice/chronicle/collection/capability/PermissionStatus.kt")
+        assertTrue("activeModulePermissionStatus must derive from ModulePermissions",
+            authority.readText().contains("ModulePermissions.runtimePermissionsFor("))
         assertTrue(
             "DataSharingFragment must request distribution-owned optional permissions",
             text.contains("DistributionRestrictedRuntime"),
@@ -254,7 +260,6 @@ class ModulePermissionCoverageTest {
             CollectionModuleId.ACTIVITY_RECOGNITION,
             CollectionModuleId.SLEEP,
             CollectionModuleId.SENSOR_STEP_COUNTER,
-            CollectionModuleId.SENSOR_SIGNIFICANT_MOTION,
         ).forEach { id ->
             assertEquals(
                 "$id must require ACTIVITY_RECOGNITION at runtime",
@@ -262,6 +267,8 @@ class ModulePermissionCoverageTest {
                 runtimePerms(id),
             )
         }
+        assertTrue("Significant motion has no platform permission requirement",
+            runtimePerms(CollectionModuleId.SENSOR_SIGNIFICANT_MOTION).isEmpty())
         assertTrue(
             "health_connect must require the Health Connect grant flow",
             ModulePermissions.needsHealthConnect(listOf(CollectionModuleId.HEALTH_CONNECT)),

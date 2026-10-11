@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
+import com.openlattice.chronicle.utils.registerSystemBroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
@@ -16,12 +17,13 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.openlattice.chronicle.services.startForegroundServiceIfPermitted
+import com.openlattice.chronicle.services.promoteForegroundServiceIfPermitted
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.SensorCollectionModules
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.directboot.DirectBootDrainWorker
 import com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal
@@ -182,7 +184,7 @@ class HardwareSensorService : Service() {
                             else SensorSettings(context).getConfiguredSensors().filterTo(hashSetOf()) {
                                 CollectionLoopStore.of(context).collects(SensorCollectionModules.moduleFor(it))
                             }
-                        } else DirectBootSensorSnapshot(context).collectableSensors()
+                        } else DistributionRestrictedRuntime.directBootCollectableSensors(context)
                         val allowed = samples.filter {
                             isCurrent(it) && runCatching { AndroidSensorType.valueOf(it.sensorType) }.getOrNull() in accepted
                         }
@@ -203,22 +205,18 @@ class HardwareSensorService : Service() {
                 }
             }
 
-        fun startService(context: Context) {
-            tryStartService(context)
-        }
+        fun startService(context: Context): Boolean = tryStartService(context)
 
         fun tryStartService(context: Context): Boolean {
             val intent = Intent(context, HardwareSensorService::class.java)
-            return try {
-                ContextCompat.startForegroundService(context, intent)
-                true
-            } catch (e: IllegalStateException) {
-                Log.w(
-                    TAG,
-                    "Hardware sensor foreground service start deferred by OS background-start policy: ${e.message}"
-                )
-                false
+            val ownerKey = ResearchPersistenceGate.currentOwnerKey()
+            if (startForegroundServiceIfPermitted(context, intent)) return true
+            ResearchPersistenceGate.executeAsync {
+                if (ownerKey != null && ResearchPersistenceGate.currentOwnerKey() == ownerKey) {
+                    com.openlattice.chronicle.services.upload.recordCollectionAccessLoss(context.applicationContext)
+                }
             }
+            return false
         }
 
         fun stopService(context: Context) {
@@ -233,7 +231,27 @@ class HardwareSensorService : Service() {
         super.onCreate()
         directBootMode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
             getSystemService(UserManager::class.java)?.isUserUnlocked == false
-        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        // Promote promptly before the collection gate reads Room (forbidden on the
+        // main thread), then re-check the gate off the main
+        // thread. If hardware_sensors is not server-enabled AND acknowledged on this device
+        // (design §7), there is nothing to collect — stop the service so no idle
+        // "collecting" notification is left showing. The sample-persistence gate inside the
+        // controller already prevents an un-acknowledged sample from being written; this
+        // additionally stops the idle foreground service so it isn't running for nothing.
+        // A gate read error does not stop the service: executeStartup retries until the read succeeds.
+        try {
+            if (!startForegroundNotification()) {
+                rejectForegroundStart(IllegalStateException("Foreground promotion refused"))
+                return
+            }
+        } catch (error: SecurityException) {
+            rejectForegroundStart(error)
+            return
+        } catch (error: IllegalStateException) {
+            rejectForegroundStart(error)
+            return
+        }
+        registerSystemBroadcastReceiver(this, batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         if (directBootMode) {
             // The lifecycle receiver records through Room (credential-encrypted) — deferred
             // to the unlock transition. Watch for first unlock to hand over to the normal
@@ -243,24 +261,6 @@ class HardwareSensorService : Service() {
             registerLifecycleReceiver()
         }
 
-        // Android's foreground-service contract requires startForeground() within ~5s of
-        // startForegroundService(), and the collection gate reads Room (forbidden on the
-        // main thread). So promote to foreground first, then re-check the gate off the main
-        // thread. If hardware_sensors is not server-enabled AND acknowledged on this device
-        // (design §7), there is nothing to collect — stop the service so no idle
-        // "collecting" notification is left showing. The sample-persistence gate inside the
-        // controller already prevents an un-acknowledged sample from being written; this
-        // additionally stops the idle foreground service so it isn't running for nothing.
-        // A gate read error does not stop the service: executeStartup retries until the read succeeds.
-        try {
-            startForegroundNotification()
-        } catch (error: SecurityException) {
-            rejectForegroundStart(error)
-            return
-        } catch (error: IllegalStateException) {
-            rejectForegroundStart(error)
-            return
-        }
         if (directBootMode) {
             executeStartup {
                 if (!directBootMode) return@executeStartup
@@ -322,7 +322,7 @@ class HardwareSensorService : Service() {
     private fun rejectForegroundStart(error: Exception) {
         foregroundStartFailed = true
         Log.w(TAG, "Sensor foreground start unavailable", error)
-        val owner = ResearchPersistenceGate.captureOwner(applicationContext)
+        val owner = if (directBootMode) null else ResearchPersistenceGate.captureOwner(applicationContext)
         ResearchPersistenceGate.executeAsync {
             com.openlattice.chronicle.services.upload.recordForExpectedOwner(applicationContext, owner,
                 com.openlattice.chronicle.services.upload.LocalUploadModuleFamily.SENSOR,
@@ -340,11 +340,7 @@ class HardwareSensorService : Service() {
 
     private fun registerLifecycleReceiver() {
         if (lifecycleReceiverRegistered) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(lifecycleReceiver, deviceLifecycleIntentFilter(), RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(lifecycleReceiver, deviceLifecycleIntentFilter())
-        }
+        registerSystemBroadcastReceiver(this, lifecycleReceiver, deviceLifecycleIntentFilter())
         lifecycleReceiverRegistered = true
         Log.i(TAG, "Device lifecycle receiver registered")
     }
@@ -356,12 +352,7 @@ class HardwareSensorService : Service() {
             }
         }
         unlockReceiver = receiver
-        // ACTION_USER_UNLOCKED is a protected system broadcast; NOT_EXPORTED still receives it.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, IntentFilter(Intent.ACTION_USER_UNLOCKED), RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(receiver, IntentFilter(Intent.ACTION_USER_UNLOCKED))
-        }
+        registerSystemBroadcastReceiver(this, receiver, IntentFilter(Intent.ACTION_USER_UNLOCKED))
     }
 
     /**
@@ -394,7 +385,7 @@ class HardwareSensorService : Service() {
             if (::controller.isInitialized) controller.stop(isServiceDestroy = true, retainedOrigin = { entry ->
                 val type = AndroidSensorType.valueOf(entry.sensorType)
                 ResearchPersistenceGate.guardForRetainedRegistration(applicationContext, SensorCollectionModules.moduleFor(type),
-                    directBootConsentStamps[type]).takeIf { directBootConsentStamps[type] != null }
+                    directBootConsentStamps[type], directBootSettingsVersion).takeIf { directBootConsentStamps[type] != null }
                     ?: ResearchPersistenceGate.guardForLegacyRetainedRegistration(applicationContext, SensorCollectionModules.moduleFor(type),
                         directBootLegacyOwner, directBootWrittenAt)
             })
@@ -446,7 +437,8 @@ class HardwareSensorService : Service() {
                 }
 
                 override fun onCapturedSample(sensorType: AndroidSensorType, values: FloatArray, accuracy: Int?,
-                                              timestamp: OffsetDateTime, origin: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard) {
+                                              timestamp: OffsetDateTime,
+                                                  origin: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard) {
                     built.recordSample(sensorType, values, accuracy, timestamp, origin)
                 }
 
@@ -502,12 +494,14 @@ class HardwareSensorService : Service() {
     private var directBootConsentStamps: Map<AndroidSensorType, String?> = emptyMap()
     private var directBootLegacyOwner: String? = null
     private var directBootWrittenAt: Long? = null
+    private var directBootSettingsVersion: Int? = null
 
     private fun buildDirectBootController(appContext: Context): SensorRuntimeController {
         val snapshot = DirectBootSensorSnapshot(appContext)
-        val collectable = snapshot.collectableSensors()
+        val collectable = DistributionRestrictedRuntime.directBootCollectableSensors(appContext)
         directBootConsentStamps = collectable.associateWith(snapshot::consentStamp)
         directBootWrittenAt = snapshot.writtenAt()
+        directBootSettingsVersion = snapshot.settingsVersion()
         directBootLegacyOwner = DirectBootDiagnosticsJournal(appContext).currentOwner()?.let {
             "${it.epoch}:${it.study}:${it.participant}:${it.device}"
         }
@@ -561,10 +555,8 @@ class HardwareSensorService : Service() {
     // Unlike CollectionGate.collects, a read failure throws so executeStartup retries instead of
     // treating a transient storage error as "no sensor enabled" and stopping the service.
     private fun anySensorCollects(context: Context): Boolean =
-        SensorCollectionModules.sensorModuleIds.any {
-            com.openlattice.chronicle.collection.state.CollectionLoopStore.of(context).collects(it) &&
-                com.openlattice.chronicle.collection.state.StorageAdmission.allowed(context)
-        }
+        com.openlattice.chronicle.collection.state.CollectionLoopCoordinator(context).anySensorCollects() &&
+            com.openlattice.chronicle.collection.state.StorageAdmission.allowed(context)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (foregroundStartFailed) {
@@ -642,7 +634,7 @@ class HardwareSensorService : Service() {
         }
     }
 
-    private fun startForegroundNotification() {
+    private fun startForegroundNotification(): Boolean {
         val channelId = ensureSilentSensorChannel()
 
         // Tapping the foreground notification opens the live app on the Data Sharing tab —
@@ -657,7 +649,7 @@ class HardwareSensorService : Service() {
         val notification = NotificationCompat.Builder(applicationContext, channelId)
             .setContentTitle(getString(R.string.sensor_notification_title))
             .setContentText(getString(R.string.sensor_notification_message))
-            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setSilent(true)
             .setSmallIcon(R.drawable.ic_stat_notification)
@@ -666,13 +658,13 @@ class HardwareSensorService : Service() {
             .build()
 
         val notificationId = applicationContext.resources.getInteger(R.integer.sensor_service_notification_id)
-        startForeground(notificationId, notification)
+        return promoteForegroundServiceIfPermitted(this, notificationId, notification)
     }
 
     /**
-     * A dedicated MIN-importance channel for the sensor foreground-service notification, so turning a
+     * A dedicated LOW-importance channel for the sensor foreground-service notification, so turning a
      * sensor on never produces an alert. A foreground service must keep a persistent notification;
-     * MIN importance + silent makes it a quiet, collapsed status entry rather than the heads-up alert
+     * LOW importance + silent makes it a quiet, collapsed status entry rather than the heads-up alert
      * the shared (HIGH-importance) Chronicle channel produced.
      */
     private fun ensureSilentSensorChannel(): String {
@@ -680,7 +672,7 @@ class HardwareSensorService : Service() {
             val channel = NotificationChannel(
                 SENSOR_SERVICE_CHANNEL_ID,
                 getString(R.string.sensor_notification_title),
-                NotificationManager.IMPORTANCE_MIN,
+                NotificationManager.IMPORTANCE_LOW,
             ).apply {
                 setShowBadge(false)
                 enableVibration(false)

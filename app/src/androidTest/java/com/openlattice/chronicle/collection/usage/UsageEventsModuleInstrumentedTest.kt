@@ -84,7 +84,7 @@ class UsageEventsModuleInstrumentedTest {
         )
         val sink = UsageEventSink(db.queueEntryData(), NoOpCollectionLog)
 
-        val outcome = module.pollWindow(TreeMap(), CollectionWindow(0L, current))
+        val outcome = requireNotNull(module.pollWindow(TreeMap(), CollectionWindow(0L, current)))
         val entries = buildUsageQueueEntries(outcome.events, System.currentTimeMillis()) { System.nanoTime() }
         UsageModulePersistence.persist(
             entries = entries,
@@ -120,7 +120,7 @@ class UsageEventsModuleInstrumentedTest {
         )
         val sink = UsageEventSink(db.queueEntryData(), NoOpCollectionLog)
 
-        val outcome = module.pollWindow(TreeMap(), CollectionWindow(0L, current))
+        val outcome = requireNotNull(module.pollWindow(TreeMap(), CollectionWindow(0L, current)))
         UsageModulePersistence.persist(
             entries = buildUsageQueueEntries(outcome.events, System.currentTimeMillis()) { System.nanoTime() },
             currentPollTimestamp = current,

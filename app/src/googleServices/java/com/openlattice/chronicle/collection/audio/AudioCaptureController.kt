@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.audio
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import com.openlattice.chronicle.utils.registerSystemBroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioDeviceCallback
@@ -100,19 +101,13 @@ class AudioCaptureController(private val context: Context) {
                 }
             }
             val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-            // targetSdk 34+ requires an export flag on context-registered receivers; this is a
-            // receive-only system broadcast, so it is NOT exported.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, noisyFilter, null, h, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                context.registerReceiver(receiver, noisyFilter, null, h)
-            }
+            registerSystemBroadcastReceiver(context, receiver, noisyFilter, h)
             becomingNoisyReceiver = receiver
 
             val listener = MediaSessionManager.OnActiveSessionsChangedListener {
                 enqueueCapture(AudioEventType.MEDIA_SESSION_CHANGE)
             }
-            runCatching {
+            if (com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess(context)) runCatching {
                 mediaSessionManager.addOnActiveSessionsChangedListener(listener, listenerComponent, h)
                 sessionsListener = listener
             }.onFailure {
@@ -264,6 +259,7 @@ class AudioCaptureController(private val context: Context) {
 
     /** The first playing active session, else the first session, else null (or no notification grant). */
     private fun activeController(): MediaController? {
+        if (!com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess(context)) return null
         val sessions = runCatching { mediaSessionManager.getActiveSessions(listenerComponent) }.getOrNull()
             ?: return null
         return sessions.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }

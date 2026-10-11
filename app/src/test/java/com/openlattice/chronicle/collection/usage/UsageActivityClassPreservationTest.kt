@@ -32,7 +32,7 @@ class UsageActivityClassPreservationTest {
         )
 
         // 1. Poll through the module.
-        val outcome = module.pollWindow(TreeMap(), CollectionWindow(0L, 8_000L))
+        val outcome = requireNotNull(module.pollWindow(TreeMap(), CollectionWindow(0L, 8_000L)))
         val polled = outcome.events.single() as ExtractedUsageEvent
         assertEquals("com.example.DeepActivity", polled.activityClass)
 
@@ -56,7 +56,7 @@ class UsageActivityClassPreservationTest {
             log = NoOpCollectionLog,
         )
 
-        val outcome = module.pollWindow(TreeMap(), CollectionWindow(0L, 8_000L))
+        val outcome = requireNotNull(module.pollWindow(TreeMap(), CollectionWindow(0L, 8_000L)))
         val entries = buildUsageQueueEntries(outcome.events, firstWriteTimestamp = 100L) { 1L }
         val restored: List<ChronicleSample> = JsonSerializer.deserializeQueueEntry(entries.single().data)
 

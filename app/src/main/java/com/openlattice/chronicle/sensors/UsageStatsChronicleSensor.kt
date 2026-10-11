@@ -1,6 +1,5 @@
 package com.openlattice.chronicle.sensors
 
-import android.app.usage.UsageStatsManager
 import android.app.usage.UsageStatsManager.INTERVAL_BEST
 import android.content.Context
 import android.os.Build
@@ -10,15 +9,13 @@ import com.openlattice.chronicle.android.ChronicleData
 import com.openlattice.chronicle.models.ExtractUsageStat
 import com.openlattice.chronicle.utils.Utils.getAppFullName
 import com.openlattice.chronicle.utils.Utils.offsetDateTimeFromEpochMillis
+import com.openlattice.chronicle.utils.UsageAccess
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.NavigableMap
 
 
 class UsageStatsChronicleSensor(val context: Context) : ChronicleSensor {
-    @RequiresApi(Build.VERSION_CODES.LOLLIPOP_MR1)
-    private val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-
     @RequiresApi(Build.VERSION_CODES.LOLLIPOP_MR1)
     @Synchronized
     override fun poll(currentPollTimestamp:Long, users:NavigableMap<Long,String>): ChronicleData {
@@ -28,11 +25,12 @@ class UsageStatsChronicleSensor(val context: Context) : ChronicleSensor {
             .toInstant()
             .toEpochMilli()
 
-        val usageStats = usageStatsManager.queryUsageStats(
+        val usageStats = UsageAccess.queryUsageStats(
+            context,
             INTERVAL_BEST,
             startOfTodayMillis,
             System.currentTimeMillis()
-        )
+        ) ?: return ChronicleData(emptyList())
 
         Log.i(javaClass.name, "Collected ${usageStats.size} stats.")
 
@@ -65,4 +63,3 @@ class UsageStatsChronicleSensor(val context: Context) : ChronicleSensor {
                 })
     }
 }
-

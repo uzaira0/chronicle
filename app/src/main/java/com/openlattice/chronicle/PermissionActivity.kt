@@ -1,6 +1,5 @@
 package com.openlattice.chronicle
 
-import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,11 +7,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import com.openlattice.chronicle.utils.UsageAccess
 
 class PermissionActivity : AppCompatActivity() {
 
@@ -34,7 +33,6 @@ class PermissionActivity : AppCompatActivity() {
 
     private fun handleGetUsageAccessSettings() {
         getUsageAccessSettings()
-        waitOnUsageSettingPermission()
     }
 
     private fun getUsageAccessSettings() {
@@ -47,18 +45,12 @@ class PermissionActivity : AppCompatActivity() {
         }
     }
 
-    private fun waitOnUsageSettingPermission() {
-        val packageManager = applicationContext.packageManager
-        val applicationInfo = packageManager.getApplicationInfo(applicationContext.packageName, 0)
-        val appOpsManager = applicationContext.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        appOpsManager.startWatchingMode(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                applicationInfo.packageName,
-                { op, packageName ->
-                    Log.i(packageName, "Usage stats settings changed detected launching main class")
-                    doMainActivity(applicationContext, intent)
-                    finish()
-                })
+    override fun onResume() {
+        super.onResume()
+        if (!isFinishing && hasUsageSettingPermission(this)) {
+            doMainActivity(this, intent)
+            finish()
+        }
     }
 }
 
@@ -73,15 +65,7 @@ fun doMainActivity(context: Context, intent: Intent) {
 }
 
 fun hasUsageSettingPermission(context: Context): Boolean {
-    return try {
-        val packageManager = context.packageManager
-        val applicationInfo = packageManager.getApplicationInfo(context.packageName, 0)
-        val appOpsManager = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = appOpsManager.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, applicationInfo.uid, applicationInfo.packageName)
-        mode == AppOpsManager.MODE_ALLOWED
-    } catch (e: PackageManager.NameNotFoundException) {
-        false
-    }
+    return UsageAccess.isGranted(context)
 }
 
 

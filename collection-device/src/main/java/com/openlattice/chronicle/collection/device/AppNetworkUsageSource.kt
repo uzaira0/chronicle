@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection.device
 
-import android.app.AppOpsManager
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
+import com.openlattice.chronicle.utils.UsageAccess
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
 import android.content.Context
@@ -61,7 +62,7 @@ public class AndroidAppNetworkUsageSource(
                     source.pendingEndMillis = null
                     source.pendingEnrollment = null
                 } }
-                check(prefs.edit().clear().putLong(KEY_RESET_AT, System.currentTimeMillis()).commit()) {
+                checkLocalStoreWrite(prefs.edit().clear().putLong(KEY_RESET_AT, System.currentTimeMillis()).commit()) {
                     "app network checkpoint erasure failed"
                 }
             }
@@ -77,10 +78,11 @@ public class AndroidAppNetworkUsageSource(
 
     private fun enrollment(): Pair<String, Long> {
         val server = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
-            ?: throw IllegalStateException("app network enrollment unavailable")
+            ?: error("app network enrollment unavailable")
         val start = OffsetDateTime.parse(server.createdAt).toInstant().toEpochMilli()
         val consent = consentEpoch()
-        return (consent?.first ?: "${server.id}:${server.createdAt}:${server.studyId}:${server.participantId}:${server.sourceDeviceId}") to maxOf(start, consent?.second ?: 0)
+        return (consent?.first ?: "${server.id}:${server.createdAt}:${server.studyId}:${server.participantId}:${server.sourceDeviceId}") to maxOf(
+            start, consent?.second ?: 0)
     }
 
     private fun adoptLegacyScope(scope: String) {
@@ -91,7 +93,7 @@ public class AndroidAppNetworkUsageSource(
         val recorded = prefs.getString(KEY_ENROLLMENT, null)
         if (initial && (recorded == legacy || (recorded == null && prefs.contains(KEY_LAST_END)))) {
             // Preserve both successful and unacknowledged endpoints for this immutable owner.
-            check(prefs.edit().putString(KEY_ENROLLMENT, scope).commit()) {
+            checkLocalStoreWrite(prefs.edit().putString(KEY_ENROLLMENT, scope).commit()) {
                 "app network enrollment checkpoint commit failed"
             }
         }
@@ -100,7 +102,7 @@ public class AndroidAppNetworkUsageSource(
     @Suppress("DEPRECATION") // ConnectivityManager.TYPE_* are the args NetworkStatsManager.querySummary takes.
     @Synchronized
     override fun read(): List<AppNetworkUsageReading> {
-        if (!usageAccessGranted()) {
+        if (!UsageAccess.isGranted(appContext)) {
             // Without Usage Access the summary holds only this app's own traffic. Acknowledging it
             // would move the checkpoint past other apps' usage that Android still holds.
             pendingEndMillis = null
@@ -110,7 +112,7 @@ public class AndroidAppNetworkUsageSource(
         val (scope, enrollmentStart) = enrollment()
         adoptLegacyScope(scope)
         if (prefs.getString(KEY_ENROLLMENT, null) != scope) {
-            check(prefs.edit().remove(KEY_LAST_END).remove(KEY_PENDING_END).putString(KEY_ENROLLMENT, scope).commit()) {
+            checkLocalStoreWrite(prefs.edit().remove(KEY_LAST_END).remove(KEY_PENDING_END).putString(KEY_ENROLLMENT, scope).commit()) {
                 "app network enrollment checkpoint commit failed"
             }
             pendingEndMillis = null
@@ -119,20 +121,18 @@ public class AndroidAppNetworkUsageSource(
         val resetAt = prefs.getLong(KEY_RESET_AT, -1L)
         if (consentEpoch() == null && resetAt >= enrollmentStart && !prefs.contains(KEY_LAST_END)) {
             val baseline = maxOf(System.currentTimeMillis(), enrollmentStart)
-            check(prefs.edit().putLong(KEY_LAST_END, baseline).remove(KEY_PENDING_END).commit())
+            checkLocalStoreWrite(prefs.edit().putLong(KEY_LAST_END, baseline).remove(KEY_PENDING_END).commit())
             pendingEndMillis = null
             pendingEnrollment = null
             return emptyList()
         }
         val floor = maxOf(enrollmentStart, resetAt)
         val nsm = appContext.getSystemService(Context.NETWORK_STATS_SERVICE) as? NetworkStatsManager
-            ?: throw IllegalStateException("NetworkStatsManager unavailable")
+            ?: error("NetworkStatsManager unavailable")
 
         val persistedPendingEnd = prefs.getLong(KEY_PENDING_END, -1L).takeIf { it >= 0L }
         val now = pendingEndMillis ?: persistedPendingEnd ?: maxOf(System.currentTimeMillis(), floor).also { candidate ->
-            if (!prefs.edit().putLong(KEY_PENDING_END, candidate).commit()) {
-                throw IllegalStateException("app network pending-window commit failed")
-            }
+            checkLocalStoreWrite(prefs.edit().putLong(KEY_PENDING_END, candidate).commit()) { "app network pending-window commit failed" }
             pendingEndMillis = candidate
         }
         pendingEndMillis = now
@@ -157,9 +157,8 @@ public class AndroidAppNetworkUsageSource(
             pendingEnrollment = null
             return
         }
-        if (!prefs.edit().putLong(KEY_LAST_END, end).remove(KEY_PENDING_END).commit()) {
-            throw IllegalStateException("app network checkpoint commit failed")
-        }
+        checkLocalStoreWrite(prefs.edit().putLong(KEY_LAST_END, maxOf(end, prefs.getLong(KEY_LAST_END, end))).remove(KEY_PENDING_END).commit()) {
+            "app network checkpoint commit failed" }
         pendingEndMillis = null
         pendingEnrollment = null
     }
@@ -168,14 +167,6 @@ public class AndroidAppNetworkUsageSource(
     override fun rejectRead() {
         // Keep the exact pending endpoint, including across process death, so a retry reads the
         // identical window and produces the same deterministic sample ids.
-    }
-
-    @Suppress("DEPRECATION") // unsafeCheckOpNoThrow is API 29+; minSdk is 26.
-    private fun usageAccessGranted(): Boolean {
-        val appOps = appContext.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
-        return appOps.checkOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS, appContext.applicationInfo.uid, appContext.packageName,
-        ) == AppOpsManager.MODE_ALLOWED
     }
 
     private fun querySummary(
@@ -188,7 +179,7 @@ public class AndroidAppNetworkUsageSource(
         val rxByUid = HashMap<Int, Long>()
         val txByUid = HashMap<Int, Long>()
         val stats: NetworkStats = nsm.querySummary(networkType, null, start, end)
-            ?: throw IllegalStateException("querySummary($usageType) returned null")
+            ?: error("querySummary($usageType) returned null")
         stats.use { s ->
             val bucket = NetworkStats.Bucket()
             while (s.hasNextBucket()) {

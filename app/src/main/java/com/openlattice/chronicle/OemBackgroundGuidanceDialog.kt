@@ -19,7 +19,7 @@ class OemBackgroundGuidanceDialog : DialogFragment() {
                 "oppo" -> R.string.oem_background_vendor_oppo
                 "vivo" -> R.string.oem_background_vendor_vivo
                 "samsung" -> R.string.oem_background_vendor_samsung
-                else -> throw IllegalStateException("Unsupported manufacturer")
+                else -> error("Unsupported manufacturer")
             }
             AlertDialog.Builder(context)
                 .setTitle(R.string.oem_background_guidance_title)
@@ -40,6 +40,6 @@ class OemBackgroundGuidanceDialog : DialogFragment() {
                     dialog.cancel()
                 }
                 .create()
-        } ?: throw IllegalStateException("Activity cannot be null")
+        } ?: error("Activity cannot be null")
     }
 }

@@ -9,7 +9,6 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
@@ -25,6 +24,7 @@ import com.openlattice.chronicle.services.notifications.ReminderLinkActivity
 import com.openlattice.chronicle.services.notifications.SURVEY_ENROLLMENT_SCOPE
 import com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_ACTION
 import com.openlattice.chronicle.services.notifications.armReminder
+import com.openlattice.chronicle.services.notifications.postNotificationIfPermitted
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 
 class SurveyNotificationsReceiver : BroadcastReceiver() {
@@ -123,14 +123,8 @@ class SurveyNotificationsReceiver : BroadcastReceiver() {
                 RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             builder.setSound(notificationSound)
 
-            // POST_NOTIFICATIONS (API 33+) is a runtime permission the user may have denied; NotificationManagerCompat.notify
-            // then throws SecurityException. Handle it explicitly (same contract as CollectionLoopCoordinator.notifySafely):
-            // the deep-link survey reminder is best-effort, so a denied permission is logged and swallowed, never crashes the receiver.
-            try {
-                NotificationManagerCompat.from(context).notify(com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_TAG, notification.requestCode(), builder.build())
-            } catch (e: SecurityException) {
-                Log.w(javaClass.name, "Survey notification suppressed (POST_NOTIFICATIONS not granted)", e)
-            }
+            postNotificationIfPermitted(context, notification.requestCode(), builder.build(),
+                com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_TAG)
         }
     }
 }

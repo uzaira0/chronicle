@@ -1,174 +1,202 @@
 package com.openlattice.chronicle.services.notifications
 
+import android.Manifest
+import android.app.Application
+import android.app.Notification
+import android.app.NotificationManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Looper
+import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.R
+import com.openlattice.chronicle.audit.AuditStores
+import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.identification.TargetUserRouter
+import com.openlattice.chronicle.collection.identification.UserIdentificationModuleHolder
+import com.openlattice.chronicle.collection.state.MinimalPlayArtifactState
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.onPersistenceWorker
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
+import com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver
+import com.openlattice.chronicle.receivers.lifecycle.NotificationDismissedReceiver
+import com.openlattice.chronicle.receivers.lifecycle.UnlockDeviceReceiver
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.utils.Utils
+import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
-import java.io.File
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.android.controller.ServiceController
+import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
+import org.robolectric.util.ReflectionHelpers
+import java.time.Duration
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
 
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [34])
 class DeviceUnlockMonitoringServiceContractTest {
+    private val app = ApplicationProvider.getApplicationContext<Application>()
+    private val manager = app.getSystemService(NotificationManager::class.java)
+    private val previousUser = "previous-user"
 
-    @Test
-    fun `foreground notification creates and uses the canonical channel`() {
-        val source = serviceSource()
-        assertTrue(source.contains("createNotificationChannel(applicationContext)"))
-        assertTrue(source.contains("NotificationCompat.Builder(applicationContext, UNLOCK_MONITORING_CHANNEL_ID)"))
-        assertFalse(source.contains("val channelId = getString(R.string.channel_name)"))
+    @Before fun setUp() = onPersistenceWorker {
+        AuditStores.install(app, enrolled = true)
+        MinimalPlayArtifactState.markBoundaryApplied(app)
+        MinimalPlayArtifactState.markPolicyCompatible(app)
+        ResearchPersistenceGate.resetAfterLocalStoreRecovery()
+        ResearchPersistenceGate.initialize(app)
+        Utils.createNotificationChannel(app)
+        assertTrue(TargetUserRouter.setTargetUser(app, previousUser) is ModuleResult.Ok)
+        ShadowSystemClock.advanceBy(Duration.ofMillis(1))
+    }
+
+    @After fun tearDown() = onPersistenceWorker {
+        ReflectionHelpers.setStaticField(UserIdentificationModuleHolder::class.java, "instance", null)
+        ChronicleDb.getInstance(app).close()
+        ReflectionHelpers.setStaticField(ChronicleDb::class.java, "INSTANCE", null)
+        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
+            .set(EncryptedPrefsHelper, null)
+        ResearchPersistenceGate.resetAfterLocalStoreRecovery()
     }
 
     @Test
-    fun rebootIdentificationBroadcastHasTheCorrectActionAndExplicitPackage() {
-        val source = serviceSource()
-
-        assertTrue(
-            source.contains(
-                "Intent(applicationContext.getString(R.string.action_identify_after_reboot))",
-            ),
-        )
-        assertTrue(source.contains(".setPackage(applicationContext.packageName)"))
-        assertFalse(source.contains("intent.action ="))
-    }
-
-    @Test
-    fun dynamicallyRegisteredInternalReceiversAreNotExported() {
-        val source = serviceSource()
-
-        assertTrue(source.contains("ContextCompat.RECEIVER_NOT_EXPORTED"))
-        assertFalse(source.contains("registerReceiver(unlockDeviceReceiver, intentFilter, RECEIVER_EXPORTED)"))
-        assertFalse(source.contains("notificationDismissedReceiver,\n                intentFilter,\n                RECEIVER_EXPORTED"))
+    fun foregroundNotificationCreatesAndUsesTheCanonicalSilentChannel() {
+        manager.deleteNotificationChannel(UNLOCK_MONITORING_CHANNEL_ID)
+        val controller = Robolectric.buildService(DeviceUnlockMonitoringService::class.java).create()
+        try {
+            val notification = requireNotNull(shadowOf(controller.get()).lastForegroundNotification)
+            assertEquals(UNLOCK_MONITORING_CHANNEL_ID, notification.channelId)
+            assertEquals(NotificationManager.IMPORTANCE_LOW, manager.getNotificationChannel(notification.channelId).importance)
+            assertEquals(app.getString(R.string.interactivity_monitoring_notification_title),
+                notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+            assertTrue(notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
+        } finally { controller.destroy() }
     }
 
     @Test
     fun manifestUnlockReceiverIsNotExported() {
-        val manifest = moduleFile("src/main/AndroidManifest.xml").readText()
-        val receiver = manifest.substringAfter("android:name=\".receivers.lifecycle.UnlockDeviceReceiver\"")
-            .substringBefore("</receiver>")
-
-        assertTrue(receiver.contains("android:exported=\"false\""))
+        val receiver = app.packageManager.getReceiverInfo(ComponentName(app, UnlockDeviceReceiver::class.java),
+            PackageManager.ComponentInfoFlags.of(0))
+        assertFalse(receiver.exported)
     }
 
     @Test
-    fun receiversAndRebootPromptWaitForActiveAuthorizedStudyScope() {
-        val source = serviceSource()
-        val startEntry = source.substringAfter("fun startAuthorizedService(context: Context")
-            .substringBefore("fun stopService")
-        val serviceStart = source.substringAfter("override fun onStartCommand")
-            .substringBefore("private fun startForeground")
-
-        assertTrue(startEntry.contains("ContextCompat.startForegroundService(appContext, intent)"))
-        assertFalse(startEntry.contains("AUTHORIZATION_EXECUTOR.execute"))
-        assertTrue(serviceStart.contains("userIdentificationMayRun(applicationContext)"))
-        assertTrue(serviceStart.indexOf("if (!authorized)") < serviceStart.indexOf("registerReceivers()"))
-        assertTrue(
-            serviceStart.indexOf("if (!authorized)") <
-                serviceStart.indexOf("action_identify_after_reboot"),
-        )
-        assertTrue(source.contains("ResearchPersistenceGate.isActiveEnrollment"))
-        assertTrue(source.contains("hasNotificationPermission(context.applicationContext, IDENTIFY_USER_CHANNEL_ID)"))
-        assertTrue(source.contains("CollectionGate.collects("))
-        assertTrue(source.contains("CollectionModuleId.USER_IDENTIFICATION"))
-        assertTrue(source.contains("isUserIdentificationEnabled()"))
-        assertTrue(source.contains("if (receiversRegistered)"))
-
-        val receiver = moduleFile(
-            "src/main/java/com/openlattice/chronicle/receivers/lifecycle/UnlockDeviceReceiver.kt",
-        ).readText()
-        assertTrue(receiver.contains("DeviceUnlockMonitoringService.stopService(context)"))
+    fun rebootIdentificationBroadcastHasTheCorrectActionAndExplicitPackage() {
+        val controller = startForReboot()
+        try {
+            val action = app.getString(R.string.action_identify_after_reboot)
+            val broadcast = shadowOf(app).broadcastIntents.single { it.action == action }
+            assertEquals(app.packageName, broadcast.`package`)
+            assertEquals(4, monitoringReceivers().size)
+        } finally { controller.destroy() }
+        assertTrue(monitoringReceivers().isEmpty())
     }
 
     @Test
-    fun notificationGateIncludesRuntimeAppAndChannelDeliveryState() {
-        val source = moduleFile(
-            "src/main/kotlin/com/openlattice/chronicle/services/notifications/" +
-                "NotificationPermissionActivity.kt",
-        ).readText()
-
-        assertTrue(source.contains("POST_NOTIFICATIONS"))
-        assertTrue(source.contains("areNotificationsEnabled()"))
-        assertTrue(source.contains("getNotificationChannel(channelId)"))
-        assertTrue(source.contains("NotificationManager.IMPORTANCE_NONE"))
-        assertTrue(source.contains("!hasPostNotificationsRuntimePermission(this)"))
-
-        val main = moduleFile(
-            "src/main/java/com/openlattice/chronicle/MainActivity.kt",
-        ).readText()
-        assertTrue(main.contains("hasPostNotificationsRuntimePermission(this)"))
+    fun receiversAndRebootPromptWaitForAuthorization() {
+        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val controller = startForReboot()
+        try {
+            assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+            assertTrue(monitoringReceivers().isEmpty())
+            assertTrue(shadowOf(app).broadcastIntents.none { it.action == app.getString(R.string.action_identify_after_reboot) })
+        } finally { controller.destroy() }
     }
 
     @Test
-    fun identifyPromptAndSurveyReminderUseTheStandardTemplate() {
-        // Android 12+ wraps custom RemoteViews in its own header and clips them to ~48dp, which hid
-        // the prompt text on newer devices.
-        val unlock = moduleFile(RECEIVERS + "UnlockDeviceReceiver.kt").readText()
-        val survey = moduleFile(RECEIVERS + "SurveyNotificationsReceiver.kt").readText()
-        for (source in listOf(unlock, survey)) {
-            assertFalse(source.contains("RemoteViews("))
-            assertFalse(source.contains(".setCustomContentView("))
-            assertTrue(source.contains(".setContentTitle("))
-            assertTrue(source.contains("NotificationCompat.BigTextStyle()"))
-        }
-        assertTrue(unlock.contains("NotificationCompat.Builder(context, IDENTIFY_USER_CHANNEL_ID)"))
-        assertFalse(moduleFile("src/main/res/layout/notification.xml").exists())
+    fun identificationRequiresActiveEnrollmentLocalOptInAndNotificationDelivery() = onPersistenceWorker {
+        assertTrue(userIdentificationMayRun(app))
+        manager.deleteNotificationChannel(IDENTIFY_USER_CHANNEL_ID)
+        assertFalse(userIdentificationMayRun(app))
+        Utils.createNotificationChannel(app)
+        assertTrue(userIdentificationMayRun(app))
+        val prefs = EncryptedPrefsHelper.getEncryptedPrefs(app)
+        prefs.edit().putBoolean(app.getString(R.string.identify_user), false).commit()
+        assertFalse(userIdentificationMayRun(app))
+        prefs.edit().putBoolean(app.getString(R.string.identify_user), true).commit()
+        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertFalse(userIdentificationMayRun(app))
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        shadowOf(manager).setNotificationsEnabled(false)
+        assertFalse(userIdentificationMayRun(app))
+        shadowOf(manager).setNotificationsEnabled(true)
+        assertTrue(userIdentificationMayRun(app))
+        ResearchPersistenceGate.stop { prefs.edit().remove(PARTICIPANT_ID).commit() }
+        assertFalse(userIdentificationMayRun(app))
     }
 
     @Test
     fun postedIdentifyPromptResetsTheUserInEveryBuild() {
-        val unlock = moduleFile(RECEIVERS + "UnlockDeviceReceiver.kt").readText()
-        val receive = unlock.substringAfter("private fun handleReceive").substringBefore("private fun postIdentifyNotification")
-        val gateEnd = receive.indexOf("posted = postIdentifyNotification(context, intent)\n        }")
-        val reset = receive.indexOf("TargetUserRouter.setTargetUser(context, context.getString(R.string.user_unassigned))")
-        assertTrue(gateEnd >= 0)
-        assertTrue(reset > gateEnd) // outside persistIfActive: the router takes the same barrier
-        assertTrue(receive.substring(gateEnd, reset).contains("if (posted)"))
-
-        val post = unlock.substringAfter("private fun postIdentifyNotification")
-            .substringBefore("private fun createOnDismissedIntent")
-        assertTrue(post.contains("suppressed (POST_NOTIFICATIONS not granted)\", e)\n            return false"))
-        assertTrue(post.trimEnd().removeSuffix("}").trimEnd().endsWith("return true"))
-
-        // The notification-access listener no longer owns the reset, so Play builds get it too.
-        val listener = moduleFile(
-            "src/googleServices/java/com/openlattice/chronicle/services/notifications/NotificationListener.kt",
-        ).readText()
-        assertFalse(listener.contains("setTargetUser"))
+        receiveUnlock()
+        val notification = shadowOf(manager).allNotifications.single()
+        assertEquals(IDENTIFY_USER_CHANNEL_ID, notification.channelId)
+        assertEquals(app.getString(R.string.on_wake_notification_title),
+            notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals(app.getString(R.string.on_wake_notification_message),
+            notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString())
+        assertEquals(app.getString(R.string.user_unassigned), EnrollmentSettings(app).getCurrentUser())
     }
 
     @Test
-    fun identifyPromptsHaveTheirOwnChannelAndTheOngoingMonitorIsSilent() {
-        val utils = moduleFile("src/main/java/com/openlattice/chronicle/utils/Utils.kt").readText()
-            .replace(Regex("\\s+"), " ")
-        assertTrue(utils.contains("NotificationChannel( IDENTIFY_USER_CHANNEL_ID,"))
-        assertTrue(utils.contains("R.string.identify_user_channel_name), NotificationManager.IMPORTANCE_HIGH,"))
-        assertTrue(utils.contains("R.string.unlock_monitoring_channel_name), NotificationManager.IMPORTANCE_LOW,"))
-        assertTrue(utils.contains("createNotificationChannels(listOf(channel, identifyUser, unlockMonitoring))"))
-
-        val settings = moduleFile("src/main/java/com/openlattice/chronicle/ui/SettingsHomeFragment.kt").readText()
-        assertFalse(Regex("hasNotificationPermission\\((requireContext\\(\\)|appContext)\\)").containsMatchIn(settings))
-        assertTrue(settings.contains("hasNotificationPermission(appContext, IDENTIFY_USER_CHANNEL_ID)"))
+    fun suppressedIdentifyPromptKeepsThePreviousUser() {
+        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        receiveUnlock()
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+        assertEquals(previousUser, EnrollmentSettings(app).getCurrentUser())
     }
 
     @Test
     fun backgroundStickyRestartDefersInsteadOfCrashing() {
-        val onCreate = serviceSource().substringAfter("override fun onCreate()")
-            .substringBefore("override fun onStartCommand")
-        assertTrue(onCreate.indexOf("try {") < onCreate.indexOf("startForeground()"))
-        assertTrue(onCreate.contains("} catch (error: IllegalStateException) {"))
-        assertTrue(onCreate.contains("UnlockMonitoringRuntimeStatus.markDeferred(applicationContext, true)"))
-        assertTrue(onCreate.contains("stopSelf()"))
+        val controller = Robolectric.buildService(DeviceUnlockMonitoringService::class.java)
+        val service = controller.get()
+        shadowOf(service).setThrowInStartForeground(android.app.ForegroundServiceStartNotAllowedException("Test refusal"))
+        try {
+            controller.create()
+            assertTrue(UnlockMonitoringRuntimeStatus.isDeferred(app))
+            assertTrue(shadowOf(service).isStoppedBySelf)
+            assertTrue(monitoringReceivers().isEmpty())
+        } finally { controller.destroy() }
     }
 
-    private fun serviceSource(): String = moduleFile(
-        "src/main/java/com/openlattice/chronicle/services/notifications/DeviceUnlockMonitoringService.kt",
-    ).readText()
-
-    private companion object {
-        const val RECEIVERS = "src/main/java/com/openlattice/chronicle/receivers/lifecycle/"
+    private fun monitoringReceivers() = shadowOf(app).registeredReceivers.filter {
+        it.broadcastReceiver is UnlockDeviceReceiver ||
+            it.broadcastReceiver is NotificationDismissedReceiver ||
+            it.broadcastReceiver is DeviceLifecycleReceiver
     }
 
-    private fun moduleFile(relativePath: String): File {
-        val module = sequenceOf(File("."), File("app"))
-            .map(File::getAbsoluteFile)
-            .firstOrNull { File(it, "src/main/AndroidManifest.xml").isFile }
-            ?: error("Could not locate the app module")
-        return File(module, relativePath)
+    private fun receiveUnlock() = onPersistenceWorker {
+        ReflectionHelpers.callInstanceMethod<Unit>(UnlockDeviceReceiver(), "handleReceive",
+            ReflectionHelpers.ClassParameter.from(Context::class.java, app),
+            ReflectionHelpers.ClassParameter.from(Intent::class.java, Intent(Intent.ACTION_USER_PRESENT)))
+    }
+
+    private fun startForReboot(): ServiceController<DeviceUnlockMonitoringService> {
+        assertTrue(DeviceUnlockMonitoringService.startAuthorizedService(app, restartOnBoot = true))
+        val intent = requireNotNull(shadowOf(app).nextStartedService)
+        val controller = Robolectric.buildService(DeviceUnlockMonitoringService::class.java).create()
+        try {
+            controller.get().onStartCommand(intent, 0, 1)
+            ReflectionHelpers.getStaticField<ExecutorService>(DeviceUnlockMonitoringService::class.java, "AUTHORIZATION_EXECUTOR")
+                .submit {}.get(10, TimeUnit.SECONDS)
+            shadowOf(Looper.getMainLooper()).idle()
+            ReflectionHelpers.getStaticField<ExecutorService>(UnlockDeviceReceiver::class.java, "IO_EXECUTOR")
+                .submit {}.get(10, TimeUnit.SECONDS)
+            return controller
+        } catch (error: Throwable) {
+            controller.destroy()
+            throw error
+        }
     }
 }

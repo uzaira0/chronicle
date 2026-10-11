@@ -1,5 +1,7 @@
 package com.openlattice.chronicle.ui
 
+import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
+
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.capability.CapabilityEnvironment
 import com.openlattice.chronicle.collection.capability.DistributionChannel

@@ -18,7 +18,7 @@ import java.util.NavigableMap
  * poll to throw, to exercise the `UsageStatsManager`-failure path.
  */
 class FakeUsageEventPoller(
-    var nextResult: ChronicleData = ChronicleData(emptyList()),
+    var nextResult: ChronicleData? = ChronicleData(emptyList()),
     var failWith: Exception? = null,
 ) : UsageEventPoller {
 
@@ -35,7 +35,7 @@ class FakeUsageEventPoller(
         previousPollTimestamp: Long,
         currentPollTimestamp: Long,
         users: NavigableMap<Long, String>,
-    ): ChronicleData {
+    ): ChronicleData? {
         pollCount++
         lastPreviousPollTimestamp = previousPollTimestamp
         lastCurrentPollTimestamp = currentPollTimestamp

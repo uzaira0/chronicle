@@ -4,7 +4,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
-import android.text.TextUtils
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.accessibility.AccessibilityManager
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 
 /**
@@ -25,17 +26,13 @@ object InteractionAccessibilityOnboarding {
 
     /** True if the participant has enabled [InteractionCollectionService] in Accessibility settings. */
     fun isServiceEnabled(context: Context): Boolean {
-        val expected = ComponentName(context.packageName, InteractionCollectionService::class.java.name)
-            .flattenToString()
-        val enabled = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-        ) ?: return false
-        val splitter = TextUtils.SimpleStringSplitter(':').apply { setString(enabled) }
-        for (component in splitter) {
-            if (component.equals(expected, ignoreCase = true)) return true
+        val manager = context.getSystemService(AccessibilityManager::class.java) ?: return false
+        if (!manager.isEnabled) return false
+        val expected = ComponentName(context, InteractionCollectionService::class.java)
+        return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK).any {
+            val service = it.resolveInfo.serviceInfo
+            ComponentName(service.packageName, service.name) == expected
         }
-        return false
     }
 
     /** Opens the system Accessibility settings so the participant can enable the service. */

@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection.battery
 
 import android.content.Context
+import com.openlattice.chronicle.utils.registerSystemBroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
@@ -29,7 +30,7 @@ public class AndroidBatterySampleSource(
     private val batteryChangedFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
 
     override fun read(): BatteryReading? {
-        val intent: Intent = appContext.registerReceiver(null, batteryChangedFilter)
+        val intent: Intent = registerSystemBroadcastReceiver(appContext, null, batteryChangedFilter)
             ?: return null
 
         val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)

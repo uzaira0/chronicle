@@ -6,17 +6,21 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
-import com.openlattice.chronicle.collection.state.*
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.onPersistenceWorker
 import com.openlattice.chronicle.services.sensors.HardwareSensorService
 import com.openlattice.chronicle.storage.ChronicleDb
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
-import org.robolectric.annotation.*
-
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28],shadows=[ForegroundStartAuditTest.RestrictedForeground::class])
 class ForegroundStartAuditTest {
@@ -36,10 +40,14 @@ class ForegroundStartAuditTest {
             assertEquals(Service.START_NOT_STICKY,service.onStartCommand(null,0,1))
             val db=ChronicleDb.getInstance(context)
             repeat(100){
-                val count=db.openHelper.readableDatabase.query("SELECT count(*) FROM upload_diagnostics WHERE moduleFamily='SENSOR' AND issueCode='COLLECTION_ACCESS_MISSING'").use{it.moveToFirst();it.getInt(0)}
+                val count=db.openHelper.readableDatabase.query(
+                    "SELECT count(*) FROM upload_diagnostics WHERE moduleFamily='SENSOR' AND issueCode='COLLECTION_ACCESS_MISSING'").use{
+                    it.moveToFirst();it.getInt(0)}
                 if(count==0)Thread.sleep(20)
             }
-            db.openHelper.readableDatabase.query("SELECT count(*) FROM upload_diagnostics WHERE moduleFamily='SENSOR' AND issueCode='COLLECTION_ACCESS_MISSING'").use{it.moveToFirst();assertEquals(1,it.getInt(0))}
+            db.openHelper.readableDatabase.query(
+                "SELECT count(*) FROM upload_diagnostics WHERE moduleFamily='SENSOR' AND issueCode='COLLECTION_ACCESS_MISSING'").use{it.moveToFirst();
+                assertEquals(1,it.getInt(0))}
         } finally{controller.destroy()}
     }
 }

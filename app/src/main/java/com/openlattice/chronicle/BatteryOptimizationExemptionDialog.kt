@@ -2,6 +2,8 @@ package com.openlattice.chronicle
 
 import android.app.Dialog
 import android.content.Intent
+import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,15 +25,7 @@ class BatteryOptimizationExemptionDialog : DialogFragment() {
                     .setPositiveButton(R.string.settings
                     ) { dialog, _ ->
                         dialog.cancel()
-                        val intent = Intent().apply {
-                            if (BuildConfig.DIRECT_BATTERY_EXEMPTION_REQUEST) {
-                                action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-                                data = Uri.parse("package:" + requireContext().packageName)
-                            } else {
-                                action = Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
-                            }
-                        }
-                        DeviceSettingsNavigator.open(requireContext(), intent)
+                        DeviceSettingsNavigator.open(requireContext(), batteryOptimizationSettingsIntent(requireContext()))
                     }
                     .setNegativeButton(android.R.string.cancel
                     ) { dialog, _ ->
@@ -40,7 +34,15 @@ class BatteryOptimizationExemptionDialog : DialogFragment() {
                     }
 
             builder.create()
-        } ?: throw IllegalStateException("Activity cannot be null")
+        } ?: error("Activity cannot be null")
     }
 
+}
+
+internal fun batteryOptimizationSettingsIntent(context: Context): Intent {
+    if (hasIgnoreBatteryOptimization(context) || !BuildConfig.DIRECT_BATTERY_EXEMPTION_REQUEST ||
+        context.checkSelfPermission(android.Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS) !=
+        PackageManager.PERMISSION_GRANTED) return Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+    return Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+        .setData(Uri.parse("package:${context.packageName}"))
 }

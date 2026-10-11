@@ -10,7 +10,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.annotation.RequiresApi
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.NotificationManagerCompat
+import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -29,10 +29,9 @@ import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.services.sync.triggerImmediateChronicleSync
 import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
 import com.openlattice.chronicle.ui.OverviewFragment
-import com.openlattice.chronicle.ui.activeModuleAccessMissing
+import com.openlattice.chronicle.collection.capability.activeModuleAccessMissing
 import com.openlattice.chronicle.ui.DataSharingFragment
 import com.openlattice.chronicle.ui.SettingsHomeFragment
-import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 import com.openlattice.chronicle.ui.UploadsFragment
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
 import kotlinx.coroutines.CancellationException
@@ -219,7 +218,7 @@ class MainActivity : AppCompatActivity() {
     private fun isExemptFromAppHibernation(): Boolean =
         runCatching {
             packageManager.isAutoRevokeWhitelisted ||
-                NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+                hasNotificationListenerAccess(this)
         }.getOrDefault(true)
 
     /** Background data off, or Data Saver on without an exemption. Fails open, like the check above. */

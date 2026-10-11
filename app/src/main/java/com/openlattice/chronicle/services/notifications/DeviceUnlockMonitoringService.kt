@@ -1,16 +1,18 @@
 package com.openlattice.chronicle.services.notifications
 
-import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import com.openlattice.chronicle.utils.registerPrivateReceiver
+import com.openlattice.chronicle.utils.registerSystemBroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.openlattice.chronicle.services.startForegroundServiceIfPermitted
+import com.openlattice.chronicle.services.promoteForegroundServiceIfPermitted
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.receivers.lifecycle.NotificationDismissedReceiver
@@ -38,6 +40,7 @@ import java.util.concurrent.Executors
 class DeviceUnlockMonitoringService : Service() {
 
     private var unlockDeviceReceiver = UnlockDeviceReceiver()
+    private var identifyAfterRebootReceiver = UnlockDeviceReceiver()
     private var notificationDismissedReceiver = NotificationDismissedReceiver()
     private var lifecycleReceiver = DeviceLifecycleReceiver()
     private var receiversRegistered = false
@@ -57,15 +60,8 @@ class DeviceUnlockMonitoringService : Service() {
             val intent = Intent(appContext, DeviceUnlockMonitoringService::class.java).apply {
                 putExtra(RESTART_ON_BOOT_KEY, restartOnBoot)
             }
-            try {
-                ContextCompat.startForegroundService(appContext, intent)
-            } catch (error: IllegalStateException) {
+            if (!startForegroundServiceIfPermitted(appContext, intent)) {
                 UnlockMonitoringRuntimeStatus.markDeferred(appContext, true)
-                Log.w(javaClass.name, "Android deferred unlock monitoring until Chronicle is foreground", error)
-                return false
-            } catch (error: SecurityException) {
-                UnlockMonitoringRuntimeStatus.markDeferred(appContext, true)
-                Log.w(javaClass.name, "Android denied unlock-monitoring foreground service startup", error)
                 return false
             }
             UnlockMonitoringRuntimeStatus.markDeferred(appContext, false)
@@ -87,14 +83,12 @@ class DeviceUnlockMonitoringService : Service() {
         super.onCreate()
         // Android requires a service created via startForegroundService to promote promptly.
         // Receivers remain unregistered until the authoritative manifest is checked off-main.
-        // A START_STICKY restart after the process was killed happens in the background, where
-        // Android 12+ refuses foreground promotion. Record it as deferred (Settings shows the
+        // Promotion can still fail after a permission or service-state change. Record it as deferred (Settings shows the
         // "open Chronicle" hint and MainActivity restarts it) instead of crash-looping.
-        try {
-            startForeground()
-        } catch (error: IllegalStateException) {
+        if (!runCatching { startForeground() }.onFailure {
+                Log.w(javaClass.name, "Foreground notification creation failed", it)
+            }.getOrDefault(false)) {
             UnlockMonitoringRuntimeStatus.markDeferred(applicationContext, true)
-            Log.w(javaClass.name, "Android refused foreground promotion; unlock monitoring deferred", error)
             destroyed = true
             stopSelf()
             return
@@ -134,7 +128,7 @@ class DeviceUnlockMonitoringService : Service() {
         return START_STICKY
     }
 
-    private fun startForeground() {
+    private fun startForeground(): Boolean {
         // A startForegroundService call may arrive before any reminder worker or Activity has
         // created the shared channel (fresh install, boot, or minimal-boundary completion).
         // Create it synchronously before publishing the mandatory foreground notification.
@@ -159,12 +153,12 @@ class DeviceUnlockMonitoringService : Service() {
 
         val notificationId =
             applicationContext.resources.getInteger(R.integer.unlock_phone_monitoring_notification_id)
-        startForeground(notificationId, notification)
+        return promoteForegroundServiceIfPermitted(this, notificationId, notification)
     }
 
     private fun createReceiverIntentFilter(
         actions: Set<String>,
-        priority: Int = IntentFilter.SYSTEM_HIGH_PRIORITY
+        priority: Int = 0
     ): IntentFilter {
         return IntentFilter().also {
             it.priority = priority
@@ -174,42 +168,26 @@ class DeviceUnlockMonitoringService : Service() {
         }
     }
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerReceivers() {
 
-        var intentFilter =
-            createReceiverIntentFilter(
-                UnlockDeviceReceiver.getValidReceiverActions(
-                    applicationContext
-                )
-            )
-        ContextCompat.registerReceiver(
-            applicationContext,
-            unlockDeviceReceiver,
-            intentFilter,
-            ContextCompat.RECEIVER_NOT_EXPORTED,
+        val identifyAction = getString(R.string.action_identify_after_reboot)
+        var intentFilter = createReceiverIntentFilter(
+            UnlockDeviceReceiver.getValidReceiverActions(applicationContext) - identifyAction,
         )
+        // Partition system and app actions across distinct receivers: https://developer.android.com/develop/background-work/background-tasks/broadcasts#context-registered-receivers
+        registerSystemBroadcastReceiver(applicationContext, unlockDeviceReceiver, intentFilter)
+        registerPrivateReceiver(applicationContext, identifyAfterRebootReceiver, IntentFilter(identifyAction))
         Log.i(javaClass.name, "${UnlockDeviceReceiver::class.java.canonicalName} is registered")
 
         intentFilter = createReceiverIntentFilter(setOf(NOTIFICATION_DELETED_ACTION))
-        ContextCompat.registerReceiver(
-            applicationContext,
-            notificationDismissedReceiver,
-            intentFilter,
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
+        registerPrivateReceiver(applicationContext, notificationDismissedReceiver, intentFilter)
         Log.i(
             javaClass.name,
             "${NotificationDismissedReceiver::class.java.canonicalName} is registered"
         )
 
         intentFilter = deviceLifecycleIntentFilter()
-        intentFilter.priority = IntentFilter.SYSTEM_LOW_PRIORITY
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            applicationContext.registerReceiver(lifecycleReceiver, intentFilter, RECEIVER_NOT_EXPORTED)
-        } else {
-            applicationContext.registerReceiver(lifecycleReceiver, intentFilter)
-        }
+        registerSystemBroadcastReceiver(applicationContext, lifecycleReceiver, intentFilter)
         Log.i(javaClass.name, "${DeviceLifecycleReceiver::class.java.canonicalName} is registered")
     }
 
@@ -225,6 +203,7 @@ class DeviceUnlockMonitoringService : Service() {
         Log.i(javaClass.name, "unlock monitoring service stopped. Unregistering receivers")
         if (receiversRegistered) {
             applicationContext.unregisterReceiver(unlockDeviceReceiver)
+            applicationContext.unregisterReceiver(identifyAfterRebootReceiver)
             applicationContext.unregisterReceiver(notificationDismissedReceiver)
             try {
                 applicationContext.unregisterReceiver(lifecycleReceiver)

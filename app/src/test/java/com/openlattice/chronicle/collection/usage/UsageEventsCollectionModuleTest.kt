@@ -85,7 +85,7 @@ class UsageEventsCollectionModuleTest {
         val store = FakeUsagePollCheckpointStore()
         val m = module(poller, store)
 
-        val outcome = m.pollWindow(TreeMap(), window(end = 8_000L))
+        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
 
         assertTrue(outcome.events.isEmpty())
         assertEquals(8_000L, outcome.currentPollTimestamp)
@@ -98,11 +98,29 @@ class UsageEventsCollectionModuleTest {
     }
 
     @Test
+    fun unavailablePollIsSkippedAndKeepsCheckpointUntilAccessReturns() {
+        val poller = FakeUsageEventPoller(nextResult = null)
+        val store = FakeUsagePollCheckpointStore(storedTimestamp = 5_000L)
+        val m = module(poller, store)
+        assertNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
+        assertTrue(m.poll(com.openlattice.chronicle.collection.core.TestContexts.stub(), window(end = 8_000L)) is ModuleResult.Skipped)
+        assertEquals("SKIPPED", m.diagnostics().lastResult)
+        assertNull(m.diagnostics().lastError)
+        assertEquals(0, store.commitCount)
+        assertEquals(5_000L, store.storedTimestamp)
+        poller.nextResult = ChronicleData(emptyList())
+        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 9_000L)))
+        assertEquals(5_000L, outcome.previousPollTimestamp)
+        m.commitCheckpoint(outcome.currentPollTimestamp)
+        assertEquals(9_000L, store.storedTimestamp)
+    }
+
+    @Test
     fun activityClassIsPreservedThroughPollIntoExtractedUsageEvent() {
         val poller = FakeUsageEventPoller(nextResult = FakeUsageEventPoller.oneEvent("com.example.MainActivity"))
         val m = module(poller, FakeUsagePollCheckpointStore())
 
-        val outcome = m.pollWindow(TreeMap(), window(end = 8_000L))
+        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
 
         val event = outcome.events.single() as ExtractedUsageEvent
         assertEquals("com.example.MainActivity", event.activityClass)
@@ -113,7 +131,7 @@ class UsageEventsCollectionModuleTest {
         val poller = FakeUsageEventPoller(nextResult = FakeUsageEventPoller.oneEvent(null))
         val m = module(poller, FakeUsagePollCheckpointStore())
 
-        val outcome = m.pollWindow(TreeMap(), window(end = 8_000L))
+        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
 
         assertNull((outcome.events.single() as ExtractedUsageEvent).activityClass)
     }
@@ -125,7 +143,7 @@ class UsageEventsCollectionModuleTest {
         val clock = FixedCollectionClock(123_456L)
         val m = module(poller, store, clock = clock)
 
-        val outcome = m.pollWindow(TreeMap(), window(end = 8_000L))
+        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
         m.commitCheckpoint(outcome.currentPollTimestamp)
 
         val d = m.diagnostics()

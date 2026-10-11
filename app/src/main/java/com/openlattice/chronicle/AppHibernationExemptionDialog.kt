@@ -39,6 +39,6 @@ class AppHibernationExemptionDialog : DialogFragment() {
                     dialog.cancel()
                 }
                 .create()
-        } ?: throw IllegalStateException("Activity cannot be null")
+        } ?: error("Activity cannot be null")
     }
 }

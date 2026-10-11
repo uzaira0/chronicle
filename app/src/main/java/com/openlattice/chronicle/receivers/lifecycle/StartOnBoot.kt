@@ -93,8 +93,8 @@ class StartOnBoot : BroadcastReceiver() {
             if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
                 val sensorSettings = SensorSettings(context)
                 if (sensorSettings.isEnabled()) {
-                    DistributionRestrictedRuntime.startHardwareSensors(context)
-                    Log.i(TAG, "started sensor service at boot")
+                    val started = DistributionRestrictedRuntime.startHardwareSensors(context)
+                    Log.i(TAG, "sensor service start at boot: $started")
                 }
 
                 // Refresh research sensor settings from backend in background.

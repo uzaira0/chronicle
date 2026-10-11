@@ -48,7 +48,9 @@ public object HealthConnectPermissions {
         if (scopedReads.isEmpty()) return emptySet()
         return buildSet {
             addAll(scopedReads)
-            if (supportsBackgroundRead(context)) {
+            if (clientIfAvailable(context)?.let {
+                    isFeatureAvailable(it, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
+                } == true) {
                 add(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
             }
         }
@@ -75,26 +77,34 @@ public object HealthConnectPermissions {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
         HealthConnectClient.getSdkStatus(context.applicationContext) == HealthConnectClient.SDK_AVAILABLE
 
+    internal fun clientIfAvailable(context: Context): HealthConnectClient? {
+        if (!isAvailable(context)) return null
+        return runCatching { HealthConnectClient.getOrCreate(context.applicationContext) }
+            .onFailure { Log.w(TAG, "Health Connect client creation failed", it) }.getOrNull()
+    }
+
     /**
      * Whether every permission in the active study scope is already granted. Suspends under the hood (Health
      * Connect's permission query is coroutine-based); call OFF the main thread. Returns `false` if
      * Health Connect is unavailable or the query fails.
      */
     public fun allGranted(context: Context): Boolean {
-        if (!isAvailable(context)) return false
+        val client = clientIfAvailable(context) ?: return false
         val granted = runCatching {
-            grantedHealthConnectPermissions(HealthConnectClient.getOrCreate(context.applicationContext))
+            grantedHealthConnectPermissions(client)
         }.onFailure { Log.w(TAG, "Health Connect permission query failed: ${it.javaClass.simpleName}") }
             .getOrDefault(emptySet())
-        return granted.containsAll(permissionsToRequest(context))
+        val required = permissionsToRequest(context)
+        return required.isNotEmpty() && granted.containsAll(required)
     }
 
-    private fun supportsBackgroundRead(context: Context): Boolean {
-        if (!isAvailable(context)) return false
+    internal fun canReadInBackground(client: HealthConnectClient, granted: Set<String>): Boolean =
+        ModulePermissions.HEALTH_CONNECT_BACKGROUND_READ in granted &&
+            isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
+
+    internal fun isFeatureAvailable(client: HealthConnectClient, feature: Int): Boolean {
         return runCatching {
-            HealthConnectClient.getOrCreate(context.applicationContext).features.getFeatureStatus(
-                HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND,
-            ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+            client.features.getFeatureStatus(feature) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
         }.onFailure { Log.w(TAG, "Health Connect feature query failed: ${it.javaClass.simpleName}") }
             .getOrDefault(false)
     }

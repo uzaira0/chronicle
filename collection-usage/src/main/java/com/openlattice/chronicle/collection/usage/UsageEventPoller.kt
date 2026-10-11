@@ -30,12 +30,13 @@ public interface UsageEventPoller {
      *
      * Preserves verbatim: activity-class mapping (event `className` → `activityClass`),
      * event-type mapping, timezone mapping, app-label lookup, and `users` resolution.
+     * Returns null when access or the provider is unavailable; the checkpoint must be retained.
      */
     public fun poll(
         previousPollTimestamp: Long,
         currentPollTimestamp: Long,
         users: NavigableMap<Long, String>,
-    ): ChronicleData
+    ): ChronicleData?
 }
 
 /**
@@ -53,6 +54,6 @@ public class SystemUsageEventPoller(private val context: Context) : UsageEventPo
         previousPollTimestamp: Long,
         currentPollTimestamp: Long,
         users: NavigableMap<Long, String>,
-    ): ChronicleData =
+    ): ChronicleData? =
         UsageEventsChronicleSensor(context).poll(previousPollTimestamp, currentPollTimestamp, users)
 }
