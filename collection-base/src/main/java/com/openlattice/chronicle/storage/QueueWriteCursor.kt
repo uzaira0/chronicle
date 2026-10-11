@@ -20,10 +20,4 @@ fun monotonicQueueWriteTimestamp(wallClockMillis: Long, highWaterMark: Long?): L
  * uploaded. Reads two indexed MAX() queries; call it once per collection run, not per row.
  */
 fun ChronicleDb.nextQueueWriteTimestamp(wallClockMillis: Long = System.currentTimeMillis()): Long =
-    monotonicQueueWriteTimestamp(
-        wallClockMillis,
-        listOfNotNull(
-            queueEntryData().maxWriteTimestamp(),
-            uploadServerDao().maxUploadedQueueTimestamp(),
-        ).maxOrNull(),
-    )
+    queueEntryData().nextWriteTimestamp(wallClockMillis)

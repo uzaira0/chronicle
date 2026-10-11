@@ -8,6 +8,9 @@ import androidx.room.Query
 /** Room DAO for `app_network_usage_samples`. Duplicate ids de-duplicate (IGNORE). */
 @Dao
 interface AppNetworkUsageSampleDao {
+    @Query("SELECT * FROM app_network_usage_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<AppNetworkUsageSampleEntry>
+
     @Query("SELECT * FROM app_network_usage_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<AppNetworkUsageSampleEntry>
 

@@ -12,6 +12,9 @@ import androidx.room.Query
  */
 @Dao
 interface InteractionSampleDao {
+    @Query("SELECT * FROM interaction_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<InteractionSampleEntry>
+
     @Query("SELECT * FROM interaction_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<InteractionSampleEntry>
 

@@ -16,6 +16,9 @@ interface StorageQueue {
     @Query("SELECT * FROM dataQueue ORDER BY writeTimestamp ASC LIMIT :size")
     fun getNextEntries( size : Int ) : List<QueueEntry>
 
+    @Query("SELECT * FROM dataQueue WHERE (CAST(writeTimestamp AS TEXT) || ':' || CAST(id AS TEXT)) IN (:keys)")
+    fun getByKeys(keys: List<String>): List<QueueEntry>
+
     @Query("SELECT count(*) FROM dataQueue")
     fun getSize(): Int
 
@@ -34,11 +37,17 @@ interface StorageQueue {
     fun insertEntries(entries: List<QueueEntry>) {
         if (entries.isEmpty()) return
         val first = entries.minOf { it.writeTimestamp }
-        val highWater = listOfNotNull(maxWriteTimestamp(), maxUploadedTimestamp()).maxOrNull()
-        val cursor = monotonicQueueWriteTimestamp(first, highWater)
+        val cursor = nextWriteTimestamp(first)
         val shift = cursor - first
         insertAllocatedEntries(entries.map { QueueEntry(it.writeTimestamp + shift, it.id, it.data) })
     }
+
+    fun nextWriteTimestamp(wallClockMillis: Long): Long = monotonicQueueWriteTimestamp(
+        wallClockMillis, listOfNotNull(maxWriteTimestamp(), maxUploadedTimestamp()).maxOrNull(),
+    )
+
+    @Query("UPDATE dataQueue SET data = :data WHERE writeTimestamp = :writeTimestamp AND id = :id")
+    fun updateData(writeTimestamp: Long, id: Long, data: ByteArray)
 
     @Insert
     fun insertAllocatedEntries(entries: List<QueueEntry>)

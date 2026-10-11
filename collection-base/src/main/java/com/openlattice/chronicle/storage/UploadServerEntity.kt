@@ -6,7 +6,9 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 const val AUTH_MODE_DEVICE_ID = "deviceId"
-const val AUTH_MODE_API_KEY = "apiKey"
+// nosemgrep: chronicle-hardcoded-password-kotlin -- Persisted authentication mode discriminator names the API-key mode; it is not an API key.
+const val AUTH_MODE_API_KEY =
+    "apiKey"
 
 @Entity(
     tableName = "upload_servers",

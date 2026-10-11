@@ -37,13 +37,15 @@ class FakeStorageQueue : StorageQueue {
         for (entry in entries) {
             val key = entry.writeTimestamp to entry.id
             if (rows.containsKey(key)) {
-                throw IllegalStateException("duplicate primary key (writeTimestamp, id)=$key")
+                error("duplicate primary key (writeTimestamp, id)=$key")
             }
             rows[key] = entry
         }
     }
 
     override fun insertEntry(entry: QueueEntry) = insertEntries(listOf(entry))
+
+    override fun getByKeys(keys: List<String>): List<QueueEntry> = rows.values.filter { "${it.writeTimestamp}:${it.id}" in keys }
 
     override fun getNextEntries(size: Int): List<QueueEntry> =
         rows.values.sortedBy { it.writeTimestamp }.take(size)
@@ -53,6 +55,10 @@ class FakeStorageQueue : StorageQueue {
     override fun maxWriteTimestamp(): Long? = rows.values.maxOfOrNull { it.writeTimestamp }
     override fun maxUploadedTimestamp(): Long? = null
     override fun insertAllocatedEntries(entries: List<QueueEntry>) = insertEntries(entries)
+
+    override fun updateData(writeTimestamp: Long, id: Long, data: ByteArray) {
+        rows[writeTimestamp to id]?.let { rows[writeTimestamp to id] = QueueEntry(writeTimestamp, id, data) }
+    }
 
     override fun deleteEntry(entry: QueueEntry) {
         rows.remove(entry.writeTimestamp to entry.id)
@@ -118,6 +124,8 @@ class FakeSensorSampleDao : SensorSampleDao {
 
     override fun getOldestExcludingTypes(limit: Int, excludedTypes: List<String>): List<SensorSampleEntry> =
         rows.values.filter { it.sensorType !in excludedTypes }.sortedWith(compareBy({ it.timestamp }, { it.id })).take(limit)
+
+    override fun getByIds(ids: List<String>): List<SensorSampleEntry> = ids.mapNotNull(rows::get)
 
     override fun getOldest(limit: Int): List<SensorSampleEntry> =
         rows.values.sortedWith(compareBy({ it.timestamp }, { it.id })).take(limit)

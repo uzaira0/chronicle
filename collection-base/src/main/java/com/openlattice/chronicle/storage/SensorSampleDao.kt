@@ -13,10 +13,16 @@ data class SensorSampleTypeCount(
 
 @Dao
 interface SensorSampleDao {
+    @Query("SELECT * FROM sensor_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<SensorSampleEntry>
+
     @Query("SELECT * FROM sensor_samples ORDER BY timestamp ASC, id ASC LIMIT :limit")
     fun getOldest(limit: Int): List<SensorSampleEntry>
 
-    @Query("SELECT * FROM sensor_samples WHERE sensorType NOT IN (:excludedTypes) ORDER BY timestamp ASC, id ASC LIMIT :limit")
+    @Query(
+        "SELECT * FROM sensor_samples WHERE sensorType NOT IN (:excludedTypes) AND NOT EXISTS (SELECT 1 FROM upload_queue_evidence evidence " +
+        "WHERE evidence.payloadType = 'SENSOR' AND evidence.rowId = sensor_samples.id AND evidence.heldVersion >= COALESCE((SELECT " +
+        "MAX(appliedVersion) FROM collection_module_state), 0)) ORDER BY timestamp ASC, id ASC LIMIT :limit")
     fun getOldestExcludingTypes(limit: Int, excludedTypes: List<String>): List<SensorSampleEntry>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)

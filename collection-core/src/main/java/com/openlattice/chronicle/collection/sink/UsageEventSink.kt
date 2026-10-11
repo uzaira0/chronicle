@@ -41,6 +41,7 @@ public open class UsageEventSink(
     private val log: CollectionLog = CollectionLog.LOGCAT,
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
     private val prepareEntries: (List<QueueEntry>) -> List<QueueEntry> = { it },
+    private val writeEntries: (List<QueueEntry>) -> Unit = storageQueue::insertEntries,
 ) : CollectionSink {
 
     public fun captureAdmission(): CollectionPersistenceGuard = persistenceGuard.capture()
@@ -60,7 +61,7 @@ public open class UsageEventSink(
             return ModuleResult.Ok(items = 0)
         }
         return try {
-            when (persistenceGuard.persistResult { storageQueue.insertEntries(prepareEntries(entries)) }) {
+            when (persistenceGuard.persistResult { writeEntries(prepareEntries(entries)) }) {
                 CollectionPersistenceResult.PERSISTED -> ModuleResult.Ok(items = entries.size)
                 CollectionPersistenceResult.REFUSED ->
                     ModuleResult.Skipped("active enrollment persistence gate closed")
@@ -75,7 +76,7 @@ public open class UsageEventSink(
 
     /** Inserts within a caller's existing admission lease and transaction; never checks admission again. */
     public open fun writeAdmitted(entries: List<QueueEntry>): ModuleResult = try {
-        if (entries.isNotEmpty()) storageQueue.insertEntries(prepareEntries(entries))
+        if (entries.isNotEmpty()) writeEntries(prepareEntries(entries))
         ModuleResult.Ok(items = entries.size)
     } catch (error: Exception) {
         log.error(TAG, "Failed to persist ${entries.size} usage queue entr(ies) to dataQueue", error)

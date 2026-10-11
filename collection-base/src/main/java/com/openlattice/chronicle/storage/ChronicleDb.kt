@@ -6,6 +6,7 @@ import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import java.io.File
@@ -38,9 +39,12 @@ private const val ENCRYPTED_DB_NAME = "chronicle_encrypted"
         CollectionModuleStateEntity::class,
         UploadDiagnosticEntity::class,
         LocalDataQuarantineEntity::class,
-        DiagnosticImportCheckpointEntity::class
+        DiagnosticImportCheckpointEntity::class,
+        LifecycleStateEntity::class,
+        PendingUploadBatchEntity::class,
+        UploadQueueEvidence::class
     ],
-    version = 29,
+    version = 32,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3)
@@ -57,11 +61,24 @@ abstract class ChronicleDb : RoomDatabase() {
     abstract fun uploadServerDao(): UploadServerDao
     abstract fun uploadStatsDao(): UploadStatsDao
     abstract fun usagePollCheckpointDao(): UsagePollCheckpointDao
+    abstract fun lifecycleStateDao(): LifecycleStateDao
+    abstract fun uploadQueueEvidenceDao(): UploadQueueEvidenceDao
+    abstract fun pendingUploadBatchDao(): PendingUploadBatchDao
     abstract fun collectionModuleStateDao(): CollectionModuleStateDao
     abstract fun uploadDiagnosticDao(): UploadDiagnosticDao
     abstract fun localDataQuarantineDao(): LocalDataQuarantineDao
 
     companion object {
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+            MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+            MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23,
+            MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27,
+            MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32
+        )
+
         @Volatile
         private var INSTANCE: ChronicleDb? = null
 
@@ -117,15 +134,8 @@ abstract class ChronicleDb : RoomDatabase() {
                 ENCRYPTED_DB_NAME
             )
                 .openHelperFactory(factory)
-                .addMigrations(
-                    MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                    MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                    MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23,
-                    MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27,
-                    MIGRATION_27_28, MIGRATION_28_29
-                )
+                .addMigrations(*ALL_MIGRATIONS)
+                .addCallback(UPLOAD_EVIDENCE_CALLBACK)
                 .build()
         }
 

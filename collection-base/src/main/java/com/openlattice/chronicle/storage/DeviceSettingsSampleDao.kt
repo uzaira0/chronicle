@@ -8,6 +8,9 @@ import androidx.room.Query
 /** Room DAO for `device_settings_samples`. Duplicate ids de-duplicate (IGNORE). */
 @Dao
 interface DeviceSettingsSampleDao {
+    @Query("SELECT * FROM device_settings_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<DeviceSettingsSampleEntry>
+
     @Query("SELECT * FROM device_settings_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<DeviceSettingsSampleEntry>
 

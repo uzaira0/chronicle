@@ -8,6 +8,9 @@ import androidx.room.Query
 /** Room DAO for `sleep_samples`. Duplicate ids de-duplicate at SQLite level (IGNORE). */
 @Dao
 interface SleepSampleDao {
+    @Query("SELECT * FROM sleep_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<SleepSampleEntry>
+
     @Query("SELECT * FROM sleep_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<SleepSampleEntry>
 

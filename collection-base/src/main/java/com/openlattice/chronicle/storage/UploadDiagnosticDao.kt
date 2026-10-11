@@ -9,34 +9,54 @@ import androidx.room.Update
 
 @Dao
 interface UploadDiagnosticDao {
-    @Query("SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch ORDER BY firstOccurredAt, id")
+    @Query(
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch ORDER BY firstOccurredAt, id")
     fun forEnrollment(studyId: String, participantId: String, deviceId: String, epoch: String): List<UploadDiagnosticEntity>
 
-    @Query("SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch AND day >= :cutoff AND day <= :today ORDER BY day DESC, moduleFamily, issueCode")
+    @Query(
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch AND day >= :cutoff AND day <= :today ORDER BY day DESC, moduleFamily, issueCode")
     fun recent(studyId: String, participantId: String, deviceId: String, epoch: String, cutoff: String, today: String): List<UploadDiagnosticEntity>
 
-    @Query("SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch AND day = :day AND moduleFamily = :family AND issueCode = :issue AND httpStatus IS :status AND errorType IS :errorType AND deliveryState = 'PENDING' AND sealedForUpload = 0 AND count < 2147483647 ORDER BY firstOccurredAt DESC LIMIT 1")
-    fun findOpen(studyId: String, participantId: String, deviceId: String, epoch: String, day: String, family: String, issue: String, status: Int?, errorType: String?): UploadDiagnosticEntity?
+    @Query(
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch AND day = :day AND moduleFamily = :family AND issueCode = :issue AND httpStatus IS :status AND errorType " +
+        "IS :errorType AND deliveryState = 'PENDING' AND sealedForUpload = 0 AND count < 2147483647 ORDER BY firstOccurredAt DESC LIMIT 1")
+    fun findOpen(studyId: String, participantId: String, deviceId: String, epoch: String, day: String, family: String, issue: String, status: Int?,
+        errorType: String?): UploadDiagnosticEntity?
 
-    @Query("SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch AND deliveryState = 'PENDING' ORDER BY firstOccurredAt, id LIMIT 500")
+    @Query(
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch AND deliveryState = 'PENDING' ORDER BY firstOccurredAt, id LIMIT 500")
     fun pending(studyId: String, participantId: String, deviceId: String, epoch: String): List<UploadDiagnosticEntity>
 
-    @Query("SELECT COUNT(*) FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch AND deliveryState = 'PARKED'")
+    @Query(
+        "SELECT COUNT(*) FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch AND deliveryState = 'PARKED'")
     fun parkedCount(studyId: String, participantId: String, deviceId: String, epoch: String): Int
 
-    @Query("SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch AND deliveryState = 'PARKED' ORDER BY firstOccurredAt, id LIMIT 500 OFFSET :offset")
+    @Query(
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch AND deliveryState = 'PARKED' ORDER BY firstOccurredAt, id LIMIT 500 OFFSET :offset")
     fun parked(studyId: String, participantId: String, deviceId: String, epoch: String, offset: Int): List<UploadDiagnosticEntity>
 
-    @Query("SELECT COUNT(*) FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch AND deliveryState = 'DELIVERED'")
+    @Query(
+        "SELECT COUNT(*) FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch AND deliveryState = 'DELIVERED'")
     fun deliveredCount(studyId: String, participantId: String, deviceId: String, epoch: String): Int
 
-    @Query("SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch AND deliveryState = 'DELIVERED' ORDER BY firstOccurredAt, id LIMIT 500 OFFSET :offset")
+    @Query(
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "enrollmentEpoch = :epoch AND deliveryState = 'DELIVERED' ORDER BY firstOccurredAt, id LIMIT 500 OFFSET :offset")
     fun delivered(studyId: String, participantId: String, deviceId: String, epoch: String, offset: Int): List<UploadDiagnosticEntity>
 
     @Query("SELECT * FROM upload_diagnostics WHERE id IN (:ids)")
     fun byIds(ids: Set<String>): List<UploadDiagnosticEntity>
 
-    @Query("UPDATE upload_diagnostics SET deliveryState = 'DELIVERED', sealedForUpload = 1 WHERE id IN (:ids) AND studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch")
+    @Query(
+        "UPDATE upload_diagnostics SET deliveryState = 'DELIVERED', sealedForUpload = 1 WHERE id IN (:ids) AND studyId = :studyId AND " +
+        "participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch")
     fun acknowledge(ids: Set<String>, studyId: String, participantId: String, deviceId: String, epoch: String): Int
 
     @Query("SELECT * FROM upload_diagnostics WHERE id = :id")
@@ -71,6 +91,14 @@ interface LocalDataQuarantineDao {
 
     @Query("SELECT * FROM local_data_quarantine WHERE sourceTable = :sourceTable")
     fun forSource(sourceTable: String): List<LocalDataQuarantineEntity>
+
+    @Query(
+        "SELECT * FROM local_data_quarantine WHERE sourceTable IN (:sources) AND studyId = :studyId AND participantId = :participantId AND " +
+        "deviceId = :deviceId AND substr(sourceId, 1, length(:epochPrefix)) = :epochPrefix AND substr(reason, 1, length(:reasonPrefix)) = " +
+        ":reasonPrefix AND (reason NOT IN (:currentReasons) OR julianday(createdAt) <= julianday(:retryBefore)) ORDER BY createdAt, id LIMIT :limit")
+    fun retryableRejections(sources: List<String>, studyId: String, participantId: String, deviceId: String,
+                            epochPrefix: String, reasonPrefix: String, currentReasons: List<String>,
+                            retryBefore: String, limit: Int): List<LocalDataQuarantineEntity>
 
     @Update
     fun update(row: LocalDataQuarantineEntity)

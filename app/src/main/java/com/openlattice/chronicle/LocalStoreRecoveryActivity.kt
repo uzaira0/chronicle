@@ -116,10 +116,7 @@ class LocalStoreRecoveryActivity : AppCompatActivity() {
             }
             progress.visibility = View.GONE
             outcome.onSuccess {
-                startActivity(Intent(this@LocalStoreRecoveryActivity, Enrollment::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                })
-                finish()
+                restartAfterVerifiedRecovery(this@LocalStoreRecoveryActivity)
             }.onFailure {
                 status.text = getString(R.string.recovery_failed)
                 button.isEnabled = true
@@ -143,5 +140,22 @@ class LocalStoreRecoveryActivity : AppCompatActivity() {
         fun intent(context: Context, reason: LocalStoreRecoveryReason): Intent =
             Intent(context, LocalStoreRecoveryActivity::class.java)
                 .putExtra(EXTRA_REASON, reason.name)
+    }
+}
+
+private const val RECOVERY_RESTART_DELAY_MS = 2_000L
+
+internal fun restartAfterVerifiedRecovery(context: Context,
+                                         terminate: () -> Unit = { android.os.Process.killProcess(android.os.Process.myPid()) }) {
+    try {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pending = android.app.PendingIntent.getActivity(context, 0, intent,
+            android.app.PendingIntent.FLAG_CANCEL_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+        val alarms = checkNotNull(context.getSystemService(android.app.AlarmManager::class.java))
+        alarms.set(android.app.AlarmManager.ELAPSED_REALTIME, android.os.SystemClock.elapsedRealtime() + RECOVERY_RESTART_DELAY_MS, pending)
+    } finally {
+        terminate()
     }
 }

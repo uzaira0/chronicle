@@ -8,6 +8,9 @@ import androidx.room.Query
 /** Room DAO for `connectivity_state_samples`. Duplicate ids de-duplicate (IGNORE). */
 @Dao
 interface ConnectivityStateSampleDao {
+    @Query("SELECT * FROM connectivity_state_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<ConnectivityStateSampleEntry>
+
     @Query("SELECT * FROM connectivity_state_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<ConnectivityStateSampleEntry>
 

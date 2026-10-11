@@ -28,6 +28,7 @@ data class LocalStoreResetResult(val recoveryBundleDirectory: File)
  * recovery key and decrypted again for hash verification before live files are removed.
  */
 object LocalStoreRecoveryManager {
+    private const val DIAGNOSTIC_RECOVERY_DIRECTORY = "chronicle-diagnostics-recovery"
     internal fun directBootSources(context: Context): List<File> {
         val filesDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             context.createDeviceProtectedStorageContext().filesDir
@@ -39,7 +40,7 @@ object LocalStoreRecoveryManager {
     internal fun directBootSourceFiles(dir: File): List<File> =
         if (dir.isDirectory) dir.walkTopDown().filter(File::isFile).toList() else emptyList()
 
-    private fun scopeDigest(studyId: String, participantId: String): String =
+    fun scopeDigest(studyId: String, participantId: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest("$studyId\u0000$participantId".toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
@@ -48,7 +49,8 @@ object LocalStoreRecoveryManager {
     fun eraseForEnrollment(context: Context, studyId: String, participantId: String) {
         val root = File(context.noBackupFilesDir, "chronicle-recovery")
         val digest = scopeDigest(studyId, participantId)
-        eraseForScope(root, digest)
+        eraseForScope(root, digest, preserveDiagnostics = false)
+        eraseForScope(File(context.noBackupFilesDir, DIAGNOSTIC_RECOVERY_DIRECTORY), digest, preserveDiagnostics = false)
     }
 
     /** Explicit pending module erasure also covers an archive made during verified recovery. */
@@ -57,14 +59,17 @@ object LocalStoreRecoveryManager {
         eraseForScope(root, ownerScopeDigest)
     }
 
-    internal fun eraseForScope(root: File, digest: String?) {
+    internal fun eraseForScope(root: File, digest: String?, preserveDiagnostics: Boolean = true) {
         root.listFiles()?.filter(File::isDirectory)?.forEach { directory ->
             val manifest = File(directory, "manifest.txt")
             val recorded = manifest.takeIf(File::isFile)?.readLines()
                 ?.firstOrNull { it.startsWith("owner_scope_sha256=") }
                 ?.substringAfter('=')
             if (digest == null || recorded == null || recorded == "unknown" || recorded == digest) {
-                val retained = try { preserveDiagnosticsBeforeErasure(directory); emptySet() }
+                val retained = try {
+                    if (preserveDiagnostics) preserveDiagnosticsBeforeErasure(directory)
+                    emptySet()
+                }
                 catch (error: Exception) {
                     android.util.Log.e("LocalStoreRecovery", "Unable to preserve separate recovery diagnostics before explicit erasure", error)
                     diagnosticFiles(directory).toSet()
@@ -105,7 +110,7 @@ object LocalStoreRecoveryManager {
         }
         val diagnostics = diagnosticFiles(directory)
         if (diagnostics.isEmpty()) return
-        val preserved = File(checkNotNull(checkNotNull(directory.parentFile).parentFile), "chronicle-diagnostics-recovery/${directory.name}")
+        val preserved = File(checkNotNull(checkNotNull(directory.parentFile).parentFile), "$DIAGNOSTIC_RECOVERY_DIRECTORY/${directory.name}")
         check(preserved.exists() || preserved.mkdirs())
         diagnostics.forEach { source ->
             val destination = File(preserved, source.name)
@@ -118,43 +123,44 @@ object LocalStoreRecoveryManager {
                 error("Preserved diagnostic artifact verification failed")
             }
         }
+        writeManifest(preserved, manifest)
     }
 
     /** Reads only diagnostic tables; no sample or participant payload enters this artifact. */
     internal fun diagnosticSnapshot(db: ChronicleDb, legacyDiagnostics: String?): ByteArray {
         val result = org.json.JSONObject().put("legacy_upload_diagnostics", legacyDiagnostics)
         listOf("upload_diagnostics", "diagnostic_import_checkpoints").forEach { table ->
-            val rows = org.json.JSONArray()
             db.openHelper.readableDatabase.query("SELECT * FROM `$table`").use { cursor ->
-                while (cursor.moveToNext()) {
-                    val row = org.json.JSONObject()
-                    cursor.columnNames.forEachIndexed { index, name ->
-                        row.put(name, when (cursor.getType(index)) {
-                            android.database.Cursor.FIELD_TYPE_NULL -> org.json.JSONObject.NULL
-                            android.database.Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(index)
-                            android.database.Cursor.FIELD_TYPE_FLOAT -> cursor.getDouble(index)
-                            android.database.Cursor.FIELD_TYPE_BLOB -> android.util.Base64.encodeToString(cursor.getBlob(index), android.util.Base64.NO_WRAP)
-                            else -> cursor.getString(index)
-                        })
-                    }
-                    rows.put(row)
-                }
-            }
-            result.put(table, rows)
-        }
-        val quarantine = org.json.JSONArray()
-        db.openHelper.readableDatabase.query("SELECT * FROM local_data_quarantine WHERE sourceTable IN ('upload_diagnostics', 'legacy_upload_diagnostics', 'unowned_upload_diagnostics', 'direct_boot_diagnostic')").use { cursor ->
-            while (cursor.moveToNext()) {
-                val row = org.json.JSONObject()
-                cursor.columnNames.forEachIndexed { index, name ->
-                    row.put(name, if (cursor.getType(index) == android.database.Cursor.FIELD_TYPE_BLOB)
-                        android.util.Base64.encodeToString(cursor.getBlob(index), android.util.Base64.NO_WRAP) else cursor.getString(index))
-                }
-                quarantine.put(row)
+                result.put(table, cursorRows(cursor, typedValues = true))
             }
         }
-        result.put("diagnostic_quarantine", quarantine)
+        db.openHelper.readableDatabase.query(
+            "SELECT * FROM local_data_quarantine WHERE sourceTable IN ('upload_diagnostics', 'legacy_upload_diagnostics', " +
+            "'unowned_upload_diagnostics', 'direct_boot_diagnostic')").use { cursor ->
+            result.put("diagnostic_quarantine", cursorRows(cursor, typedValues = false))
+        }
         return result.toString().toByteArray(Charsets.UTF_8)
+    }
+
+    private fun cursorRows(cursor: android.database.Cursor, typedValues: Boolean): org.json.JSONArray {
+        val rows = org.json.JSONArray()
+        while (cursor.moveToNext()) {
+            val row = org.json.JSONObject()
+            cursor.columnNames.forEachIndexed { index, name ->
+                val type = cursor.getType(index)
+                row.put(name, when {
+                    type == android.database.Cursor.FIELD_TYPE_BLOB -> android.util.Base64.encodeToString(cursor.getBlob(index),
+                        android.util.Base64.NO_WRAP)
+                    !typedValues -> cursor.getString(index)
+                    type == android.database.Cursor.FIELD_TYPE_NULL -> org.json.JSONObject.NULL
+                    type == android.database.Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(index)
+                    type == android.database.Cursor.FIELD_TYPE_FLOAT -> cursor.getDouble(index)
+                    else -> cursor.getString(index)
+                })
+            }
+            rows.put(row)
+        }
+        return rows
     }
 
     fun preserveAndReset(

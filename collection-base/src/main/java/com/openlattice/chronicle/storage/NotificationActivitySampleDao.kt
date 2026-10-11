@@ -10,6 +10,9 @@ import androidx.room.Query
  */
 @Dao
 interface NotificationActivitySampleDao {
+    @Query("SELECT * FROM notification_activity_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<NotificationActivitySampleEntry>
+
     @Query("SELECT * FROM notification_activity_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<NotificationActivitySampleEntry>
 

@@ -8,6 +8,9 @@ import androidx.room.Query
 /** Room DAO for `activity_recognition_samples`. Duplicate ids de-duplicate (IGNORE). */
 @Dao
 interface ActivityRecognitionSampleDao {
+    @Query("SELECT * FROM activity_recognition_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<ActivityRecognitionSampleEntry>
+
     @Query("SELECT * FROM activity_recognition_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<ActivityRecognitionSampleEntry>
 

@@ -11,7 +11,9 @@ interface UploadStatsDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insertDay(stats: UploadStatsEntity)
 
-    @Query("UPDATE upload_stats SET studyId = :studyId, participantId = :participantId, deviceId = :deviceId, enrollmentEpoch = :epoch WHERE serverId = :serverId AND date = :date AND studyId IS NULL AND participantId IS NULL AND deviceId IS NULL AND enrollmentEpoch IS NULL")
+    @Query(
+        "UPDATE upload_stats SET studyId = :studyId, participantId = :participantId, deviceId = :deviceId, enrollmentEpoch = :epoch WHERE " +
+        "serverId = :serverId AND date = :date AND studyId IS NULL AND participantId IS NULL AND deviceId IS NULL AND enrollmentEpoch IS NULL")
     fun backfillOwner(serverId: Long, date: String, studyId: String, participantId: String, deviceId: String, epoch: String): Int
 
     @Query("UPDATE upload_stats SET usageEventsUploaded = usageEventsUploaded + :count WHERE serverId = :serverId AND date = :date")
@@ -48,10 +50,12 @@ interface UploadStatsDao {
     @Query("SELECT COALESCE(SUM(usageEventsUploaded), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
     fun usageUploadedOn(date: String, serverId: Long, epoch: String): Int
 
-    @Query("SELECT COALESCE(SUM(sensorSamplesUploaded), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
+    @Query(
+        "SELECT COALESCE(SUM(sensorSamplesUploaded), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
     fun sensorUploadedOn(date: String, serverId: Long, epoch: String): Int
 
-    @Query("SELECT COALESCE(SUM(batterySamplesUploaded), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
+    @Query(
+        "SELECT COALESCE(SUM(batterySamplesUploaded), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
     fun batteryUploadedOn(date: String, serverId: Long, epoch: String): Int
 
     @Query("SELECT COALESCE(SUM(usageUploadFailures), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
@@ -60,7 +64,8 @@ interface UploadStatsDao {
     @Query("SELECT COALESCE(SUM(sensorUploadFailures), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
     fun sensorFailuresOn(date: String, serverId: Long, epoch: String): Int
 
-    @Query("SELECT COALESCE(SUM(batteryUploadFailures), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
+    @Query(
+        "SELECT COALESCE(SUM(batteryUploadFailures), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
     fun batteryFailuresOn(date: String, serverId: Long, epoch: String): Int
 
     @Query("DELETE FROM upload_stats WHERE date < :cutoffDate")
@@ -76,3 +81,11 @@ fun UploadStatsDao.insertOwnedDay(stats: UploadStatsEntity) {
     insertDay(stats)
     backfillOwner(stats.serverId, stats.date, study, participant, device, epoch)
 }
+
+fun UploadStatsDao.insertOwnedDay(server: UploadServerEntity, date: String) = insertOwnedDay(
+    UploadStatsEntity(
+        serverId = server.id, date = date, studyId = server.studyId,
+        participantId = server.participantId, deviceId = server.sourceDeviceId,
+        enrollmentEpoch = "${server.id}:${server.createdAt}",
+    ),
+)

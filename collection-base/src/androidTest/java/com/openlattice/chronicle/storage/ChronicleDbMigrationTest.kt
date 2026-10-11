@@ -4,6 +4,7 @@ import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.openlattice.chronicle.collection.CollectionUploadEvidence
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -33,13 +34,78 @@ class ChronicleDbMigrationTest {
     )
 
     @Test
+    fun migrate31To32PreservesQuarantineWithUnknownHistoricalVersion() {
+        helper.createDatabase(TEST_DB, 31).use { db ->
+            db.execSQL(
+                "INSERT INTO local_data_quarantine (id, sourceTable, sourceId, rawData, reason, createdAt) VALUES ('legacy', 'dataQueue', " +
+                "'1:1', X'01', 'UPLOAD_REJECTED:422:old', '2026-10-01T00:00:00Z')")
+        }
+        helper.runMigrationsAndValidate(TEST_DB, 32, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
+            db.query("SELECT rawData, settingsVersion FROM local_data_quarantine WHERE id = 'legacy'").use {
+                assertTrue(it.moveToFirst())
+                org.junit.Assert.assertArrayEquals(byteArrayOf(1), it.getBlob(0))
+                assertTrue(it.isNull(1))
+            }
+        }
+    }
+
+    @Test
+    fun migrate30To31PreservesUnknownQueuesAndCapturesNewPolicyEvidence() {
+        val insertSensor =
+            "INSERT INTO sensor_samples (id, sensorType, timestamp, timezone) VALUES (?, 'accelerometer', '2026-10-01T00:00:00Z', 'UTC')"
+        helper.createDatabase(TEST_DB, 30).use { db ->
+            db.execSQL(insertSensor, arrayOf("legacy"))
+            db.execSQL(
+                "INSERT INTO pending_upload_batches (`key`, payloadType, rowIds, identity) VALUES ('pending', 'SENSOR', '[\"legacy\"]', 'frozen')")
+            db.execSQL(
+                "INSERT INTO collection_module_state (moduleId, serverEnabled, decision, requiredApplied, appliedVersion) VALUES " +
+                "('sensor_accelerometer', 1, 'ACCEPTED', 0, 2)")
+        }
+        helper.runMigrationsAndValidate(TEST_DB, 31, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
+            db.query("SELECT settingsVersion, identity FROM pending_upload_batches").use {
+                assertTrue(it.moveToFirst())
+                assertTrue(it.isNull(0))
+                assertEquals("frozen", it.getString(1))
+            }
+            db.query("SELECT COUNT(*) FROM upload_queue_evidence").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
+            db.execSQL(insertSensor, arrayOf("new"))
+            db.execSQL("INSERT INTO lifecycle_state (`key`, value, observedAt) VALUES (?, '1', 0)", arrayOf(QUEUE_CAPTURE_VERSION_KEY))
+            db.execSQL(insertSensor, arrayOf("captured"))
+            db.execSQL("UPDATE lifecycle_state SET value = ? WHERE `key` = ?", arrayOf(CollectionUploadEvidence.UNKNOWN_SETTINGS_VERSION.toString(),
+                QUEUE_CAPTURE_VERSION_KEY))
+            db.execSQL(insertSensor, arrayOf("unknown"))
+            db.query("SELECT rowId, settingsVersion FROM upload_queue_evidence ORDER BY rowId").use {
+                assertTrue(it.moveToNext())
+                assertEquals("captured", it.getString(0))
+                assertEquals(1, it.getInt(1))
+                assertTrue(it.moveToNext())
+                assertEquals("new", it.getString(0))
+                assertEquals(2, it.getInt(1))
+                assertTrue(it.moveToNext())
+                assertEquals("unknown", it.getString(0))
+                assertTrue(it.isNull(1))
+            }
+            db.execSQL("DELETE FROM sensor_samples WHERE id = 'captured'")
+            db.query("SELECT COUNT(*) FROM upload_queue_evidence WHERE rowId = 'captured'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
+        }
+    }
+
+    @Test
     fun migrate28To29AddsRetainedDiagnosticsAndQuarantine() {
         helper.createDatabase(TEST_DB, 28).apply {
             insertConfiguredServer(this)
-            execSQL("INSERT INTO upload_stats (serverId, date, usageEventsUploaded, sensorSamplesUploaded, batterySamplesUploaded, usageUploadFailures, sensorUploadFailures, batteryUploadFailures) VALUES (1, '2026-01-01', 2, 0, 0, 1, 0, 0)")
+            execSQL(
+                "INSERT INTO upload_stats (serverId, date, usageEventsUploaded, sensorSamplesUploaded, batterySamplesUploaded, " +
+                "usageUploadFailures, sensorUploadFailures, batteryUploadFailures) VALUES (1, '2026-01-01', 2, 0, 0, 1, 0, 0)")
             close()
         }
-        helper.runMigrationsAndValidate(TEST_DB, 29, true, MIGRATION_28_29).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 29, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
             db.query("SELECT COUNT(*) FROM upload_diagnostics").use { cursor ->
                 assertTrue(cursor.moveToFirst())
                 assertEquals(0, cursor.getInt(0))
@@ -68,12 +134,14 @@ class ChronicleDbMigrationTest {
         ChronicleDb.resetAfterVerifiedRecoveryBundle(context)
         helper.createDatabase("chronicle", 28).apply {
             insertConfiguredServer(this)
-            execSQL("INSERT INTO upload_stats (serverId, date, usageEventsUploaded, sensorSamplesUploaded, batterySamplesUploaded, usageUploadFailures, sensorUploadFailures, batteryUploadFailures) VALUES (1, '2026-01-01', 2, 0, 0, 1, 0, 0)")
+            execSQL(
+                "INSERT INTO upload_stats (serverId, date, usageEventsUploaded, sensorSamplesUploaded, batterySamplesUploaded, " +
+                "usageUploadFailures, sensorUploadFailures, batteryUploadFailures) VALUES (1, '2026-01-01', 2, 0, 0, 1, 0, 0)")
             close()
         }
         try {
             val db = ChronicleDb.getInstance(context).openHelper.writableDatabase
-            assertEquals(29, db.version)
+            assertEquals(ChronicleDb.ALL_MIGRATIONS.maxOf { it.endVersion }, db.version)
             db.query("SELECT usageEventsUploaded FROM upload_stats").use { cursor ->
                 assertTrue(cursor.moveToFirst())
                 assertEquals(2, cursor.getInt(0))
@@ -91,49 +159,49 @@ class ChronicleDbMigrationTest {
 
         // Apply MIGRATION_9_10 and validate the result matches the exported v10 schema.
         // validateDroppedTables = true catches any unintended table drop.
-        helper.runMigrationsAndValidate(TEST_DB, 10, true, MIGRATION_9_10).close()
+        helper.runMigrationsAndValidate(TEST_DB, 10, true, *ChronicleDb.ALL_MIGRATIONS).close()
     }
 
     @Test
     fun migrate11To12AddsBatteryUploadStatusColumns() {
         helper.createDatabase(TEST_DB, 11).close()
 
-        helper.runMigrationsAndValidate(TEST_DB, 12, true, MIGRATION_11_12).close()
+        helper.runMigrationsAndValidate(TEST_DB, 12, true, *ChronicleDb.ALL_MIGRATIONS).close()
     }
 
     @Test
     fun migrate12To13SeparatesUploadAttemptsSuccessesAndFailures() {
         helper.createDatabase(TEST_DB, 12).close()
 
-        helper.runMigrationsAndValidate(TEST_DB, 13, true, MIGRATION_12_13).close()
+        helper.runMigrationsAndValidate(TEST_DB, 13, true, *ChronicleDb.ALL_MIGRATIONS).close()
     }
 
     @Test
     fun migrate13To14AddsPerModuleDecisionColumns() {
         helper.createDatabase(TEST_DB, 13).close()
 
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, MIGRATION_13_14).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *ChronicleDb.ALL_MIGRATIONS).close()
     }
 
     @Test
     fun migrate20To21AddsDurableSensorReceiptsAndDeadLetters() {
         helper.createDatabase(TEST_DB, 20).close()
 
-        helper.runMigrationsAndValidate(TEST_DB, 21, true, MIGRATION_20_21).close()
+        helper.runMigrationsAndValidate(TEST_DB, 21, true, *ChronicleDb.ALL_MIGRATIONS).close()
     }
 
     @Test
     fun migrate21To22AddsInteractionPositionProvenance() {
         helper.createDatabase(TEST_DB, 21).close()
 
-        helper.runMigrationsAndValidate(TEST_DB, 22, true, MIGRATION_21_22).close()
+        helper.runMigrationsAndValidate(TEST_DB, 22, true, *ChronicleDb.ALL_MIGRATIONS).close()
     }
 
     @Test
     fun migrate23To24PreservesOneEnrollmentAndEnforcesTheSingletonSlot() {
         helper.createDatabase(TEST_DB, 23).use { db -> insertLegacyServer(db, "one") }
 
-        helper.runMigrationsAndValidate(TEST_DB, 24, true, MIGRATION_23_24).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 24, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
             db.query("SELECT COUNT(*), MIN(singletonKey) FROM upload_servers").use { cursor ->
                 cursor.moveToFirst()
                 assertEquals(1, cursor.getInt(0))
@@ -155,7 +223,7 @@ class ChronicleDbMigrationTest {
             insertLegacyServer(db, "two")
         }
 
-        helper.runMigrationsAndValidate(TEST_DB, 24, true, MIGRATION_23_24).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 24, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
             db.query("SELECT COUNT(*) FROM upload_servers").use { cursor ->
                 cursor.moveToFirst()
                 assertEquals(0, cursor.getInt(0))
@@ -169,7 +237,7 @@ class ChronicleDbMigrationTest {
             insertV24Server(db, "one")
         }
 
-        helper.runMigrationsAndValidate(TEST_DB, 25, true, MIGRATION_24_25).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 25, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
             db.query(
                 """
                 SELECT enrollmentSetupComplete, reservationNonce,
@@ -192,7 +260,7 @@ class ChronicleDbMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(TEST_DB, 26, true, MIGRATION_25_26).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 26, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
             db.query(
                 """
                 SELECT apiKey, pendingEnrollmentAttemptId, pendingEnrollmentAccessCode,
@@ -217,7 +285,7 @@ class ChronicleDbMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(TEST_DB, 27, true, MIGRATION_26_27).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 27, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
             db.query(
                 "SELECT apiKey, pendingUnavailableModuleIds FROM upload_servers WHERE id = 1",
             ).use { cursor ->
@@ -244,7 +312,7 @@ class ChronicleDbMigrationTest {
             close()
         }
 
-        helper.runMigrationsAndValidate(TEST_DB, 28, true, MIGRATION_27_28).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 28, true, *ChronicleDb.ALL_MIGRATIONS).use { db ->
             db.query(
                 "SELECT lastUploadError, lastSensorUploadError, lastBatteryUploadError " +
                     "FROM upload_servers WHERE id = 1",

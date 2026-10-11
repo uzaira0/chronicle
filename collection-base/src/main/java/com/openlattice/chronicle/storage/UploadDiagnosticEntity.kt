@@ -10,7 +10,8 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["studyId", "participantId", "deviceId", "enrollmentEpoch", "deliveryState", "day"]),
         Index(value = ["day", "moduleFamily", "issueCode"]),
-        Index(value = ["studyId", "participantId", "deviceId", "enrollmentEpoch", "day", "moduleFamily", "issueCode", "deliveryState", "sealedForUpload"]),
+        Index(value = ["studyId", "participantId", "deviceId", "enrollmentEpoch", "day", "moduleFamily", "issueCode", "deliveryState",
+            "sealedForUpload"]),
     ],
 )
 data class UploadDiagnosticEntity(
@@ -42,6 +43,7 @@ data class LocalDataQuarantineEntity(
     val rawData: ByteArray,
     val reason: String,
     val createdAt: String,
+    val settingsVersion: Int? = null,
 )
 
 @Entity(tableName = "diagnostic_import_checkpoints")

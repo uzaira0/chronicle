@@ -1,8 +1,11 @@
 package com.openlattice.chronicle.storage
 
 import androidx.lifecycle.LiveData
-import androidx.room.*
-
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.Query
+import androidx.room.Transaction
+import androidx.room.Update
 data class UploadQueueCursor(
     val lastUploadedTimestamp: Long,
     val lastUploadedQueueId: Long
@@ -18,13 +21,6 @@ interface UploadServerDao {
 
     @Query("SELECT * FROM upload_servers WHERE enabled = 1 AND enrollmentSetupComplete = 1 ORDER BY createdAt ASC")
     fun getEnabled(): List<UploadServerEntity>
-
-    /**
-     * Highest `dataQueue` write cursor any destination has already consumed. Rows are pruned once
-     * uploaded, so this survives an empty queue and is what a new row must be written past.
-     */
-    @Query("SELECT MAX(lastUploadedTimestamp) FROM upload_servers")
-    fun maxUploadedQueueTimestamp(): Long?
 
     @Query("SELECT * FROM upload_servers LIMIT 1")
     fun getConfiguredServer(): UploadServerEntity?
@@ -554,13 +550,19 @@ interface UploadServerDao {
     @Query("DELETE FROM upload_servers WHERE id = :id")
     fun delete(id: Long)
 
-    @Query("UPDATE upload_servers SET lastUploadTime = :time, lastUploadError = :error, consecutiveFailures = :failures, lastUploadedTimestamp = :lastTimestamp, lastUploadedQueueId = :lastQueueId WHERE id = :id")
+    @Query(
+        "UPDATE upload_servers SET lastUploadTime = :time, lastUploadError = :error, consecutiveFailures = :failures, lastUploadedTimestamp " +
+        "= :lastTimestamp, lastUploadedQueueId = :lastQueueId WHERE id = :id")
     fun updateUploadStatus(id: Long, time: String, error: String?, failures: Int, lastTimestamp: Long, lastQueueId: Long): Int
 
-    @Query("UPDATE upload_servers SET lastSensorUploadTime = :time, lastSensorUploadError = :error, sensorConsecutiveFailures = :failures, lastUploadedSensorId = :lastSensorId WHERE id = :id")
+    @Query(
+        "UPDATE upload_servers SET lastSensorUploadTime = :time, lastSensorUploadError = :error, sensorConsecutiveFailures = :failures, " +
+        "lastUploadedSensorId = :lastSensorId WHERE id = :id")
     fun updateSensorUploadStatus(id: Long, time: String, error: String?, failures: Int, lastSensorId: String?): Int
 
-    @Query("UPDATE upload_servers SET lastBatteryUploadTime = :time, lastBatteryUploadError = :error, batteryConsecutiveFailures = :failures WHERE id = :id")
+    @Query(
+        "UPDATE upload_servers SET lastBatteryUploadTime = :time, lastBatteryUploadError = :error, batteryConsecutiveFailures = :failures " +
+        "WHERE id = :id")
     fun updateBatteryUploadStatus(id: Long, time: String, error: String?, failures: Int): Int
 
     @Query("""
@@ -646,10 +648,14 @@ interface UploadServerDao {
     @Query("SELECT MIN(lastUploadedTimestamp) FROM upload_servers")
     fun getMinUploadCursor(): Long?
 
-    @Query("SELECT lastUploadedTimestamp, lastUploadedQueueId FROM upload_servers ORDER BY lastUploadedTimestamp ASC, lastUploadedQueueId ASC LIMIT 1")
+    @Query(
+        "SELECT lastUploadedTimestamp, lastUploadedQueueId FROM upload_servers ORDER BY lastUploadedTimestamp ASC, lastUploadedQueueId ASC LIMIT 1")
     fun getMinUploadQueueCursor(): UploadQueueCursor?
 
-    @Query("UPDATE upload_servers SET enabled = :enabled, consecutiveFailures = CASE WHEN :enabled = 1 THEN 0 ELSE consecutiveFailures END, sensorConsecutiveFailures = CASE WHEN :enabled = 1 THEN 0 ELSE sensorConsecutiveFailures END, batteryConsecutiveFailures = CASE WHEN :enabled = 1 THEN 0 ELSE batteryConsecutiveFailures END WHERE id = :id AND (:enabled = 0 OR enrollmentSetupComplete = 1)")
+    @Query(
+        "UPDATE upload_servers SET enabled = :enabled, consecutiveFailures = CASE WHEN :enabled = 1 THEN 0 ELSE consecutiveFailures END, " +
+        "sensorConsecutiveFailures = CASE WHEN :enabled = 1 THEN 0 ELSE sensorConsecutiveFailures END, batteryConsecutiveFailures = CASE " +
+        "WHEN :enabled = 1 THEN 0 ELSE batteryConsecutiveFailures END WHERE id = :id AND (:enabled = 0 OR enrollmentSetupComplete = 1)")
     fun setEnabled(id: Long, enabled: Boolean): Int
 
     companion object {
