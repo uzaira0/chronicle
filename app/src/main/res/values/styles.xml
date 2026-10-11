@@ -1,18 +1,7 @@
 <resources>
 
-    <!-- Base application theme: iOS-parity light look — purple (#6D49FE) top bar with
-         white title/icons, white/near-white surfaces, dark text (see colors.xml).
-         Pinned to the always-LIGHT MaterialComponents theme for the same reason the old
-         palette pinned always-dark: a single palette with no values-night overrides means
-         a DayNight parent would let theme-default screens follow the SYSTEM setting and
-         diverge from the custom-coloured ones. DarkActionBar variant so the ActionBar
-         (Settings/ServerEnrollment) renders white text on the purple colorPrimary.
-
-         Base./AppTheme split: values-v27 and values-v35 override AppTheme only for
-         system-bar behaviour (light nav bar icons on 27+; edge-to-edge light status
-         icons on 35+ where statusBarColor is ignored and the light window background
-         shows behind the bar). -->
-    <style name="Base.AppTheme" parent="Theme.MaterialComponents.Light.DarkActionBar">
+    <!-- Shared semantic colors follow the system light/dark preference. -->
+    <style name="Base.AppTheme" parent="Theme.Material3.DayNight">
         <!-- Customize your theme here. -->
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
@@ -49,7 +38,7 @@
         <item name="windowNoTitle">true</item>
     </style>
 
-    <style name="Chronicle.Button" parent="Widget.MaterialComponents.Button">
+    <style name="Chronicle.Button" parent="Widget.Material3.Button">
         <item name="fontFamily">@font/atkinson_hyperlegible</item>
         <item name="cornerRadius">@dimen/eq_radius_md</item>
         <item name="android:minHeight">@dimen/chronicle_touch_target</item>
@@ -63,7 +52,7 @@
          attrs) so it reads as a tappable button and stays visible in any theme — the old
          "?android:attr/borderlessButtonStyle" had no fill/outline and inherited a text colour with
          no contrast, making it invisible on the dark background (and bare text on light). -->
-    <style name="Chronicle.Button.Secondary" parent="Widget.MaterialComponents.Button.OutlinedButton">
+    <style name="Chronicle.Button.Secondary" parent="Widget.Material3.Button.OutlinedButton">
         <item name="fontFamily">@font/atkinson_hyperlegible</item>
         <item name="cornerRadius">@dimen/eq_radius_md</item>
         <item name="android:minHeight">@dimen/chronicle_touch_target</item>
@@ -73,7 +62,7 @@
         <item name="rippleColor">@color/eq_ripple</item>
     </style>
 
-    <style name="Chronicle.BottomNavigation" parent="Widget.MaterialComponents.BottomNavigationView.Colored">
+    <style name="Chronicle.BottomNavigation" parent="Widget.Material3.BottomNavigationView">
         <item name="android:background">@color/eq_surface</item>
         <item name="itemIconTint">@color/bottom_nav_item_tint</item>
         <item name="itemTextColor">@color/bottom_nav_item_tint</item>
@@ -81,33 +70,42 @@
         <item name="elevation">0dp</item>
     </style>
 
-    <style name="Chronicle.SectionTitle" parent="TextAppearance.MaterialComponents.Subtitle1">
+    <style name="Chronicle.SectionTitle" parent="TextAppearance.Material3.TitleMedium">
         <item name="fontFamily">@font/atkinson_hyperlegible</item>
         <item name="android:textColor">@color/chronicle_text_primary</item>
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="Chronicle.MetricValue" parent="TextAppearance.MaterialComponents.Headline4">
+    <style name="Chronicle.MetricValue" parent="TextAppearance.Material3.HeadlineLarge">
         <item name="fontFamily">@font/atkinson_hyperlegible</item>
         <item name="android:textColor">@color/chronicle_text_primary</item>
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="Chronicle.Body" parent="TextAppearance.MaterialComponents.Body1">
+    <style name="Chronicle.Body" parent="TextAppearance.Material3.BodyLarge">
         <item name="fontFamily">@font/atkinson_hyperlegible</item>
         <item name="android:textColor">@color/chronicle_text_secondary</item>
     </style>
 
-    <style name="Chronicle.Mono" parent="TextAppearance.MaterialComponents.Body1">
+    <style name="Chronicle.Mono" parent="TextAppearance.Material3.BodyLarge">
         <item name="fontFamily">@font/ibm_plex_mono</item>
         <item name="android:textColor">@color/chronicle_text_secondary</item>
     </style>
 
-    <style name="Enrollment.InputText" parent="TextAppearance.MaterialComponents.Subtitle1">
+    <style name="Enrollment.InputText" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textColor">@color/eq_ink</item>
+        <item name="android:textColorHint">@color/eq_muted</item>
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
         <item name="android:ems">10</item>
         <item name="android:inputType">textPersonName</item>
         <item name="android:selectAllOnFocus">true</item>
         <item name="singleLine">true</item>
+    </style>
+
+    <style name="Chronicle.Input" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="boxStrokeColor">@color/eq_muted</item>
+        <item name="hintTextColor">@color/eq_muted</item>
+        <item name="android:textColorHint">@color/eq_muted</item>
     </style>
 
     <style name="ProgressBar" parent="Widget.AppCompat.ProgressBar">

@@ -1,0 +1,4 @@
+<resources>
+    <string name="device_enroll_success">Your device has been enrolled. Chronicle will continue collecting the data you agreed to share while the app is closed. You can review data sharing in Chronicle Settings. To stop future collection, uninstall the app. If you have questions or concerns, contact your study team.</string>
+    <string name="data_sharing_intro">What this study collects on your device. You can turn optional items on or off at any time. To stop future collection, uninstall the app. Uninstalling removes on-device app data but cannot notify the study server.</string>
+</resources>

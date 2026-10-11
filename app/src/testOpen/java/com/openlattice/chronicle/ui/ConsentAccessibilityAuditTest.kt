@@ -10,7 +10,8 @@ import android.widget.TextView
 import androidx.core.graphics.ColorUtils
 import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.R
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner

@@ -18,7 +18,7 @@
         android:paddingEnd="@dimen/page_horizontal_padding"
         android:paddingBottom="96dp">
 
-        <TextView
+        <TextView android:accessibilityHeading="true"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/page_overview_title"
@@ -54,7 +54,7 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <TextView
+            <TextView android:accessibilityHeading="true"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/last_upload_header"

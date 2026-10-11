@@ -39,7 +39,7 @@
                 android:textColor="@color/chronicle_text_primary"
                 android:paddingBottom="4dp" />
 
-            <TextView
+            <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationBadge"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -47,14 +47,14 @@
                 android:textStyle="bold"
                 android:paddingBottom="8dp" />
 
-            <TextView
+            <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationRequirementDetail"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="15sp"
                 android:paddingBottom="16dp" />
 
-            <TextView
+            <TextView android:accessibilityHeading="true" android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationRequirementSummaryHeader"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -70,7 +70,7 @@
                 android:textColor="@color/chronicle_text_primary"
                 android:paddingBottom="16dp" />
 
-            <TextView
+            <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationTitle"
         android:accessibilityHeading="true"
                 android:layout_width="match_parent"
@@ -79,7 +79,7 @@
                 android:textStyle="bold"
                 android:paddingBottom="16dp" />
 
-            <TextView
+            <TextView android:accessibilityHeading="true" android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationCollectsHeader"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -88,14 +88,14 @@
                 android:textStyle="bold"
                 android:paddingBottom="6dp" />
 
-            <TextView
+            <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationCollects"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="15sp"
                 android:paddingBottom="16dp" />
 
-            <TextView
+            <TextView android:accessibilityHeading="true" android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationNotCollectHeader"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -104,7 +104,7 @@
                 android:textStyle="bold"
                 android:paddingBottom="6dp" />
 
-            <TextView
+            <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationNotCollect"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

@@ -135,6 +135,12 @@ class CollectionOrientationActivity : AppCompatActivity() {
         // Required modules can't proceed declined, so the decline button reads as a study-exit.
         findViewById<MaterialButton>(R.id.orientationAccept).text = requirement.acceptLabel
         findViewById<MaterialButton>(R.id.orientationDecline).text = requirement.declineLabel
+        findViewById<TextView>(R.id.orientationTitle).apply {
+            isFocusableInTouchMode = true
+            requestFocus()
+            sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED)
+        }
+        findViewById<android.widget.ScrollView>(R.id.orientationScrollView).scrollTo(0, 0)
     }
 
     private fun onAllow() {

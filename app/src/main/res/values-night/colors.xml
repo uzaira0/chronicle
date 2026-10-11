@@ -1,0 +1,14 @@
+<resources>
+    <color name="eq_bg">#17151D</color>
+    <color name="eq_surface">#211E29</color>
+    <color name="eq_surface_muted">#2D2938</color>
+    <color name="eq_ink">#F4F1FA</color>
+    <color name="eq_muted">#C0BACD</color>
+    <color name="eq_border">#554F64</color>
+    <color name="eq_focus">#C6B5FF</color>
+    <color name="eq_danger">#FFACBA</color>
+    <color name="eq_danger_bg">#41202A</color>
+    <color name="neutral">#C0BACD</color>
+    <color name="eq_ripple">#33C6B5FF</color>
+    <color name="colorPrimaryDark">@color/eq_primary</color>
+</resources>

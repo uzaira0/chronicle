@@ -8,7 +8,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 class StudyDisclosureCopyTest {
+    @Test fun withdrawalCopyExplainsThatTheStudyPolicyControlsPriorData() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val message = context.getString(R.string.server_delete_confirm_message)
+        assertTrue(message.contains("Data on this device is erased after the server confirms"))
+        assertTrue(message.contains("Previously uploaded data is kept or erased according to the study's withdrawal policy"))
+        assertEquals("Withdraw from study", context.getString(R.string.server_delete_confirm_action))
+    }
 
     @Test
     fun disclosureIncludesEveryRequiredStudyConsentElementAndDestination() {
@@ -82,10 +90,37 @@ class StudyDisclosureCopyTest {
         )
     }
 
+    @Test fun enrollmentPreviewDisclosesWithdrawalModeBeforeAcceptance() {
+        val baseline = preview()
+        val labels = StudyDisclosureCopy.Labels()
+        for (mode in com.openlattice.chronicle.study.WithdrawalMode.values()) {
+            val disclosure = StudyDisclosureCopy.from(baseline.copy(manifest = baseline.manifest.copy(withdrawalMode = mode)))
+            val erases = mode == com.openlattice.chronicle.study.WithdrawalMode.ERASE
+            assertTrue(disclosure.body.contains(if (erases) labels.withdrawalErases else labels.withdrawalKeeps))
+            org.junit.Assert.assertFalse(disclosure.body.contains(if (erases) labels.withdrawalKeeps else labels.withdrawalErases))
+        }
+    }
+
     private fun preview(): EnrollmentPreviewResponse {
         val previewJson = javaClass.getResource("/enrollment-preview.json")?.readText()
             ?: error("Missing enrollment-preview.json")
         return ChronicleJson.moshi.adapter(EnrollmentPreviewResponse::class.java)
             .fromJson(previewJson)!!
+    }
+
+    @Test fun enrollmentDisclosureRequiresTheAdultOrGuardianAttestation() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val activity = org.robolectric.Robolectric.buildActivity(StudyDisclosureActivity::class.java,
+            StudyDisclosureActivity.intent(context, preview())).setup().get()
+        val accept = activity.findViewById<com.google.android.material.button.MaterialButton>(R.id.acceptStudyDisclosureButton)
+        val attestation = activity.findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.studyEligibilityAttestation)
+        org.junit.Assert.assertFalse(accept.isEnabled)
+        accept.performClick()
+        org.junit.Assert.assertFalse(activity.isFinishing)
+        attestation.isChecked = true
+        assertTrue(accept.isEnabled)
+        accept.performClick()
+        assertTrue(activity.isFinishing)
+        assertEquals(android.app.Activity.RESULT_OK, org.robolectric.Shadows.shadowOf(activity).resultCode)
     }
 }

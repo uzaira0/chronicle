@@ -18,7 +18,7 @@
         android:paddingEnd="@dimen/page_horizontal_padding"
         android:paddingBottom="96dp">
 
-        <TextView
+        <TextView android:accessibilityHeading="true"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/page_settings_title"
@@ -74,7 +74,9 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/deviceUserUnset"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                style="@style/Chronicle.Button.Secondary"
+                app:icon="@drawable/device_user_check"
+                app:iconTint="@color/eq_ink"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="56dp"
@@ -82,7 +84,9 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/deviceUserChild"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                style="@style/Chronicle.Button.Secondary"
+                app:icon="@drawable/device_user_check"
+                app:iconTint="@color/eq_ink"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="56dp"
@@ -90,7 +94,9 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/deviceUserOther"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                style="@style/Chronicle.Button.Secondary"
+                app:icon="@drawable/device_user_check"
+                app:iconTint="@color/eq_ink"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:minHeight="56dp"

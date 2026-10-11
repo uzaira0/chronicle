@@ -1,28 +1,18 @@
 <resources>
+    <string name="disclosure_withdrawal_erases">Withdrawing erases data previously collected by this study.</string>
+    <string name="disclosure_withdrawal_keeps">Withdrawing stops collection; this study keeps data collected before withdrawal.</string>
     <string name="app_name">Chronicle</string>
 
     <!-- Strings related to login -->
     <string name="study_id">Study ID</string>
     <string name="participant_id">Participant ID</string>
-    <string name="study_id_hint">00010000–0000-0000-8000-000000000c71</string>
-    <string name="participant_id_hint">P1001</string>
-    <string name="prompt_email">Email</string>
-    <string name="prompt_password">Password (optional)</string>
-    <string name="action_sign_in">Sign in or register</string>
-    <string name="action_sign_in_short">Sign in</string>
-    <string name="error_invalid_email">This email address is invalid</string>
-    <string name="error_invalid_password">This password is too short</string>
-    <string name="error_incorrect_password">This password is incorrect</string>
-    <string name="error_field_required">This field is required</string>
     <string name="prompt_study_id">Enter your Study ID</string>
     <string name="prompt_participant_id">Enter your Participant ID</string>
     <string name="action_start_collection">Enroll Device</string>
-    <string name="enrollment_configuration">enrollment</string>
-    <string name="already_enrolled">Device already enrolled</string>
     <string name="invalid_participant">Invalid participant id.</string>
     <string name="invalid_study_id_format">Invalid study id format.</string>
     <string name="device_enroll_failure">Failed to enroll device. Please double check that the Organization ID, Study ID and the Participant ID are correct. If the problem persists, please contact your study administrator.</string>
-    <string name="device_enroll_success">Your device has been enrolled. Chronicle will continue collecting the data you agreed to share while the app is closed. You can review data sharing in Chronicle Settings. To withdraw from Chronicle collection, uninstall the app. If you have questions or concerns, contact your study team.</string>
+    <string name="device_enroll_success">Your device has been enrolled. Chronicle will continue collecting the data you agreed to share while the app is closed. You can review data sharing in Chronicle Settings. To withdraw, use Withdraw from study in Chronicle Settings. If you have questions or concerns, contact your study team.</string>
     <string name="enrollment_done">Done</string>
     <string name="cancel_pending_enrollment">Cancel enrollment attempt</string>
     <string name="invalid_study_id_blank">Invalid study id.</string>
@@ -45,24 +35,11 @@
     <string name="enrollment_disclosure_expired">This study disclosure expired. Open the invitation again to review the current version.</string>
     <string name="enrollment_conflict_pending">This device already has an enrollment or a pending attempt. Finish or cancel it before using another invitation.</string>
     <string name="enrollment_attempt_rejected">This enrollment attempt was rejected or expired. Ask the study team for a new invitation.</string>
-    <string name="invalid_org_id_blank">Invalid organization id.</string>
-    <string name="invalid_org_id_format">Invalid organization id format.</string>
 
     <string name="manual_usage_settings_permission">If you choose to continue, open Usage Access settings and enable Chronicle. You can return without enabling it; the affected research data will remain off.</string>
     <string name="manual_notification_settings_permission">Your model phone requires manually granting of Notification permissions. Please go to settings and grant this application permission to receive notifications.</string>
     <string name="notification_permissions_required">Your study requires notifications to be enabled to complete enrollment.</string>
-    <string name="participant_id_header">Participant Id:</string>
-    <string name="study_id_header">Study Id:</string>
     <string name="last_upload_header">Last Upload:</string>
-    <string name="latest_timestamp_uploaded_header">Latest Timestamp Uploaded:</string>
-    <string name="items_remaining_to_upload_header">Items remaining to upload:</string>
-    <string name="upload_queue_breakdown_header">Pending by source:</string>
-    <string name="uploaded_today_header">Uploaded today:</string>
-    <string name="collection_status_header">Collection status:</string>
-    <string name="sensor_instruments_header">Sensor instruments:</string>
-    <string name="notification_title">Chronicle Survey</string>
-    <string name="prompt_org_id">Enter your Organization ID</string>
-    <string name="org_id_header">Organization Id:</string>
 
     <!--  notifications channels -->
     <string name="channel_description"> Channel for chronicle survey daily notifications</string>
@@ -71,12 +48,8 @@
     <string name="identify_user_channel_description">Asks who is using the device after it is unlocked</string>
     <string name="unlock_monitoring_channel_name">Unlock monitoring</string>
     <string name="unlock_monitoring_channel_description">Shown while Chronicle watches for device unlocks</string>
-    <string name="notification_text">Tap to complete survey</string>
     <string name="usage_settings_permission">Chronicle requests Usage Access only for app-usage data types you accepted. It records app package names, open and close times, foreground duration, and—when configured—per-app network byte counts and in-app activity class names. These research records are encrypted on this device and uploaded to the enrolled study server shown during enrollment for the authorized research team. Chronicle does not collect content inside apps, typed text, messages, websites, or search terms, and does not sell or use this data for advertising. You can decline by leaving this screen or revoke access later.</string>
     <string name="notification_permission">The study you have enrolled your device in requires notification permissions in order to participate.</string>
-    <string name="yes">Yes</string>
-    <string name="no">No</string>
-    <string name="organization_id_prompt">Do you have an organization Id?</string>
     <string name="open_settings">Open Settings</string>
     <string name="battery_optimization_exemption">To ensure Chronicle works more reliably in the background, please open Battery optimization settings, select Chronicle, and choose \"Don\'t optimize\"</string>
     <string name="hibernation_exemption_header">Keep Chronicle Active</string>
@@ -95,10 +68,8 @@
     <string name="oem_background_vendor_vivo">Vivo</string>
     <string name="oem_background_vendor_samsung">Samsung</string>
     <string name="settings">Settings</string>
-    <string name="uploading_data">Uploading data</string>
     <string name="upload_now">Upload Now</string>
     <string name="upload_queued">Upload queued</string>
-    <string name="nav_dashboard">Dashboard</string>
     <string name="nav_overview">Overview</string>
     <string name="nav_uploads">Uploads</string>
     <string name="nav_settings">Settings</string>
@@ -110,9 +81,7 @@
     <string name="identify_user_status_start_deferred">Paused: Android deferred unlock monitoring. Open Chronicle to resume it.</string>
     <string name="page_overview_title">Overview</string>
     <string name="page_uploads_title">Uploads</string>
-    <string name="page_sensors_title">Sensors</string>
     <string name="page_settings_title">Settings</string>
-    <string name="open_server_settings">Server settings</string>
 
     <!-- Phone wake up notification   -->
     <string name="on_wake_notification_title">User Identification</string>
@@ -125,13 +94,10 @@
     <string name="user_target_child">Target child</string>
     <string name="user_other">Other</string>
     <string name="user_unassigned">Not set</string>
-    <string name="save_btn">Save</string>
     <string name="notification_id">notificationId</string>
 
-    <string name="title_activity_settings">Settings</string>
 
     <!-- Preference Titles -->
-    <string name="identification_header">User Identification </string>
     <string name="battery_optimization_header">Battery Optimization</string>
     <string name="notification_access">Notification access</string>
 
@@ -141,21 +107,16 @@
 <!--    <string name="previous_user"> previous_user</string>-->
 <!--    <string name="current_user_timestamp">current_user_timestamp</string>-->
     <string name="disable_battery_optimization_dialog">disable_battery_optimization_dialog</string>
-    <string name="enable_notification_access">enable_notification_access</string>
-    <string name="upload_servers_category">upload_servers_category</string>
-    <string name="upload_server_edit_title">Edit configuration</string>
-    <string name="upload_server_edit_summary">Change URL, study, or participant ID</string>
 
   <!-- User-defined Intent actions   -->
     <string name="action_identify_after_reboot">Identify user after reboot</string>
 
     <!-- Health Connect permissions rationale (shown by Health Connect / Play) -->
-    <string name="health_connect_rationale">This study reads health and fitness summaries — such as steps, distance, heart rate, calories, and floors climbed — that your own apps and devices have already written to Health Connect.\n\nChronicle uses this only for the research study you enrolled in. Access is read-only: Chronicle never writes, changes, or deletes any data in Health Connect, and it never shares this data with anyone outside the study.\n\nYou choose whether to share each type of data, and you can change or revoke this access at any time in Health Connect or in the Chronicle Data Sharing screen.</string>
     <string name="platform_privacy_policy_title">Chronicle Privacy Policy</string>
     <string name="settings_open_source_licenses">Open-source licenses</string>
     <string name="platform_privacy_policy_url" translatable="false">https://www.bcm.edu/about-us/our-campus/compliance</string>
     <string name="open_public_privacy_policy">Open the public policy</string>
-    <string name="platform_privacy_policy_full">Effective and last updated September 14, 2026.\n\nScope and responsibility. Chronicle is a reusable research data-collection app. The app publisher maintains the Android client. Each research study is separately responsible for its protocol, participant consent, server, retention rules, disclosures, contacts, and participant rights. A participant can have only one active Chronicle study on a device at a time.\n\nInformation Chronicle may handle. An enrolled study supplies a study identifier and participant reference. Chronicle creates a device-instance identifier and records consent choices. Enrollment also sends the device model, manufacturer, and Android version, and the study server records the connecting IP address in its security audit log. Depending on the modules the study requests and the participant accepts, this public release may collect app package names and usage timing; in-app activity class names; device lifecycle, battery, storage, thermal, connectivity, settings, and per-app network byte-count data; and participant category selections made after device unlock.\n\nInformation the public app does not collect. This public release does not collect audio or media-session data, Health Connect records, physical-activity or sleep data, accessibility events, notification content or notification metadata, precise location, hardware sensor measurements, contacts, messages, typed text, websites or search terms, screenshots, photos, videos, microphone recordings, advertising identifiers, financial information, or advertising profiles. It contains no advertising or cross-app tracking SDK.\n\nPurpose and sharing. Information is used only to operate the enrolled research protocol, monitor collection and data quality, secure and troubleshoot the service, prevent unauthorized or duplicate requests, honor withdrawal and deletion, and meet the obligations stated by the study. Chronicle does not sell research data or use it for advertising, marketing, credit, insurance, or medical decisions. Data is sent only to the one public HTTPS server identified by the active study. That server may make data available to the responsible research institution, its authorized study team, and service providers permitted by the study notice or law.\n\nBackground operation and permissions. Accepted modules may collect and upload on a schedule while the app is closed. Usage Access is requested only for accepted app-usage modules. If unlock-based user identification is accepted, Android may show an ongoing foreground-service notification and an identification prompt after device unlock. Chronicle does not request Notification Listener, Accessibility, Activity Recognition, Health Connect, microphone, camera, or location access in this public release. Revoking an Android permission stops the affected source but does not itself send a study withdrawal request.\n\nStorage, security, and retention. Pending research records and enrollment credentials are encrypted on the device. Records are sent over an authenticated encrypted connection to the active study server. Local queues remain until delivery, withdrawal, deletion, or a documented safety limit removes old pending records. Server retention is controlled by the study consent and approved protocol. No security measure can guarantee absolute protection.\n\nChoices, withdrawal, and deletion. Participants can review module status in Data Sharing. Declining a module in Data Sharing stops its collection and deletes that module\'s pending on-device records before upload; a shared untagged queue may require deleting other pending records as the privacy-safe fallback. Turning off unlock identification in Settings instead stops future prompts and records an unassigned transition; already queued usage remains until delivery or withdrawal. To withdraw from Chronicle collection, uninstall the app. Uninstalling stops future collection and Android removes Chronicle\'s on-device app data. This release has no in-app withdrawal or server-deletion control, and an uninstall cannot notify the enrolled study server; to withdraw from the study or request deletion of records already uploaded, contact the research team named by the active study.\n\nChildren and study eligibility. Chronicle is not a general consumer service for children. A minor may participate only under an approved study protocol with any required parent or guardian permission and participant assent.\n\nContact. Questions about participation, research records, retention, or rights should go to the research team named by the active study. Questions about the Chronicle Android application or publisher-level privacy inquiries may be sent to uzairalam998@gmail.com. Baylor College of Medicine general institutional privacy policy is available at https://www.bcm.edu/privacy.</string>
+    <string name="platform_privacy_policy_full">Effective and last updated October 7, 2026.\n\nScope and responsibility. Chronicle is a reusable research data-collection app. The app publisher maintains the Android client. Each research study is separately responsible for its protocol, participant consent, server, retention rules, disclosures, contacts, and participant rights. A participant can have only one active Chronicle study on a device at a time.\n\nInformation Chronicle may handle. An enrolled study supplies a study identifier and participant reference. Chronicle creates a device-instance identifier and records consent choices. Enrollment also sends the device model, manufacturer, and Android version. Depending on the modules the study requests and the participant accepts, this public release may collect app package names and usage timing; in-app activity class names; device lifecycle, battery, storage, thermal, connectivity, settings, and per-app network byte-count data; and participant category selections made after device unlock.\n\nInformation the public app does not collect. This public release does not collect audio or media-session data, Health Connect records, physical-activity or sleep data, accessibility events, notification content or notification metadata, precise location, hardware sensor measurements, contacts, messages, typed text, websites or search terms, screenshots, photos, videos, microphone recordings, advertising identifiers, financial information, or advertising profiles. It contains no advertising or cross-app tracking SDK.\n\nPurpose and sharing. Information is used only to operate the enrolled research protocol, monitor collection and data quality, secure and troubleshoot the service, prevent unauthorized or duplicate requests, honor withdrawal and deletion, and meet the obligations stated by the study. Chronicle does not sell research data or use it for advertising, marketing, credit, insurance, or medical decisions. Data is sent only to the one public HTTPS server identified by the active study. That server may make data available to the responsible research institution, its authorized study team, and service providers permitted by the study notice or law.\n\nBackground operation and permissions. Accepted modules may collect and upload on a schedule while the app is closed. Usage Access is requested only for accepted app-usage modules. If unlock-based user identification is accepted, Android may show an ongoing foreground-service notification and an identification prompt after device unlock. Chronicle does not request Notification Listener, Accessibility, Activity Recognition, Health Connect, microphone, camera, or location access in this public release. Revoking an Android permission stops the affected source but does not itself send a study withdrawal request.\n\nStorage, security, and retention. Pending research records and enrollment credentials are encrypted on the device. Records are sent over an authenticated encrypted connection to the active study server. Local queues remain until delivery, withdrawal, deletion, or a documented safety limit removes old pending records. Server retention is controlled by the study consent and approved protocol. No security measure can guarantee absolute protection.\n\nChoices, withdrawal, and deletion. Participants can review module status in Data Sharing. Declining a module in Data Sharing stops its collection and deletes that module\'s pending on-device records before upload; a shared untagged queue may require deleting other pending records as the privacy-safe fallback. Turning off unlock identification in Settings instead stops future prompts and records an unassigned transition; already queued usage remains until delivery or withdrawal. Use Withdraw from study in Chronicle Settings to stop collection and request withdrawal from the enrolled study server. Keep the app installed and connected until the request is acknowledged. Chronicle then clears local enrollment and pending records. Contact your study team about records already uploaded and any additional deletion options.\n\nChildren and study eligibility. Chronicle is not a general consumer service for children. A minor may participate only under an approved study protocol with any required parent or guardian permission and participant assent.\n\nContact. Questions about participation, research records, retention, or rights should go to the research team named by the active study. Questions about the Chronicle Android application or publisher-level privacy inquiries may be sent to uzairalam998@gmail.com. Baylor College of Medicine general institutional privacy policy is available at https://www.bcm.edu/privacy.\n\nUpload delivery diagnostics. Chronicle reports bounded daily aggregates of upload success, failure, retry, collection-access loss, and crash counts, including HTTP status and bounded exception class where available. These diagnostics exclude research content, participant labels, credentials, server URLs, free-form error text, and stack traces. Diagnostics follow study retention and explicit enrollment erasure.</string>
     <string name="continue_action">Continue</string>
     <string name="usage_access_disclosure_title">Share app usage data?</string>
     <string name="usage_access_disclosure_body">If you continue and enable Chronicle in Android Usage Access settings, Chronicle can record app package names, open and close times, foreground duration, and—when configured by your study—per-app network byte counts and in-app activity class names. These research records are encrypted on this device and uploaded to the enrolled study server shown during enrollment for the authorized research team. Chronicle does not collect content inside apps, typed text, messages, websites, or search terms. It does not sell this data or use it for advertising. You can cancel now or revoke access later.</string>
@@ -176,11 +137,11 @@
     <string name="server_upload_enabled">Upload to this server</string>
     <string name="server_check">Check Server</string>
     <string name="server_save">Save Server</string>
-    <string name="server_delete">Delete Server</string>
-    <string name="server_delete_confirm_title">Withdraw and delete?</string>
-    <string name="server_delete_confirm_message">Chronicle stops collecting now and asks the study server to delete this enrollment\'s data. Data on this device is erased after the server confirms.</string>
-    <string name="server_delete_confirm_action">Withdraw and delete</string>
-    <string name="server_delete_needs_support">This enrollment has no deletion credential, so the app cannot ask the server to delete its data. Nothing was changed. Contact the study team.</string>
+    <string name="server_delete">Withdraw from study</string>
+    <string name="server_delete_confirm_title">Withdraw from study?</string>
+    <string name="server_delete_confirm_message">Chronicle stops collecting now and asks the study server to withdraw this enrollment. Data on this device is erased after the server confirms. Previously uploaded data is kept or erased according to the study\'s withdrawal policy. Contact your study team about that policy.</string>
+    <string name="server_delete_confirm_action">Withdraw from study</string>
+    <string name="server_delete_needs_support">This enrollment has no withdrawal credential, so the app cannot notify the server. Nothing was changed. Contact the study team.</string>
     <string name="server_delete_failed">Could not start the withdrawal. Nothing was changed. Try again.</string>
     <string name="enrollment_server_hint">Study server (public HTTPS)</string>
     <string name="orientation_collects_header">What this collects</string>
@@ -194,14 +155,13 @@
     <string name="disclosure_agree">I agree — review data choices</string>
     <string name="disclosure_cancel">Cancel — do not enroll</string>
     <string name="data_sharing_title">Data Sharing</string>
-    <string name="data_sharing_intro">What this study collects on your device. You can turn optional items on or off at any time. To withdraw from Chronicle collection, uninstall the app. Uninstalling removes on-device app data but cannot notify the study server.</string>
+    <string name="data_sharing_intro">What this study collects on your device. You can turn optional items on or off at any time. To withdraw, use Withdraw from study in Chronicle Settings. Uninstalling removes on-device app data but cannot notify the study server.</string>
     <string name="data_sharing_usage_section">App &amp; Device Usage</string>
     <string name="data_sharing_sensors_section">Sensors</string>
     <string name="settings_identify_device_user">Identify device user</string>
     <string name="settings_study_server_details">Study server details</string>
     <string name="settings_add_upload_server">Add upload server</string>
     <string name="settings_active_privacy_policy">Active study privacy policy</string>
-    <string name="settings_bcm_compliance">BCM compliance and privacy</string>
     <string name="user_set_toast">Device user has been set to \"%1$s\"</string>
     <string name="user_save_failed">Could not save the device user. Please try again.</string>
     <string name="recovery_preserve_title">Preserve encrypted recovery copy?</string>
@@ -234,11 +194,9 @@
     <string name="server_already_configured">A study server is already configured. Uninstall and reinstall Chronicle before enrolling in a different study.</string>
     <string name="server_identity_locked">Study identity cannot be edited. Uninstall and reinstall Chronicle before enrolling in another study.</string>
     <string name="server_saved">Server saved successfully</string>
-    <string name="server_connect_failed">Failed to connect: %1$s</string>
     <string name="server_health_online">Online: health check succeeded.</string>
     <string name="server_health_offline_http">Offline: health check returned HTTP %1$d</string>
     <string name="server_health_degraded_http">Degraded: health check returned HTTP %1$d</string>
-    <string name="server_health_offline_error">Offline: %1$s</string>
     <string name="settings_notifications_title">Allow Chronicle notifications</string>
     <string name="settings_notifications_body">Identify device user needs notification permission so the device-unlock prompt can be shown. Data identification stays off until notifications are enabled.</string>
     <string name="settings_open_notification_settings">Open notification settings</string>
@@ -269,7 +227,7 @@
     <string name="notif_changed_required">A data type the study collects is now required and can no longer be turned off in the app. It keeps collecting — see Data Sharing.</string>
     <string name="notif_changed_optional">A data type the study collects is now optional — you may turn it off in Data Sharing if you prefer. It keeps collecting unless you do.</string>
     <string name="notif_collection_updated">Data collection updated</string>
-    <string name="notif_access_missing">Chronicle cannot collect a data type you accepted because its Android access is turned off. Open the app and go to Data Sharing to turn it back on.</string>
+    <string name="notif_access_missing">Chronicle cannot collect a data type you accepted. Open the app to restart collection or restore Android access in Data Sharing.</string>
     <string name="notif_option_off">A data collection option was turned off. No action needed.</string>
     <string name="orientation_action_title">Set up data collection</string>
     <string name="orientation_step">Step %1$d of %2$d - %3$s: %4$s</string>
@@ -331,7 +289,7 @@
     <string name="ds_hc_scope_unavailable">The study\'s Health Connect scope is unavailable. Refresh study settings and try again.</string>
     <string name="ds_hc_review_title">Review Health Connect access</string>
     <string name="ds_hc_accept_scope">Accept exact scope</string>
-    <string name="ds_capability_failed">Capability check failed (%1$s)</string>
+    <string name="ds_capability_failed">Collection status is unavailable. Reopen Data Sharing to try again. If this continues, contact your study team.</string>
     <string name="ds_status_not_collected">Not collected by this study</string>
     <string name="ds_status_required_collecting">Required — collecting</string>
     <string name="ds_status_declined_paused">Declined — all collection paused (accept above to resume).</string>
@@ -393,9 +351,8 @@
     <string name="uploads_breakdown">Pending by source\nUsage/lifecycle %1$d\n%2$sBattery %3$d\n%4$sConnectivity state %5$d\n%6$sDevice settings %7$d\n\nLocal participant labels %8$d (context only; not an upload queue)</string>
     <string name="uploads_today">Today\nSucceeded: %1$s\nFailed attempts: %2$s</string>
     <string name="uploads_history_no_recent">No recent uploads</string>
-    <string name="uploads_history_sensors_delivered">, sensors %1$d</string>
-    <string name="uploads_history_sensors_failed">, sensors %1$d</string>
-    <string name="uploads_history">%1$s - %2$s\nRecorded since enrollment\nDelivered items: usage/lifecycle %3$d%4$s, battery %5$d\nFailed attempts: usage/lifecycle %6$d%7$s, battery %8$d\nRecent daily history\n%9$s</string>
+    <string name="uploads_history">%1$s - %2$s\nRecorded since enrollment\nDelivered items: usage/lifecycle %3$d, battery %4$d\nFailed attempts: usage/lifecycle %5$d, battery %6$d\nRecent daily history\n%7$s</string>
+    <string name="uploads_history_research">%1$s - %2$s\nRecorded since enrollment\nDelivered items: usage/lifecycle %3$d, sensors %4$d, battery %5$d\nFailed attempts: usage/lifecycle %6$d, sensors %7$d, battery %8$d\nRecent daily history\n%9$s</string>
     <string name="uploads_issue_family_usage">usage/lifecycle</string>
     <string name="uploads_issue_family_battery">battery</string>
     <string name="uploads_issue_family_device">device telemetry</string>
@@ -487,7 +444,6 @@ Your withdrawal request is pending. Data collection has stopped.</string>
     <string name="enrollment_preview_unavailable">Unable to reach the study server. Check your connection and try again.</string>
     <string name="server_connect_unavailable">Unable to connect. Check your connection and try again.</string>
     <string name="server_health_unavailable">Server unavailable. Check your connection and try again.</string>
-    <string name="ds_capability_unavailable">Access check unavailable. Try again.</string>
     <string name="ds_open_app_settings">Open Chronicle app settings</string>
     <string name="reminder_public_message">Open Chronicle to view your reminder.</string>
     <string name="collection_paused_storage">Collection is paused because device storage is low. Free some space to resume. Your queued data is retained.</string>
@@ -500,4 +456,6 @@ Your withdrawal request is pending. Data collection has stopped.</string>
     <string name="reminder_timing_title">Reminder timing</string>
     <string name="reminder_timing_optional">Reminders work with approximate timing. You can optionally allow exact alarms to improve delivery timing.</string>
     <string name="reminder_timing_review">Review alarm access</string>
+    <string name="uploads_details">Details</string>
+    <string name="disclosure_eligibility_attestation">I am an adult participant, or I am the parent or legal guardian giving permission for a minor to participate under this study’s approved protocol and required assent.</string>
 </resources>

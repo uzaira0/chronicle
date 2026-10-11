@@ -55,6 +55,14 @@
             android:text="@string/study_withdrawal_options"
             android:visibility="gone" />
 
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/studyEligibilityAttestation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="@dimen/chronicle_touch_target"
+            android:textColor="@color/eq_ink"
+            android:text="@string/disclosure_eligibility_attestation" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/acceptStudyDisclosureButton"
             android:layout_width="match_parent"

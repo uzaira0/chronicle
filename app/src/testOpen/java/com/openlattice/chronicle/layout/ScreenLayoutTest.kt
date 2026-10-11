@@ -89,6 +89,8 @@ class ScreenLayoutTest(
             settle()
             var issues = emptyList<String>()
             scenario.onActivity { activity ->
+                assertTrue("Chronicle windows must hide screenshots and recent-task previews",
+                    activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE != 0)
                 val root = activity.window.decorView
                 // Before Android 15 the window keeps content clear of the bars; from 15 the app must.
                 val bars = if (Build.VERSION.SDK_INT >= 35) applySystemBars(root) else Rect()

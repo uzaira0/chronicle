@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 class UploadDiagnosticsSummaryTest {
 
     @Test
@@ -96,6 +97,22 @@ class UploadDiagnosticsSummaryTest {
         assertTrue(rendered.contains("destination address rejected (2)"))
         listOf("participant", "api-key", "https://", "Exception").forEach { forbidden ->
             assertFalse(rendered.contains(forbidden, ignoreCase = true))
+        }
+    }
+
+    // Translations are supplied by study teams, never authored here: an untranslated locale must fall
+    // back to the complete base variants rather than a partial or mismatched one.
+    @Test fun untranslatedLocaleFallsBackToCompleteBaseVariantsAndPreservesTheHealthLabel() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val config = android.content.res.Configuration(context.resources.configuration).apply { setLocale(java.util.Locale.forLanguageTag("es")) }
+        val localized = context.createConfigurationContext(config)
+        val server = UploadServerSummary(1, "Estudio", "https://localhost", true, "Conexión Saludable", null, emptyList())
+        for (restricted in listOf(false, true)) {
+            val text = renderUploadHistory(server, restricted, localized.copyResolver())
+            assertTrue(text.contains("Estudio - Conexión Saludable"))
+            assertTrue(text.contains("Recent daily history"))
+            assertTrue(text.contains("No recent uploads"))
+            org.junit.Assert.assertEquals(restricted, text.contains("sensors"))
         }
     }
 }

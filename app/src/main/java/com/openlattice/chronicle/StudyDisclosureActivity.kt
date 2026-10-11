@@ -71,6 +71,8 @@ data class StudyDisclosureCopy(
         val benefits: String = "Expected benefits",
         val useAndSharing: String = "Use and sharing",
         val retention: String = "Retention and deletion",
+        val withdrawalErases: String = "Withdrawing erases data previously collected by this study.",
+        val withdrawalKeeps: String = "Withdrawing stops collection; this study keeps data collected before withdrawal.",
         val effectiveAt: (String) -> String = { "Policy effective date: $it" },
         val version: (String) -> String = { "Disclosure version: $it" },
         val nonChoiceDisclosure: (CollectionModuleId) -> String? = NON_CHOICE_MODULE_DISCLOSURES::get,
@@ -90,6 +92,8 @@ data class StudyDisclosureCopy(
                 benefits = context.getString(R.string.disclosure_benefits),
                 useAndSharing = context.getString(R.string.disclosure_use_sharing),
                 retention = context.getString(R.string.disclosure_retention),
+                withdrawalErases = context.getString(R.string.disclosure_withdrawal_erases),
+                withdrawalKeeps = context.getString(R.string.disclosure_withdrawal_keeps),
                 effectiveAt = { context.getString(R.string.study_policy_effective_at, it) },
                 version = { context.getString(R.string.disclosure_version, it) },
                 nonChoiceDisclosure = { moduleId ->
@@ -139,6 +143,8 @@ data class StudyDisclosureCopy(
                     appendLine()
                     appendLine(labels.retention)
                     appendLine(policy.retentionAndDeletion)
+                    appendLine(if (manifest.withdrawalMode == com.openlattice.chronicle.study.WithdrawalMode.ERASE)
+                        labels.withdrawalErases else labels.withdrawalKeeps)
                     appendLine()
                     appendLine(labels.effectiveAt(policy.effectiveAt.toString()))
                     append(labels.version(policy.version))
@@ -183,7 +189,12 @@ class StudyDisclosureActivity : AppCompatActivity() {
             visibility = if (consentUrl == null) View.GONE else View.VISIBLE
             setOnClickListener { consentUrl?.let(::openHttps) }
         }
-        findViewById<MaterialButton>(R.id.acceptStudyDisclosureButton).setOnClickListener {
+        val attestation = findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.studyEligibilityAttestation)
+        val accept = findViewById<MaterialButton>(R.id.acceptStudyDisclosureButton)
+        accept.isEnabled = attestation.isChecked
+        attestation.setOnCheckedChangeListener { _, checked -> accept.isEnabled = checked }
+        accept.setOnClickListener {
+            if (!attestation.isChecked) return@setOnClickListener
             setResult(RESULT_OK)
             finish()
         }

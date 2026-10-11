@@ -19,6 +19,10 @@ class UploadsFragment : Fragment(R.layout.fragment_uploads) {
     private var refreshJob: Job? = null
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        view.findViewById<MaterialButton>(R.id.uploadsDetailsButton).setOnClickListener {
+            val details = view.findViewById<View>(R.id.uploadsDetails)
+            details.visibility = if (details.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
         view.findViewById<MaterialButton>(R.id.uploadNowButton).setOnClickListener { button ->
             triggerImmediateChronicleSync(requireContext().applicationContext)
             Toast.makeText(requireContext(), R.string.upload_queued, Toast.LENGTH_SHORT).show()
@@ -130,10 +134,11 @@ class UploadsFragment : Fragment(R.layout.fragment_uploads) {
 private val ENGLISH_UPLOADS: CopyResolver = englishCopy(
     mapOf(
         R.string.uploads_history_no_recent to "No recent uploads",
-        R.string.uploads_history_sensors_delivered to ", sensors %d",
-        R.string.uploads_history_sensors_failed to ", sensors %d",
-        R.string.uploads_history to "%s - %s\nRecorded since enrollment\nDelivered items: usage/lifecycle %d%s, battery %d\n" +
-            "Failed attempts: usage/lifecycle %d%s, battery %d\nRecent daily history\n%s",
+        R.string.uploads_history to "%s - %s\nRecorded since enrollment\nDelivered items: usage/lifecycle %d, battery %d\n" +
+            "Failed attempts: usage/lifecycle %d, battery %d\nRecent daily history\n%s",
+        R.string.uploads_history_research to "%s - %s\nRecorded since enrollment\n" +
+            "Delivered items: usage/lifecycle %d, sensors %d, battery %d\n" +
+            "Failed attempts: usage/lifecycle %d, sensors %d, battery %d\nRecent daily history\n%s",
         R.string.uploads_issue_family_usage to "usage/lifecycle",
         R.string.uploads_issue_family_battery to "battery",
         R.string.uploads_issue_family_device to "device telemetry",
@@ -157,21 +162,16 @@ internal fun renderUploadHistory(
     copy: CopyResolver = ENGLISH_UPLOADS,
 ): String {
     fun s(id: Int, vararg args: Any) = copy(id, args)
-    val sensorDelivered = if (includeRestricted) s(R.string.uploads_history_sensors_delivered, server.sensorItemsUploaded) else ""
-    val sensorFailures = if (includeRestricted) s(R.string.uploads_history_sensors_failed, server.sensorFailedAttempts) else ""
     val recent = server.history.takeIf { it.isNotEmpty() }?.joinToString("\n")
         ?: s(R.string.uploads_history_no_recent)
-    return s(
-        R.string.uploads_history,
-        server.name,
-        server.healthLabel,
-        server.usageItemsUploaded,
-        sensorDelivered,
-        server.batteryItemsUploaded,
-        server.usageFailedAttempts,
-        sensorFailures,
-        server.batteryFailedAttempts,
-        recent,
+    return if (includeRestricted) s(
+        R.string.uploads_history_research, server.name, server.healthLabel,
+        server.usageItemsUploaded, server.sensorItemsUploaded, server.batteryItemsUploaded,
+        server.usageFailedAttempts, server.sensorFailedAttempts, server.batteryFailedAttempts, recent,
+    ) else s(
+        R.string.uploads_history, server.name, server.healthLabel,
+        server.usageItemsUploaded, server.batteryItemsUploaded,
+        server.usageFailedAttempts, server.batteryFailedAttempts, recent,
     )
 }
 

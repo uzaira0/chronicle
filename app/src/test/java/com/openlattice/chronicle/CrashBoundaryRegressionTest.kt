@@ -31,7 +31,13 @@ import com.openlattice.chronicle.ui.OverviewFragment
 import com.openlattice.chronicle.ui.SettingsHomeFragment
 import kotlinx.coroutines.runBlocking
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -123,7 +129,8 @@ class CrashBoundaryRegressionTest {
 
     @Test fun optionalDiagnosticsImportFailureKeepsLegacyDataAndRendersUnavailable() = runBlocking {
         prefs.edit().putString("local_upload_issue_history", "[]").commit()
-        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_import BEFORE INSERT ON diagnostic_import_checkpoints BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_import BEFORE INSERT ON diagnostic_import_checkpoints BEGIN SELECT RAISE(ABORT, 'disk full'); END")
         val snapshot = DashboardDataRepository.load(context)
         assertFalse(snapshot.localUploadDiagnosticsAvailable)
         assertEquals("[]", prefs.getString("local_upload_issue_history", null))
@@ -139,7 +146,8 @@ class CrashBoundaryRegressionTest {
         assertEquals("[]", prefs.getString("local_upload_issue_history", null))
         installPrefs(prefs)
         assertTrue(DashboardDataRepository.load(context).localUploadDiagnosticsAvailable)
-        assertEquals(1, db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM diagnostic_import_checkpoints").use { it.moveToFirst(); it.getInt(0) })
+        assertEquals(1, db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM diagnostic_import_checkpoints").use { it.moveToFirst(); it.getInt(
+            0) })
     }
 
     @Test fun dashboardQueryFailureRoutesLifecycleJobToRecovery() {
@@ -162,7 +170,8 @@ class CrashBoundaryRegressionTest {
             moduleId = CollectionModuleId.CONNECTIVITY_STATE.id, serverEnabled = true, decision = "ACCEPTED",
             decidedAtEpochMillis = 1, requiredApplied = false, appliedVersion = 1,
             appliedPolicySnapshot = null, lastDisposition = null)))
-        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_consent BEFORE INSERT ON collection_module_state BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_consent BEFORE INSERT ON collection_module_state BEGIN SELECT RAISE(ABORT, 'disk full'); END")
         val host = Robolectric.buildActivity(CrashTestHostActivity::class.java).setup().get()
         val fragment = DataSharingFragment()
         host.supportFragmentManager.beginTransaction().add(android.R.id.content, fragment).commitNow()
@@ -174,9 +183,11 @@ class CrashBoundaryRegressionTest {
     }
 
     @Test fun failedPrivacyMutationClosesAdmissionBeforeItsGateLeaseIsReleased() {
-        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_privacy BEFORE UPDATE ON upload_servers BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_privacy BEFORE UPDATE ON upload_servers BEGIN SELECT RAISE(ABORT, 'disk full'); END")
         try {
-            com.openlattice.chronicle.collection.state.stopOnPersistenceWorker { db.uploadServerDao().setEnabled(db.uploadServerDao().getConfiguredServer()!!.id, false) }
+            com.openlattice.chronicle.collection.state.stopOnPersistenceWorker { db.uploadServerDao().setEnabled(db.uploadServerDao(
+                ).getConfiguredServer()!!.id, false) }
             fail("the failed mutation must be reported")
         } catch (_: android.database.SQLException) {
             assertFalse(ResearchPersistenceGate.isActiveEnrollment(context))
@@ -185,7 +196,8 @@ class CrashBoundaryRegressionTest {
     }
 
     @Test fun failedServerToggleShowsRecoveryAndKeepsRow() {
-        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_server BEFORE UPDATE ON upload_servers BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_server BEFORE UPDATE ON upload_servers BEGIN SELECT RAISE(ABORT, 'disk full'); END")
         val host = Robolectric.buildActivity(CrashTestHostActivity::class.java).setup().get()
         val fragment = SettingsHomeFragment()
         host.supportFragmentManager.beginTransaction().add(android.R.id.content, fragment).commitNow()
@@ -268,12 +280,24 @@ class CrashBoundaryRegressionTest {
         }
     }
 
+    @Test fun uploadRetryCommitFailureUsesTheStorageFailureConvention() {
+        val server = db.uploadServerDao().getConfiguredServer()!!
+        failCommits()
+        val failure = assertThrows(LocalStoreRecoveryRequiredException::class.java) {
+            com.openlattice.chronicle.services.upload.UploadRetryGate.recordFailure(context, server,
+                com.openlattice.chronicle.services.upload.LocalUploadModuleFamily.BATTERY,
+                java.io.IOException("retry"), db)
+        }
+        assertTrue(ResearchPersistenceGate.isStorageFailure(failure))
+    }
+
     private fun installPrefs(value: SharedPreferences?) {
         EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, value)
     }
 
     private fun failCommits() {
-        val editor = Proxy.newProxyInstance(SharedPreferences.Editor::class.java.classLoader, arrayOf(SharedPreferences.Editor::class.java)) { proxy, method, _ ->
+        val editor = Proxy.newProxyInstance(SharedPreferences.Editor::class.java.classLoader, arrayOf(SharedPreferences.Editor::class.java)) { proxy,
+            method, _ ->
             if (method.name == "commit") false else proxy
         } as SharedPreferences.Editor
         installPrefs(Proxy.newProxyInstance(SharedPreferences::class.java.classLoader, arrayOf(SharedPreferences::class.java)) { _, method, args ->
@@ -281,7 +305,8 @@ class CrashBoundaryRegressionTest {
         } as SharedPreferences)
     }
 
-    private fun executor(activity: Any): ExecutorService = activity.javaClass.getDeclaredField("executor").apply { isAccessible = true }.get(activity) as ExecutorService
+    private fun executor(activity: Any): ExecutorService = activity.javaClass.getDeclaredField("executor").apply { isAccessible = true }.get(
+        activity) as ExecutorService
     private fun awaitExecutor(activity: Any) { executor(activity).submit {}.get(5, TimeUnit.SECONDS) }
     private fun invoke(target: Any, name: String, types: Array<Class<*>> = emptyArray(), vararg args: Any?) {
         try { target.javaClass.getDeclaredMethod(name, *types).apply { isAccessible = true }.invoke(target, *args) }

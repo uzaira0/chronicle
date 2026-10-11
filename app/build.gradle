@@ -266,6 +266,8 @@ android {
     }
     sourceSets {
         test.resources.srcDir "../collection-base/schemas"
+        play.res.srcDir 'src/minimal/res'
+        amazon.res.srcDir 'src/minimal/res'
         play.java.srcDir 'src/minimal/java'
         play.kotlin.srcDir 'src/minimal/java'
         amazon.java.srcDir 'src/minimal/java'

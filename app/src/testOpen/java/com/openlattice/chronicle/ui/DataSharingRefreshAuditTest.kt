@@ -1,5 +1,7 @@
 package com.openlattice.chronicle.ui
 
+import com.openlattice.chronicle.collection.capability.PermissionStatus
+
 import android.content.Context
 import android.os.Bundle
 import android.provider.Settings
@@ -13,7 +15,11 @@ import com.openlattice.chronicle.collection.permissions.ModulePermissions
 import com.openlattice.chronicle.collection.state.ParticipantDecision
 import com.openlattice.chronicle.layout.TestStores
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -60,7 +66,8 @@ class DataSharingRefreshAuditTest {
         TestStores.install(context, enrolled = true)
         context.getSharedPreferences("runtime_permission_requests", Context.MODE_PRIVATE).edit()
             .putBoolean(ModulePermissions.ACTIVITY_RECOGNITION, true).commit()
-        val settingsIntent = android.content.Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(android.net.Uri.parse("package:${context.packageName}"))
+        val settingsIntent = android.content.Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(android.net.Uri.parse(
+            "package:${context.packageName}"))
         @Suppress("DEPRECATION")
         val packageShadow = shadowOf(context.packageManager)
         packageShadow.addResolveInfoForIntent(settingsIntent, android.content.pm.ResolveInfo().apply {

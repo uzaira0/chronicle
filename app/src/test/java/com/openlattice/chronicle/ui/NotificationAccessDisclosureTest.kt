@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import org.junit.Assume.assumeTrue
 
 class NotificationAccessDisclosureTest {
     @Test
@@ -16,7 +17,7 @@ class NotificationAccessDisclosureTest {
 
     @Test
     fun playBuildRejectsNotificationAccessDisclosureForExcludedModule() {
-        if (BuildConfig.DISTRIBUTION_CHANNEL != "PLAY") return
+        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL == "PLAY")
         val copy = notificationAccessDisclosure(setOf(CollectionModuleId.AUDIO_CONTENT))
 
         assertEquals("Access unavailable", copy.title)
@@ -26,7 +27,7 @@ class NotificationAccessDisclosureTest {
 
     @Test
     fun playBuildRejectsMixedNotificationAccessDisclosure() {
-        if (BuildConfig.DISTRIBUTION_CHANNEL != "PLAY") return
+        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL == "PLAY")
         val copy = notificationAccessDisclosure(
             setOf(
                 CollectionModuleId.AUDIO_ACTIVITY,

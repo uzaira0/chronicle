@@ -9,7 +9,7 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import androidx.core.app.NotificationManagerCompat
+import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
@@ -19,6 +19,7 @@ import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.BuildConfig
+import com.openlattice.chronicle.collection.capability.DistributionChannel
 import com.openlattice.chronicle.LocalStoreRecoveryActivity
 import com.openlattice.chronicle.LicensesActivity
 import com.openlattice.chronicle.ServerEnrollmentActivity
@@ -43,7 +44,6 @@ import com.openlattice.chronicle.services.notifications.notificationSettingsInte
 import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.services.withdrawal.WithdrawalState
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
-import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 import com.openlattice.chronicle.utils.ExternalLinks
@@ -76,14 +76,16 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         settings = EnrollmentSettings(requireContext())
-        if (BuildConfig.DISTRIBUTION_CHANNEL == "PLAY") {
-            // Play participants can see the one active study/server identity below, but cannot
-            // add, edit, pause, or redirect it from an app-settings control.
+        if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
+            // Minimal distributions expose the enrolled identity in the study summary.
             listOf(
                 R.id.settingsServerList,
                 R.id.openServerSettingsButton,
                 R.id.addServerSettingsButton,
             ).forEach { view.findViewById<View>(it).visibility = View.GONE }
+        }
+        if (DistributionChannel.current() != DistributionChannel.RESEARCH) {
+            view.findViewById<View>(R.id.addServerSettingsButton).visibility = View.GONE
         }
         if (!notificationAccessControlVisible(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)) {
             // Notification-listener access belongs only to the excluded research notification/
@@ -336,6 +338,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                     notificationPermissionGranted = hasNotificationPermission(appContext, IDENTIFY_USER_CHANNEL_ID),
                     promptPopsUp = notificationPopsUp(appContext, IDENTIFY_USER_CHANNEL_ID),
                     runtimeStartDeferred = UnlockMonitoringRuntimeStatus.isDeferred(appContext),
+                    currentUser = settings.getCurrentUser(),
                     snapshot = DashboardDataRepository.load(appContext),
                 )
             }
@@ -384,7 +387,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                 if (userIdentificationControls.visible &&
                     (userIdentificationRuntime.needsNotificationRecovery || userIdentificationRuntime.promptSilent)
                 ) View.VISIBLE else View.GONE
-            val currentUser = settings.getCurrentUser()
+            val currentUser = state.currentUser
             view.findViewById<MaterialButtonToggleGroup>(R.id.deviceUserGroup).apply {
                 visibility = if (userIdentificationControls.visible) View.VISIBLE else View.GONE
                 check(
@@ -408,8 +411,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                 if (!notificationAccessControlVisible(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)) {
                     return@apply
                 }
-                isChecked = NotificationManagerCompat.getEnabledListenerPackages(requireContext())
-                    .contains(requireContext().packageName)
+                isChecked = hasNotificationListenerAccess(requireContext())
                 isEnabled = notificationAccessMayBeRequested(
                     activeEnrollment = activeEnrollment,
                     withdrawalState = withdrawalState,
@@ -525,7 +527,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                 )
                 setOnClickListener { openServer(server.id) }
             })
-            row.addView(MaterialButton(requireContext()).apply {
+            if (DistributionChannel.current() == DistributionChannel.RESEARCH) row.addView(MaterialButton(requireContext()).apply {
                 text = getString(if (server.enabled) R.string.settings_pause_uploads else R.string.settings_enable_uploads)
                 setOnClickListener { setServerEnabled(server.id, !server.enabled) }
             })
@@ -580,6 +582,7 @@ private data class SettingsRefreshState(
     val notificationPermissionGranted: Boolean,
     val promptPopsUp: Boolean,
     val runtimeStartDeferred: Boolean,
+    val currentUser: String?,
     val snapshot: DashboardSnapshot,
 )
 

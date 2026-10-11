@@ -149,11 +149,14 @@ class AppDecisionSurfaceContractTest {
         val dataSharing = File(
             "src/main/java/com/openlattice/chronicle/ui/DataSharingFragment.kt",
         ).readText()
+        val modulePermissions = File(
+            "src/main/java/com/openlattice/chronicle/collection/capability/PermissionStatus.kt",
+        ).readText()
         val strings = File("src/main/res/values/strings.xml").readText()
 
         assertTrue(!enrollment.contains("PermissionActivity::class.java"))
         assertTrue(!mainActivity.contains("PermissionActivity::class.java"))
-        assertTrue(dataSharing.contains("PermissionKind.USAGE_ACCESS"))
+        assertTrue(modulePermissions.contains("PermissionKind.USAGE_ACCESS"))
         assertTrue(dataSharing.contains("confirmUsageAccessDisclosure()"))
         assertTrue(dataSharing.contains("Settings.ACTION_USAGE_ACCESS_SETTINGS"))
         assertTrue(strings.contains("name=\"usage_access_disclosure_body\""))
@@ -384,7 +387,8 @@ class AppDecisionSurfaceContractTest {
             assertTrue("${layout.name}: no static action-bar spacer.", !xml.contains("?attr/actionBarSize"))
             assertTrue("${layout.name}: insets are handled centrally.", !xml.contains("fitsSystemWindows"))
         }
-        listOf(File("src/main/java"), File("src/main/kotlin")).asSequence().flatMap { it.walkTopDown() }.filter { it.extension == "kt" && it.name != "SystemBarInsets.kt" }.forEach { source ->
+        listOf(File("src/main/java"), File("src/main/kotlin")).asSequence().flatMap { it.walkTopDown() }.filter { it.extension == "kt" &&
+            it.name != "SystemBarInsets.kt" }.forEach { source ->
             assertTrue(
                 "${source.name}: insets are handled centrally by SystemBarInsets.",
                 !source.readText().contains("setOnApplyWindowInsetsListener"),
@@ -397,10 +401,18 @@ class AppDecisionSurfaceContractTest {
             "fragment_settings_home.xml" to "ui/SettingsHomeFragment.kt",
             "activity_server_enrollment.xml" to "ServerEnrollmentActivity.kt",
         )
+        val dimensions = elements(File("src/main/res/values/dimens.xml"))
+            .filter { it.tagName == "dimen" }
+            .associate { "@dimen/${it.getAttribute("name")}" to it.textContent.trim() }
         pageSources.forEach { (layoutName, _) ->
-            val layout = File("src/main/res/layout/$layoutName").readText()
+            val layoutFile = File("src/main/res/layout/$layoutName")
+            val layout = layoutFile.readText()
             assertTrue("$layoutName must keep final controls above bottom nav.", layout.contains("android:paddingBottom=\"96dp\""))
-            assertTrue("$layoutName needs enough top content offset for tablet toolbar text bounds.", layout.contains("android:paddingTop=\"32dp\""))
+            assertTrue(
+                "$layoutName needs enough top content offset for tablet toolbar text bounds.",
+                elements(layoutFile).mapNotNull { it.androidAttr("paddingTop") }
+                    .any { (dimensions[it] ?: it) == "32dp" },
+            )
         }
     }
 
@@ -469,7 +481,8 @@ class AppDecisionSurfaceContractTest {
         assertTrue(strings.contains("sensor collection toggle"))
         assertTrue(sensorsFragment.contains("SwitchMaterial(requireContext())"))
         // The sensor's study-set sampling rate + duty cycle are shown READ-ONLY (mobile cannot edit).
-        assertTrue("per-sensor Hz/duty must be shown read-only", sensorsFragment.contains("R.string.ds_sensor_study_setting") && strings.contains("Study setting:"))
+        assertTrue("per-sensor Hz/duty must be shown read-only", sensorsFragment.contains("R.string.ds_sensor_study_setting") && strings.contains(
+            "Study setting:"))
         assertTrue(sensorsFragment.contains("rateHzByType"))
         // Toggling a sensor accepts/declines that single sensor module — no local opt-in store.
         assertTrue(
@@ -590,7 +603,19 @@ class AppDecisionSurfaceContractTest {
                 "UploadWorker.getChronicleStudyApi(serverUrl, mobileSigningSecretOverride)",
             ),
             "services/sensors/SensorSettingsRefreshProductionSeams.kt" to listOf(
-                "UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)",
+                // The availability-only refresh delegates API creation to the signed reporter.
+                """
+                SensorAvailabilityReporter.checkAndReport(
+                    context,
+                    UUID.fromString(server.studyId),
+                    server.participantId,
+                    server.sourceDeviceId,
+                    server.apiKey,
+                    requestedSensors,
+                    server.url,
+                    server.mobileSigningSecretOverride
+                )
+                """,
             ),
             "services/enrollment/EnrollmentMonitoringWorker.kt" to listOf(
                 "UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)",
@@ -629,10 +654,7 @@ class AppDecisionSurfaceContractTest {
 
     @Test
     fun usageMetadataFallbackUsesTheEnrolledServerInsteadOfBcmProduction() {
-        listOf(
-            "services/usage/UsageMonitoringWorker.kt",
-            "services/usage/UsageModuleCollectionDelegate.kt",
-        ).forEach { sourceName ->
+        listOf("services/usage/UsageCollectionDelegateBase.kt").forEach { sourceName ->
             val source = normalizedSource("src/main/java/com/openlattice/chronicle/$sourceName")
             assertTrue(!source.contains(normalizeKotlin("createRetrofitAdapter(PRODUCTION)")))
             assertTrue(
@@ -642,6 +664,10 @@ class AppDecisionSurfaceContractTest {
                     )
                 )
             )
+        }
+        listOf("UsageMonitoringWorker.kt", "UsageModuleCollectionDelegate.kt").forEach { file ->
+            assertTrue(normalizedSource("src/main/java/com/openlattice/chronicle/services/usage/$file")
+                .contains(normalizeKotlin(": UsageCollectionDelegateBase(context)")))
         }
     }
 
@@ -670,7 +696,8 @@ class AppDecisionSurfaceContractTest {
         )
         assertTrue(
             "Collection-ack must preserve each server's per-server signing override.",
-            coordinator.contains(normalizeKotlin("UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride).reportCollectionAck")),
+            coordinator.contains(normalizeKotlin(
+                "UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride).reportCollectionAck")),
         )
         assertTrue(
             "Collection-ack fanout must be covered by a pure helper, not only source-scanned.",
@@ -682,11 +709,11 @@ class AppDecisionSurfaceContractTest {
         )
         assertTrue(
             "A decision with no exact enrollment destination must not be marked durably reported.",
-            coordinator.contains(normalizeKotlin("var retryDurable = succeeded")),
+            coordinator.contains(normalizeKotlin("if (admittedServers.isEmpty()) return@withExclusiveMutation DecisionReportOutcome(false, false)")),
         )
         assertTrue(
-            "Failed collection-ack reports must be persisted for retry, not dropped after best-effort fanout.",
-            coordinator.contains(normalizeKotlin("CollectionAckRetryQueue.of(appContext).enqueue(failedReports)")),
+            "Collection decisions must enter the durable queue before delivery.",
+            coordinator.contains(normalizeKotlin("CollectionAckRetryQueue.of(appContext).enqueue(admittedServers.map")),
         )
         assertTrue(
             "Collection settings sync must retry pending collection-ack reports.",

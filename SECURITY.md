@@ -29,3 +29,11 @@ certificates or public keys: each self-host deployment uses its own domain and
 certificate authority, and Let's Encrypt certificates rotate every 90 days, so a pin
 shipped in the app would break every deployment it did not name. After enrollment each
 device authenticates with its own API key.
+
+## Screenshots and recent tasks
+
+Chronicle protects its app windows with Android `FLAG_SECURE`. Screenshots, screen recording,
+and recent-task previews must not expose invitation credentials, study consent, participant
+identity, or research records. This applies consistently to every Chronicle activity through
+`SystemBarInsets`; external browsers and Android settings retain their own policies. Support
+uses the redacted diagnostics instead of screenshots containing participant information.

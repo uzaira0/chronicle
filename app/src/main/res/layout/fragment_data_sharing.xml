@@ -25,7 +25,7 @@
         android:paddingEnd="@dimen/page_horizontal_padding"
         android:paddingBottom="96dp">
 
-        <TextView
+        <TextView android:accessibilityHeading="true"
             android:id="@+id/dataSharingPageTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

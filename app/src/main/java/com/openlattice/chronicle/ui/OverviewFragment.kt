@@ -1,5 +1,7 @@
 package com.openlattice.chronicle.ui
 
+import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
+
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView

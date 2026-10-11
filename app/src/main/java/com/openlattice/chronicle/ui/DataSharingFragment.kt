@@ -7,7 +7,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.View
-import android.widget.Button
+import com.google.android.material.button.MaterialButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -23,19 +23,18 @@ import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.HealthConnectRecordType
 import com.openlattice.chronicle.collection.capability.CollectionCapability
+import com.openlattice.chronicle.collection.capability.PermissionStatus
+import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
 import com.openlattice.chronicle.collection.capability.CapabilityEnvironment
 import com.openlattice.chronicle.collection.capability.CollectionCapabilityResolver
 import com.openlattice.chronicle.collection.ConsentTrigger
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
-import com.openlattice.chronicle.collection.permissions.ModulePermissions
-import com.openlattice.chronicle.collection.permissions.PermissionKind
 import com.openlattice.chronicle.collection.state.CollectionConsentCopy
 import com.openlattice.chronicle.collection.state.localizedLabel
 import com.openlattice.chronicle.collection.state.localizedConsentTemplate
 import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
-import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.CollectionStateMachine
 import com.openlattice.chronicle.collection.state.CollectionModulePhase
 import com.openlattice.chronicle.collection.state.CollectionModuleState
@@ -242,7 +241,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             },
         )
         row.addView(
-            Button(requireContext()).apply {
+            MaterialButton(requireContext()).apply {
                 text = buttonText
                 minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
                 contentDescription = buttonCd
@@ -440,19 +439,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val isDeclined = state.requiredAndDeclined
         val key = moduleId to isDeclined
         attentionRows[key]?.let { return it }
-        val row = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val pad = resources.getDimensionPixelSize(R.dimen.eq_space_4)
-            setPadding(pad, pad, pad, pad)
-            minimumHeight = resources.getDimensionPixelSize(R.dimen.chronicle_sensor_row_min_height)
-            setBackgroundResource(R.drawable.bg_panel)
-            val topMargin = resources.getDimensionPixelSize(R.dimen.eq_space_2)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(0, topMargin, 0, 0) }
-        }
+        val row = newModuleRow()
         val label = TextView(requireContext()).apply {
             text = getString(
                 R.string.ds_module_row,
@@ -466,7 +453,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
         row.addView(label)
         if (!isDeclined) {
-            val decline = Button(requireContext()).apply {
+            val decline = MaterialButton(requireContext()).apply {
                 text = getString(R.string.ds_decline)
                 minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
                 contentDescription = getString(R.string.ds_decline_cd, moduleLabel)
@@ -474,9 +461,12 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             }
             row.addView(decline)
         }
-        val accept = Button(requireContext()).apply {
+        val accept = MaterialButton(requireContext()).apply {
             text = getString(R.string.ds_accept)
             minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = resources.getDimensionPixelSize(R.dimen.eq_space_2)
+            }
             contentDescription = getString(R.string.ds_accept_cd, moduleLabel)
             setOnClickListener { onAcceptRequired(moduleId) }
         }
@@ -547,6 +537,44 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
     }
 
+    private fun newModuleRow(): LinearLayout = LinearLayout(requireContext()).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        val pad = resources.getDimensionPixelSize(R.dimen.eq_space_4)
+        setPadding(pad, pad, pad, pad)
+        minimumHeight = resources.getDimensionPixelSize(R.dimen.chronicle_sensor_row_min_height)
+        setBackgroundResource(R.drawable.bg_panel)
+        val topMargin = resources.getDimensionPixelSize(R.dimen.eq_space_2)
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(0, topMargin, 0, 0) }
+    }
+
+    private fun moduleRowLabel(row: LinearLayout, description: String, available: Boolean): TextView =
+        (row.getChildAt(0) as? TextView ?: TextView(requireContext())).apply {
+            text = description
+            setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
+            textSize = 16f
+            minLines = 2
+            includeFontPadding = true
+            alpha = if (available) 1f else 0.6f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+    private fun moduleRowSwitch(row: LinearLayout, description: String, enabled: Boolean, checked: Boolean): SwitchMaterial =
+        (row.getChildAt(1) as? SwitchMaterial ?: SwitchMaterial(requireContext())).apply {
+            setOnCheckedChangeListener(null)
+            text = ""
+            contentDescription = description
+            minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.CENTER_VERTICAL }
+            isEnabled = enabled
+            isChecked = checked
+        }
+
     private fun moduleRow(moduleId: CollectionModuleId, state: CollectionModuleState?): View {
         val moduleLabel = CollectionConsentCopy.localizedLabel(requireContext(), moduleId)
         // `collectedByStudy` true smart-casts `state` non-null, so the inner reads need no ?..
@@ -558,51 +586,16 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val optional = collectedByStudy && !state.requiredApplied
         val isActive = state?.phase == CollectionModulePhase.ACTIVE
 
-        val row = moduleRows[moduleId] ?: LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val pad = resources.getDimensionPixelSize(R.dimen.eq_space_4)
-            setPadding(pad, pad, pad, pad)
-            minimumHeight = resources.getDimensionPixelSize(R.dimen.chronicle_sensor_row_min_height)
-            setBackgroundResource(R.drawable.bg_panel)
-            val topMargin = resources.getDimensionPixelSize(R.dimen.eq_space_2)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(0, topMargin, 0, 0) }
-        }
+        val row = moduleRows[moduleId] ?: newModuleRow()
 
-        val label = (row.getChildAt(0) as? TextView ?: TextView(requireContext())).apply {
-            text = getString(R.string.ds_module_row, moduleLabel, statusText(moduleId, state))
-            setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
-            textSize = 16f
-            minLines = 2
-            includeFontPadding = true
-            alpha = if (collectedByStudy) 1f else 0.6f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val label = moduleRowLabel(row, getString(R.string.ds_module_row, moduleLabel, statusText(moduleId, state)), collectedByStudy)
         if (label.parent == null) row.addView(label)
 
         // Required + not-collected modules show a read-only switch reflecting state; only an
         // optional, study-enabled module is interactive (the participant may turn it on/off).
-        val switch = (row.getChildAt(1) as? SwitchMaterial ?: SwitchMaterial(requireContext())).apply {
-            setOnCheckedChangeListener(null)
-            text = ""
-            contentDescription = getString(R.string.ds_module_toggle_cd, moduleLabel)
-            minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.CENTER_VERTICAL }
-            isEnabled = optional && capabilities[moduleId].let {
-                it == null || it.canCollectNow || it.canRequestAccess
-            }
-            isChecked = when {
-                requiredAccepted -> true
-                optional -> isActive
-                else -> false
-            }
-        }
+        val switch = moduleRowSwitch(row, getString(R.string.ds_module_toggle_cd, moduleLabel),
+            optional && capabilities[moduleId].let { it == null || it.canCollectNow || it.canRequestAccess },
+            requiredAccepted || (optional && isActive))
         if (optional) {
             // Order matters: set isChecked above BEFORE attaching the listener so binding does
             // not fire a spurious decision.
@@ -733,10 +726,10 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                 environment,
                 requireContext().copyResolver(),
             )
-        }.getOrElse { error ->
+        }.getOrElse {
             ids.associateWith {
                 CollectionCapability.TemporaryFailure(
-                    getString(R.string.ds_capability_failed, error.javaClass.simpleName),
+                    getString(R.string.ds_capability_failed),
                 )
             }
         }
@@ -832,52 +825,18 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val isActive = state?.phase == CollectionModulePhase.ACTIVE
         val canToggle = optional && isAvailable
 
-        val row = moduleRows[moduleId] ?: LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val pad = resources.getDimensionPixelSize(R.dimen.eq_space_4)
-            setPadding(pad, pad, pad, pad)
-            minimumHeight = resources.getDimensionPixelSize(R.dimen.chronicle_sensor_row_min_height)
-            setBackgroundResource(R.drawable.bg_panel)
-            val topMargin = resources.getDimensionPixelSize(R.dimen.eq_space_2)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(0, topMargin, 0, 0) }
-        }
+        val row = moduleRows[moduleId] ?: newModuleRow()
 
-        val label = (row.getChildAt(0) as? TextView ?: TextView(requireContext())).apply {
-            text = getString(
-                R.string.ds_module_row,
-                CollectionConsentCopy.localizedLabel(requireContext(), moduleId),
-                sensorStatusText(moduleId, state, isAvailable) +
-                    rateDutyLine(sensor, collectedByStudy && isAvailable, sensors),
-            )
-            setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
-            textSize = 16f
-            minLines = 2
-            includeFontPadding = true
-            alpha = if (collectedByStudy && isAvailable) 1f else 0.6f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val label = moduleRowLabel(row, getString(
+            R.string.ds_module_row,
+            CollectionConsentCopy.localizedLabel(requireContext(), moduleId),
+            sensorStatusText(moduleId, state, isAvailable) + rateDutyLine(sensor, collectedByStudy && isAvailable, sensors),
+        ), collectedByStudy && isAvailable)
         if (label.parent == null) row.addView(label)
 
-        val switch = (row.getChildAt(1) as? SwitchMaterial ?: SwitchMaterial(requireContext())).apply {
-            setOnCheckedChangeListener(null)
-            text = ""
-            contentDescription = getString(R.string.ds_sensor_toggle_cd, CollectionConsentCopy.localizedLabel(requireContext(), moduleId))
-            minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.CENTER_VERTICAL }
-            isEnabled = canToggle
-            isChecked = when {
-                requiredAccepted -> true
-                optional -> isActive
-                else -> false
-            }
-        }
+        val switch = moduleRowSwitch(row,
+            getString(R.string.ds_sensor_toggle_cd, CollectionConsentCopy.localizedLabel(requireContext(), moduleId)),
+            canToggle, requiredAccepted || (optional && isActive))
         if (canToggle) {
             // Order matters: set isChecked above BEFORE attaching the listener so binding does not
             // fire a spurious decision. Reuses the usage-module accept/decline path on this sensor.
@@ -941,66 +900,6 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     }
 }
 
-/** Missing-permission status for the active modules (see [activeModulePermissionStatus]). */
-internal data class PermissionStatus(
-    val missingRuntime: List<String>,
-    val needHealthConnect: Boolean,
-    val needUsageAccess: Boolean = false,
-    val needNotificationListener: Boolean = false,
-    val needAccessibility: Boolean = false,
-    val notificationAccessModules: Set<CollectionModuleId> = emptySet(),
-    val runtimeAccessModules: Set<CollectionModuleId> = emptySet(),
-) {
-    val hasMissing: Boolean
-        get() = missingRuntime.isNotEmpty() || needHealthConnect || needUsageAccess ||
-            needNotificationListener || needAccessibility
-}
-
-/**
- * Which permissions the currently ACTIVE modules still need. A module is only counted once it is
- * ACTIVE (accepted + study-enabled) — we never prompt for data the participant hasn't agreed to
- * share. Shared by Data Sharing (the "Review access" rows), Overview and MainActivity routing.
- */
-internal fun activeModulePermissionStatus(
-    states: List<CollectionModuleState>,
-    environment: CapabilityEnvironment,
-): PermissionStatus {
-    val active = states.filter { it.phase == CollectionModulePhase.ACTIVE }.map { it.moduleId }
-    val missingRuntime = ModulePermissions.runtimePermissionsFor(active, environment.sdkInt)
-        .filterNot(environment.grantedRuntimePermissions::contains)
-    val needUsageAccess = ModulePermissions.needsKind(active, PermissionKind.USAGE_ACCESS) &&
-        !environment.usageAccessGranted
-    val needHealthConnect = BuildConfig.HAS_HEALTH_CONNECT &&
-        ModulePermissions.needsHealthConnect(active) &&
-        environment.healthConnectAvailable && !environment.healthConnectGranted
-    val notificationAccessModules = active
-        .filter { ModulePermissions.needsKind(listOf(it), PermissionKind.NOTIFICATION_LISTENER) }
-        .toSet()
-    val needNotificationListener = notificationAccessModules.isNotEmpty() &&
-        !environment.notificationListenerEnabled
-    val needAccessibility = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
-        ModulePermissions.needsKind(active, PermissionKind.ACCESSIBILITY) &&
-        !environment.accessibilityEnabled
-    return PermissionStatus(
-        missingRuntime,
-        needHealthConnect,
-        needUsageAccess,
-        needNotificationListener,
-        needAccessibility,
-        notificationAccessModules,
-        active.filterTo(linkedSetOf()) { module ->
-            ModulePermissions.runtimePermissionsFor(listOf(module), environment.sdkInt)
-                .any(missingRuntime::contains)
-        },
-    )
-}
-
-/** Blocking store + grant read; call off the main thread. True when an ACTIVE module lacks its access. */
-internal fun activeModuleAccessMissing(context: Context): Boolean = activeModulePermissionStatus(
-    CollectionLoopStore.of(context).loadAll().values.toList(),
-    CollectionCapabilityResolver.snapshot(context),
-).hasMissing
-
 internal fun healthConnectReconsentMessage(
     recordTypes: Set<HealthConnectRecordType>,
     readsOnlyHeader: String = "This study will read only these approved Health Connect record types:",
@@ -1033,7 +932,9 @@ internal data class NotificationAccessDisclosure(
  * Metadata use that privilege only to observe media-session state; Notification Activity is the
  * separate consent choice that permits notification records to be retained.
  */
-private const val ENGLISH_AUDIO_LIMIT = "Although Android grants broad notification visibility, Chronicle does not store notification content or notification metadata because Notification Activity was not separately accepted."
+private const val ENGLISH_AUDIO_LIMIT =
+    "Although Android grants broad notification visibility, Chronicle does not store notification content or notification metadata because " +
+    "Notification Activity was not separately accepted."
 
 private val ENGLISH_NOTIFICATION_ACCESS: CopyResolver = englishCopy(
     mapOf(
