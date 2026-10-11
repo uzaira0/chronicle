@@ -37,15 +37,11 @@ public interface TargetUserStore {
 
     /**
      * Writes [user] under the `current_user` EncryptedSharedPreferences key. Mirrors the
-     * legacy `settings.edit().putString(current_user, user).apply()` in `setTargetUser`.
+     * legacy `settings.edit().putString(current_user, user).commit()` in `setTargetUser`.
      */
     public fun writeCurrentUserPref(user: String)
 
-    /**
-     * Reads the `current_user` pref, returning [unassignedDefault] when it is unset —
-     * identical to `EnrollmentSettings.getCurrentUser()` (which defaults to the
-     * `user_unassigned` "Not set" label).
-     */
+    /** Reads the committed selection, returning [unassignedDefault] when history is empty. */
     public fun readCurrentUserPref(unassignedDefault: String): String
 
     /** Current number of rows in the `userQueue` table. */

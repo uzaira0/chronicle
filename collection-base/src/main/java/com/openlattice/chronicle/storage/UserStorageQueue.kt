@@ -42,3 +42,5 @@ interface UserStorageQueue {
     @Query("DELETE FROM userQueue")
     fun deleteAll()
 }
+
+fun UserStorageQueue.currentUserOr(default: String): String = getUserTimestamps().firstOrNull()?.user ?: default

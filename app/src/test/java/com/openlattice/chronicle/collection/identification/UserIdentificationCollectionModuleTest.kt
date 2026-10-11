@@ -287,4 +287,15 @@ class UserIdentificationCollectionModuleTest {
         assertTrue(m.poll(ctx, window) is ModuleResult.Skipped)
         assertTrue(m.flush(ctx) is ModuleResult.Skipped)
     }
+    @Test fun failedHistoryInsertKeepsDisplayedSelectionAndAttributionTogether() {
+        val store = FakeTargetUserStore()
+        val m = module(store)
+        m.setTargetUser("Other")
+        store.failNextInsert = true
+        assertTrue(m.setTargetUser("Target child") is ModuleResult.Failed)
+        assertEquals("Other", m.currentUser())
+        assertEquals("Other", m.resolveUserForEvent(Long.MAX_VALUE, m.loadUserTimestampMap()))
+        assertEquals("Other", store.currentUserPref)
+    }
+
 }

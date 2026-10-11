@@ -12,8 +12,6 @@ import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.storage.UserQueueEntry
 import java.util.NavigableMap
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 private const val TAG = "UserIdentificationCollectionModule"
 
@@ -31,10 +29,8 @@ private const val TAG = "UserIdentificationCollectionModule"
  *  - **`setTargetUser` parity** — [setTargetUser] reproduces
  *    `EnrollmentSettings.setTargetUser` exactly: a `UserQueueEntry` is inserted into the
  *    `userQueue` Room table **and** the `current_user` EncryptedSharedPreferences key is
- *    written, inside the same `runBlocking { launch { } }` shape. The `launch` makes the
- *    queue insert run concurrently with the pref write; that race is preserved verbatim,
- *    not "fixed" — both stores converge and the legacy code has relied on this since the
- *    feature shipped.
+ *    mirrored after the Room insert commits. Display and attribution both read committed
+ *    history, so a failed insert cannot change the displayed selection.
  *  - **"Not set" → empty user** — [resolveUserForEvent] is the exact `getTargetUser`
  *    logic from `UsageEventsChronicleSensor`: the nearest-lower-timestamp lookup, with a
  *    missing entry **or** the `Not set` label both resolving to the empty string. Usage
@@ -98,26 +94,7 @@ public class UserIdentificationCollectionModule(
     @Volatile private var lastTargetUserUpdateEpochMs: Long? = null
     @Volatile private var lastError: String? = null
 
-    /**
-     * Sets the device target user, reproducing `EnrollmentSettings.setTargetUser` exactly.
-     *
-     * Behaviour, identical to the legacy `setTargetUser`:
-     *  1. a `UserQueueEntry(user = [user])` is inserted into the `userQueue` Room table;
-     *  2. the `current_user` EncryptedSharedPreferences key is written to [user];
-     *  3. both run inside `runBlocking { launch { insert }; prefWrite }` — the insert is
-     *     launched concurrently with the pref write; this race is preserved verbatim.
-     *
-     * When user identification is **disabled** this is a no-op ([ModuleResult.Skipped]) —
-     * a disabled module writes nothing (design §1C.1). The one current caller that writes
-     * while "disabled" is the disable-transition itself, which writes the `user_unassigned`
-     * label; that path keeps using the legacy inline `EnrollmentSettings.setTargetUser`
-     * body and is unaffected by this module (the migration switch only gates the *enabled*
-     * write path — see [UserIdentificationMigration]).
-     *
-     * A persistence failure surfaces as [ModuleResult.Failed] — logged and recorded in
-     * diagnostics, never silently swallowed (design §1C.2). The redacted message names
-     * the failing store, never the participant label.
-     */
+    /** Room history is authoritative; update the preference only after its insert commits. */
     public fun setTargetUser(user: String): ModuleResult {
         if (!userIdentificationEnabled()) {
             log.info(TAG, "user_identification disabled; setTargetUser is a no-op")
@@ -125,12 +102,8 @@ public class UserIdentificationCollectionModule(
             return lastResult
         }
         return try {
-            runBlocking {
-                launch {
-                    store.insertUserQueueEntry(UserQueueEntry(user = user))
-                }
-                store.writeCurrentUserPref(user)
-            }
+            store.insertUserQueueEntry(UserQueueEntry(user = user))
+            store.writeCurrentUserPref(user)
             lastTargetUserUpdateEpochMs = clock.nowEpochMs()
             lastError = null
             // itemsCollected is the one queue row written; the label itself is never logged.
@@ -145,12 +118,7 @@ public class UserIdentificationCollectionModule(
         }
     }
 
-    /**
-     * Reads the current target user, identical to `EnrollmentSettings.getCurrentUser()`:
-     * the `current_user` pref, defaulting to the `user_unassigned` "Not set" label when
-     * unset. This is the device-local participant label — a caller-internal value, never
-     * routed into diagnostics.
-     */
+    /** Display the last committed attribution even when updating the preference failed. */
     public fun currentUser(): String = store.readCurrentUserPref(unassignedUserLabel)
 
     /** Whether user identification is currently enabled by the `identify_user` preference. */

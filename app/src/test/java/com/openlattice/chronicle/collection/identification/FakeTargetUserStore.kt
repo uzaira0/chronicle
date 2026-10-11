@@ -44,7 +44,7 @@ class FakeTargetUserStore : TargetUserStore {
     }
 
     override fun readCurrentUserPref(unassignedDefault: String): String =
-        currentUserPref ?: unassignedDefault
+        userTimestamps().lastEntry()?.value ?: unassignedDefault
 
     override fun userQueueDepth(): Int = queueRows.size
 

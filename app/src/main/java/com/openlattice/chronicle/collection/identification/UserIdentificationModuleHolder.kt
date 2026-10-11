@@ -10,6 +10,7 @@ import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.preferences.configuredStudyModuleEnabled
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UserQueueEntry
+import com.openlattice.chronicle.storage.currentUserOr
 import com.openlattice.chronicle.storage.UserStorageQueue
 import java.util.NavigableMap
 import java.util.TreeMap
@@ -32,7 +33,7 @@ import java.util.UUID
  * exactly:
  *  - persistence → [PrefsAndRoomTargetUserStore] over `ChronicleDb.userQueueEntryData()`
  *    and the `chronicle_encrypted_prefs` EncryptedSharedPreferences;
- *  - enabled check → authenticated manifest scope AND the local `identify_user` flag;
+ *  - enabled check → authenticated study settings, consent AND the local `identify_user` flag;
  *  - the `user_unassigned` "Not set" label and the `current_user` pref key are resolved
  *    from string resources once, at build time.
  *
@@ -61,6 +62,7 @@ public object UserIdentificationModuleHolder {
         val identifyUserKey = appContext.getString(R.string.identify_user)
         val unassignedLabel = appContext.getString(R.string.user_unassigned)
         val uploadServerDao = db.uploadServerDao()
+        val collectionLoopStore = com.openlattice.chronicle.collection.state.CollectionLoopStore(db.collectionModuleStateDao())
 
         return UserIdentificationCollectionModule(
             store = PrefsAndRoomTargetUserStore(
@@ -68,7 +70,7 @@ public object UserIdentificationModuleHolder {
                 prefs = prefs,
                 currentUserKey = currentUserKey,
             ),
-            // Final write-path check: the local choice may narrow the authenticated manifest but
+            // Final write-path check: the local choice may narrow the authenticated study scope but
             // can never authorize USER_IDENTIFICATION on its own. Keep only Context-free handles
             // in this app-scoped holder.
             userIdentificationEnabled = {
@@ -88,6 +90,7 @@ public object UserIdentificationModuleHolder {
                             studyId,
                             participantId,
                             CollectionModuleId.USER_IDENTIFICATION,
+                            collectionLoopStore.loadAll()[CollectionModuleId.USER_IDENTIFICATION],
                         )
                     }.getOrDefault(false)
             },
@@ -110,7 +113,7 @@ public object UserIdentificationModuleHolder {
  *    single-row insert; observably identical to the legacy `suspend insertEntry` — one
  *    `userQueue` row written — and keeps this seam plain-JVM mockable);
  *  - [writeCurrentUserPref] → `prefs.edit().putString(current_user, ...).commit()`;
- *  - [readCurrentUserPref] → `prefs.getString(current_user, default)`;
+ *  - [readCurrentUserPref] → the latest committed attribution row, or the unassigned default;
  *  - [userTimestamps] → `UserStorageQueue.getUserTimestamps()` associated into a
  *    `TreeMap`, exactly as `UsageModuleCollectionDelegate` builds its `users` map.
  *
@@ -132,7 +135,7 @@ public class PrefsAndRoomTargetUserStore(
     }
 
     override fun readCurrentUserPref(unassignedDefault: String): String =
-        prefs.getString(currentUserKey, unassignedDefault) ?: unassignedDefault
+        userQueueDao.currentUserOr(unassignedDefault)
 
     override fun userQueueDepth(): Int = userQueueDao.getUserTimestamps().size
 
