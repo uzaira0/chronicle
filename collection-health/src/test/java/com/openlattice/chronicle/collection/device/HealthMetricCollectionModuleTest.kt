@@ -92,6 +92,7 @@ class HealthMetricCollectionModuleTest {
     }
 
     private class FakeDao : HealthMetricSampleDao {
+        override fun getByIds(ids: List<String>): List<HealthMetricSampleEntry> = emptyList()
         override fun getOldest(limit: Int): List<HealthMetricSampleEntry> = emptyList()
         override fun insertAll(samples: List<HealthMetricSampleEntry>) = Unit
         override fun deleteByIds(ids: List<String>) = Unit

@@ -8,7 +8,9 @@ import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.*
+import androidx.work.Data
+import androidx.work.ListenableWorker
+import androidx.work.WorkerParameters
 import androidx.work.impl.utils.taskexecutor.WorkManagerTaskExecutor
 import com.openlattice.chronicle.collection.sink.HealthMetricSampleSink
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
@@ -22,7 +24,8 @@ import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.healthMetricSampleDao
 import java.util.concurrent.TimeoutException
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +43,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.reflect.KClass
+import androidx.work.ForegroundUpdater
+import androidx.work.ProgressUpdater
+import androidx.work.WorkerFactory
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28])
@@ -82,7 +88,8 @@ class HealthConnectUploadLeaseRegressionTest {
         assertTrue(sourceEntered.await(5, TimeUnit.SECONDS))
         val barrier = ResearchPersistenceGate::class.java.getDeclaredField("barrier").apply { isAccessible = true }.get(ResearchPersistenceGate)
         val lock = barrier.javaClass.getDeclaredField("lock").apply { isAccessible = true }.get(barrier) as ReentrantReadWriteLock
-        val writer = pool.submit { lock.writeLock().lockInterruptibly(); try { ResearchPersistenceGate.closeForPersistenceFailure() } finally { lock.writeLock().unlock() } }
+        val writer = pool.submit { lock.writeLock().lockInterruptibly(); try { ResearchPersistenceGate.closeForPersistenceFailure() } finally {
+            lock.writeLock().unlock() } }
         val queueWriter = pool.submit { UploadQueueSingleFlight.withExclusiveMutation {} }
         try {
             // On the old order both writers wait for a worker that is itself waiting for MAIN binding.
@@ -164,8 +171,10 @@ class HealthConnectUploadLeaseRegressionTest {
 
     private fun worker(): ExpansionUploadWorker {
         val executor = Executor { }
-        val progress = Proxy.newProxyInstance(ProgressUpdater::class.java.classLoader, arrayOf(ProgressUpdater::class.java)) { _, _, _ -> error("no progress") } as ProgressUpdater
-        val foreground = Proxy.newProxyInstance(ForegroundUpdater::class.java.classLoader, arrayOf(ForegroundUpdater::class.java)) { _, _, _ -> error("no foreground") } as ForegroundUpdater
+        val progress = Proxy.newProxyInstance(ProgressUpdater::class.java.classLoader, arrayOf(ProgressUpdater::class.java)) { _, _, _ -> error(
+            "no progress") } as ProgressUpdater
+        val foreground = Proxy.newProxyInstance(ForegroundUpdater::class.java.classLoader, arrayOf(ForegroundUpdater::class.java)) { _, _, _ -> error(
+            "no foreground") } as ForegroundUpdater
         val factory = object : WorkerFactory() {
             override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker? = null
         }

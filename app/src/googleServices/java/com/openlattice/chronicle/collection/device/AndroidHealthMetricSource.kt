@@ -1,9 +1,10 @@
 package com.openlattice.chronicle.collection.device
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.BodyTemperatureRecord
@@ -22,6 +23,8 @@ import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.openlattice.chronicle.collection.HealthMetricType
 import com.openlattice.chronicle.collection.HealthConnectRecordType
 import java.time.Instant
@@ -34,8 +37,8 @@ private const val KEY_LAST_END = "last_end_millis"
 /**
  * Production [HealthMetricSource] over the system Health Connect store. Reads only the record types
  * the participant has granted, only over the window since the last successful read (a
- * SharedPreferences checkpoint). A no-op (empty) when Health Connect is unavailable or no read
- * permission is granted. Read-only — Chronicle never writes health data back.
+ * SharedPreferences checkpoint). Unavailable or denied reads skip without advancing the checkpoint.
+ * Read-only — Chronicle never writes health data back.
  *
  * The Health Connect client API suspends; [awaitHealthConnect] bounds each request while the
  * collection worker calls this off the main thread.
@@ -48,7 +51,7 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
             val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val live = synchronized(sources) { sources.keys.filter { it.appContext == context.applicationContext } }
             live.forEach { it.readCoordinator.reject(); it.readScope = null; it.pendingSeen = emptySet() }
-            check(prefs.edit().clear().commit()) { "Health Connect checkpoint erasure failed" }
+            checkLocalStoreWrite(prefs.edit().clear().commit()) { "Health Connect checkpoint erasure failed" }
         }
     }
 
@@ -70,16 +73,19 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
                     if (current != scope()) return@withReadLease null
                     val initial = current.second == 0L && current.first.substringAfterLast(':').toLongOrNull() in 0L..1L
                     if (initial && prefs.contains(KEY_LAST_END) && !prefs.contains("consent_scope")) {
-                        check(prefs.edit().putString("consent_scope", current.first).commit()) {
+                        checkLocalStoreWrite(prefs.edit().putString("consent_scope", current.first).commit()) {
                             "Unable to adopt Health Connect checkpoint"
                         }
                     }
-                    prefs.getLong(KEY_LAST_END, 0L).takeIf { prefs.getString("consent_scope", null) == current.first }
+                    prefs.getLong(KEY_LAST_END, 0L).takeIf {
+                        prefs.contains(KEY_LAST_END) && prefs.getString("consent_scope", null) == current.first
+                    }
                 }
             }
 
             override fun write(endMillis: Long) {
-                check(prefs.edit().putLong(KEY_LAST_END, endMillis).putString("consent_scope", readScope?.first).putStringSet("seen_records", pendingSeen).commit()) {
+                checkLocalStoreWrite(prefs.edit().putLong(KEY_LAST_END, endMillis).putString("consent_scope", readScope?.first).putStringSet(
+                    "seen_records", pendingSeen).commit()) {
                     "Unable to persist Health Connect read checkpoint"
                 }
             }
@@ -89,12 +95,7 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
 
     init { synchronized(sources) { sources[this] = Unit } }
 
-    private var clientProvider: () -> HealthConnectClient? = {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
-            HealthConnectClient.getSdkStatus(appContext) != HealthConnectClient.SDK_AVAILABLE) null
-        else runCatching { HealthConnectClient.getOrCreate(appContext) }
-            .onFailure { Log.w(TAG, "Health Connect client creation failed: ${it.javaClass.simpleName}") }.getOrNull()
-    }
+    private var clientProvider: () -> HealthConnectClient? = { HealthConnectPermissions.clientIfAvailable(appContext) }
 
     @Synchronized
     override fun read(): List<HealthMetricReading> {
@@ -118,11 +119,7 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
         val client = clientProvider() ?: return emptyList()
 
         val now = System.currentTimeMillis()
-        val granted: Set<String> = runCatching {
-            grantedHealthConnectPermissions(client)
-        }.onFailure { Log.w(TAG, "Health Connect permission query failed: ${it.javaClass.simpleName}") }
-            .getOrDefault(emptySet())
-        if (granted.isEmpty()) return emptyList()
+        val granted = readableGrants(client) ?: return emptyList()
 
         return readCoordinator.read(now) { start, end ->
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(start), Instant.ofEpochMilli(end))
@@ -164,9 +161,20 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
         }
     }
 
+    /** Grants usable now, or null when none are granted or the app is in the background without background read. */
+    private fun readableGrants(client: HealthConnectClient): Set<String>? {
+        val granted: Set<String> = runCatching {
+            grantedHealthConnectPermissions(client)
+        }.onFailure { Log.w(TAG, "Health Connect permission query failed: ${it.javaClass.simpleName}") }
+            .getOrDefault(emptySet())
+        if (granted.isEmpty()) return null
+        val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        return granted.takeIf { foreground || HealthConnectPermissions.canReadInBackground(client, granted) }
+    }
+
     @Synchronized
     override fun acknowledgeRead() {
-        // An early-return read (no scope, client or grant) never reached the checkpoint, so there
+        // An early-return read with no scope never reached the checkpoint, so there
         // is nothing to acknowledge; guarding a null scope would refuse, fail the module and back
         // off the whole worker. A window retired by erasure still has its scope and is refused.
         if (readScope == null) return
@@ -175,11 +183,7 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
             val origin = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
                 .guardForRetainedRegistration(appContext, module, readScope?.first)
             if (!origin.persist {
-                    if (incompletePermissions) {
-                        check(checkpointPrefs.edit().putString("consent_scope", readScope?.first)
-                            .putStringSet("seen_records", pendingSeen).commit()) { "Health Connect deduplication write failed" }
-                        readCoordinator.reject()
-                    } else readCoordinator.acknowledge()
+                    readCoordinator.acknowledge(advance = !incompletePermissions)
                 }) {
                 readCoordinator.reject()
                 error("Health Connect checkpoint persistence was refused")
@@ -204,6 +208,11 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
             incompletePermissions = true
             return emptyList()
         }
+        if (type == SkinTemperatureRecord::class && !HealthConnectPermissions.isFeatureAvailable(
+                client, HealthConnectFeatures.FEATURE_SKIN_TEMPERATURE)) {
+            incompletePermissions = true
+            return emptyList()
+        }
         return try {
             awaitHealthConnect {
                 readAllHealthMetricPages { pageToken ->
@@ -213,6 +222,12 @@ public class AndroidHealthMetricSource(context: Context) : HealthMetricSource {
                     HealthMetricPage(response.records, response.pageToken)
                 }
             }
+        } catch (e: SecurityException) {
+            // Access lost mid-read (grant revoked, app left the foreground): skip without advancing.
+            // https://developer.android.com/health-and-fitness/health-connect/read-data
+            Log.w(TAG, "readRecords(${type.simpleName}) refused: access lost", e)
+            incompletePermissions = true
+            emptyList()
         } catch (e: Exception) {
             Log.w(TAG, "readRecords(${type.simpleName}) failed: ${e.javaClass.simpleName}")
             throw e

@@ -117,6 +117,16 @@ class HealthMetricReadCoordinatorTest {
         }
     }
 
+    @Test
+    fun pagerTreatsEmptyTokenAsCompletion() = runBlocking {
+        var pages = 0
+        assertEquals(listOf(1), readAllHealthMetricPages {
+            pages++
+            HealthMetricPage(listOf(1), "")
+        })
+        assertEquals(1, pages)
+    }
+
     private class FakeCheckpoint(initial: Long? = null) : HealthMetricCheckpoint {
         var value: Long? = initial
         var writes: Int = 0

@@ -1,17 +1,12 @@
 package com.openlattice.chronicle.collection.device
 
-import android.content.Context
 import com.openlattice.chronicle.collection.AndroidHealthMetricEvent
-import com.openlattice.chronicle.collection.CollectionModuleDiagnostics
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.CollectionPrivacyClass
 import com.openlattice.chronicle.collection.HealthMetricType
 import com.openlattice.chronicle.collection.core.CollectionClock
 import com.openlattice.chronicle.collection.core.CollectionLog
-import com.openlattice.chronicle.collection.core.CollectionModuleStatus
-import com.openlattice.chronicle.collection.core.CollectionWindow
-import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.core.PullCollectionModule
 import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.collection.sink.HealthMetricSampleSink
 import com.openlattice.chronicle.storage.HealthMetricSampleEntry
@@ -23,48 +18,22 @@ import java.util.TimeZone
 import java.util.UUID
 
 private const val TAG = "HealthMetricCollectionModule"
-private const val QUEUE_DEPTH_UNAVAILABLE = -1
 
 /**
  * The `health_connect` collection module — a **pull-style** module mirroring
  * `BatteryTelemetryCollectionModule`, persisting *N* rows per [sample] (one per Health Connect
  * record the [HealthMetricSource] returns for the window since the last poll). HEALTH_METRICS-class,
- * opt-in. A no-op when Health Connect is absent or no read permission is granted.
+ * opt-in. Source failures are reported without acknowledging the read window.
  */
 public class HealthMetricCollectionModule(
     private val sink: HealthMetricSampleSink,
     private val source: HealthMetricSource,
     private val enrolled: () -> Boolean,
-    private val clock: CollectionClock = CollectionClock.SYSTEM,
+    clock: CollectionClock = CollectionClock.SYSTEM,
     private val log: CollectionLog = CollectionLog.LOGCAT,
-) : DataCollectionModule {
+) : PullCollectionModule(CollectionModuleId.HEALTH_CONNECT, clock, sink::queueDepth) {
 
-    override val id: CollectionModuleId = CollectionModuleId.HEALTH_CONNECT
-    override val privacyClass: CollectionPrivacyClass = id.privacyClass
-
-    private data class SampleState(
-        val lastRunEpochMs: Long?,
-        val lastResult: ModuleResult,
-        val itemsCollected: Int,
-        val lastError: String?,
-    )
-
-    @Volatile
-    private var state: SampleState = SampleState(null, ModuleResult.Skipped("not yet run"), 0, null)
-
-    public fun sample(): ModuleResult {
-        val now = clock.nowEpochMs()
-        val result = runSample(now)
-        state = SampleState(
-            lastRunEpochMs = now,
-            lastResult = result,
-            itemsCollected = if (result is ModuleResult.Ok) result.items else 0,
-            lastError = if (result is ModuleResult.Failed) result.redactedMessage else null,
-        )
-        return result
-    }
-
-    private fun runSample(now: Long): ModuleResult {
+    override fun runSample(now: Long): ModuleResult {
         if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
 
         val observation = sink.captureAdmission()
@@ -75,9 +44,9 @@ public class HealthMetricCollectionModule(
             return ModuleResult.Failed(e, redactedMessage = "health metric source read failed: ${e.javaClass.simpleName}")
         }
         if (readings.isEmpty()) {
-            val result = writeSourceObservation(observation) { acknowledgeSourceRead(items = 0) }
+            val result = writeSourceObservation(observation) { ModuleResult.Ok(0) }
             if (result !is ModuleResult.Ok) rejectSourceRead()
-            return result
+            return if (result is ModuleResult.Ok) acknowledgeSourceRead(items = 0) else result
         }
 
         val tsString = OffsetDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneOffset.UTC).toString()
@@ -102,16 +71,12 @@ public class HealthMetricCollectionModule(
             return ModuleResult.Failed(e, redactedMessage = "health metric mapping failed: ${e.javaClass.simpleName}")
         }
 
-        val result = writeSourceObservation(observation) {
-            when (val written = sink.write(entries)) {
-                is ModuleResult.Ok -> acknowledgeSourceRead(entries.size)
-                else -> written
-            }
-        }
+        val result = writeSourceObservation(observation) { sink.write(entries) }
         return when (val writeResult = result) {
             is ModuleResult.Ok -> {
                 log.info(TAG, "Persisted ${entries.size} health metric record(s)")
-                writeResult
+                // The admission guard has committed the outer queue transaction before this checkpoint.
+                acknowledgeSourceRead(entries.size)
             }
             is ModuleResult.Failed -> {
                 rejectSourceRead()
@@ -129,7 +94,7 @@ public class HealthMetricCollectionModule(
         observation: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard,
         write: () -> ModuleResult,
     ): ModuleResult = try {
-        observation.writeObservation(write)
+        observation.writeObservation(write = write)
     } catch (e: Exception) {
         log.error(TAG, "Health-metric storage admission failed", e)
         ModuleResult.Failed(e, redactedMessage = "health metric admission failed: ${e.javaClass.simpleName}")
@@ -149,31 +114,6 @@ public class HealthMetricCollectionModule(
             .onFailure { log.error(TAG, "Failed to reject Health Connect read window", it) }
     }
 
-    override fun status(): CollectionModuleStatus = when (state.lastResult) {
-        is ModuleResult.Failed -> CollectionModuleStatus.FAILED
-        is ModuleResult.Ok -> CollectionModuleStatus.IDLE
-        is ModuleResult.Retry -> CollectionModuleStatus.DEGRADED
-        is ModuleResult.Skipped -> CollectionModuleStatus.IDLE
-    }
-
-    override fun diagnostics(): CollectionModuleDiagnostics {
-        val snapshot = state
-        return CollectionModuleDiagnostics(
-            moduleId = id,
-            privacyClass = privacyClass,
-            lastRunEpochMs = snapshot.lastRunEpochMs,
-            lastResult = snapshot.lastResult.label,
-            itemsCollected = snapshot.itemsCollected,
-            queueDepth = runCatching { sink.queueDepth() }.getOrDefault(QUEUE_DEPTH_UNAVAILABLE),
-            lastError = snapshot.lastError,
-            redactedParticipantRef = null,
-        )
-    }
-
-    override fun poll(context: Context, window: CollectionWindow): ModuleResult = sample()
-    override fun start(context: Context): ModuleResult = ModuleResult.Skipped("health_connect is pull-style")
-    override fun stop(context: Context): ModuleResult = ModuleResult.Skipped("health_connect is pull-style")
-    override fun flush(context: Context): ModuleResult = ModuleResult.Skipped("health_connect buffers nothing")
 }
 
 /** Stable local/server dedup key for retries of the same Health Connect record. */
@@ -187,6 +127,7 @@ public fun stableHealthMetricSampleId(reading: HealthMetricReading): String {
         reading.value.toBits().toString(),
         reading.unit,
     ).joinToString("\u001f")
+    // nosemgrep: chronicle-uuid-from-string -- Source record identity must remain stable when Health Connect overlap windows reread the same record.
     return UUID.nameUUIDFromBytes(identity.toByteArray(StandardCharsets.UTF_8)).toString()
 }
 

@@ -8,6 +8,9 @@ import androidx.room.Query
 /** Room DAO for `health_metric_samples`. Duplicate ids de-duplicate (IGNORE). */
 @Dao
 interface HealthMetricSampleDao {
+    @Query("SELECT * FROM health_metric_samples WHERE id IN (:ids)")
+    fun getByIds(ids: List<String>): List<HealthMetricSampleEntry>
+
     @Query("SELECT * FROM health_metric_samples ORDER BY timestamp ASC LIMIT :limit")
     fun getOldest(limit: Int): List<HealthMetricSampleEntry>
 

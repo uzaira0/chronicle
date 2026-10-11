@@ -52,15 +52,15 @@ public class HealthMetricReadCoordinator(
         } finally { synchronized(this) { reading = false } }
     }
 
-    /** Persists the pending window after its records have been durably queued. */
+    /** A partial grant retains the prior window, or anchors the first retry to this read. */
     @Synchronized
-    public fun acknowledge() {
+    public fun acknowledge(advance: Boolean = true) {
         val endMillis = pendingEndMillis ?: return
         if (pendingScope != consentScope() || pendingCheckpoint != checkpoint.read()) {
             reject()
             return
         }
-        checkpoint.write(endMillis)
+        checkpoint.write(if (advance) endMillis else pendingCheckpoint ?: endMillis)
         pendingEndMillis = null
         pendingScope = null
         pendingCheckpoint = null
@@ -92,7 +92,7 @@ public suspend fun <T> readAllHealthMetricPages(
     do {
         val page = readPage(pageToken)
         records += page.records
-        pageToken = page.nextPageToken
+        pageToken = page.nextPageToken?.takeIf { it.isNotEmpty() }
         check(pageToken == null || consumedTokens.add(pageToken)) {
             "Health Connect returned a repeated page token"
         }
