@@ -9,7 +9,11 @@ import android.os.Looper
 import android.view.View
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.*
+import androidx.work.Data
+import androidx.work.ListenableWorker
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import androidx.work.impl.utils.taskexecutor.WorkManagerTaskExecutor
 import com.openlattice.chronicle.api.ChronicleStudyApi
 import com.openlattice.chronicle.api.EnrollmentPreviewResponse
@@ -34,7 +38,10 @@ import java.time.OffsetDateTime
 import java.util.UUID
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicInteger
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -43,6 +50,10 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import androidx.work.ForegroundUpdater
+import androidx.work.ProgressUpdater
+import androidx.work.WorkerFactory
+import androidx.work.Configuration
 
 /** Runs on the actual Play, Open and Research source graphs, starting with empty local stores. */
 @RunWith(RobolectricTestRunner::class)
@@ -65,6 +76,7 @@ class FreshEnrollmentNavigationRegressionTest {
     }
 
     @Test fun row3_freshInstallEnrollsAndDoneReachesMainWithCollectionScheduled() {
+        val needsArtifactBoundary = BuildConfig.DISTRIBUTION_CHANNEL in setOf("PLAY", "AMAZON")
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
         val prefs = context.getSharedPreferences("fresh-enrollment-navigation", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
@@ -114,7 +126,10 @@ class FreshEnrollmentNavigationRegressionTest {
             val disclosureIntent = shadowOf(enrollment).nextStartedActivityForResult.intent
             val disclosureController = Robolectric.buildActivity(StudyDisclosureActivity::class.java, disclosureIntent).setup()
             val disclosure = disclosureController.get()
+            assertFalse(disclosure.findViewById<View>(R.id.acceptStudyDisclosureButton).isEnabled)
+            disclosure.findViewById<com.google.android.material.checkbox.MaterialCheckBox>(R.id.studyEligibilityAttestation).isChecked = true
             assertTrue(disclosure.findViewById<View>(R.id.acceptStudyDisclosureButton).performClick())
+            assertEquals(Activity.RESULT_OK, shadowOf(disclosure).resultCode)
             shadowOf(enrollment).receiveResult(disclosureIntent, shadowOf(disclosure).resultCode, shadowOf(disclosure).resultIntent)
             disclosureController.pause().stop().destroy()
             val orientationIntent = shadowOf(enrollment).nextStartedActivityForResult.intent
@@ -129,7 +144,7 @@ class FreshEnrollmentNavigationRegressionTest {
             waitUntil { enrollment.findViewById<View>(R.id.doneButton).visibility == View.VISIBLE }
             assertEquals(1, enrollments.get())
             assertTrue(worker { db.uploadServerDao().getConfiguredServer()!!.enrollmentSetupComplete })
-            if (BuildConfig.DISTRIBUTION_CHANNEL == "PLAY") {
+            if (needsArtifactBoundary) {
                 assertFalse("fresh Play collection stays closed until boundary cleanup", MinimalPlayArtifactState.isReady(context))
                 assertFalse(ResearchPersistenceGate.collectsNow(context, module))
             }
@@ -145,7 +160,7 @@ class FreshEnrollmentNavigationRegressionTest {
             val wm = WorkManager.getInstance(context)
             assertTrue(wm.getWorkInfosForUniqueWork(CHRONICLE_SYNC_WORK_NAME).get(5, TimeUnit.SECONDS).isNotEmpty())
             assertTrue(wm.getWorkInfosForUniqueWork(EXPANSION_COLLECTION_WORK_NAME).get(5, TimeUnit.SECONDS).isNotEmpty())
-            if (BuildConfig.DISTRIBUTION_CHANNEL == "PLAY") {
+            if (needsArtifactBoundary) {
                 val boundary = wm.getWorkInfosForUniqueWork("minimal_play_artifact_boundary").get(5, TimeUnit.SECONDS).single()
                 assertEquals(WorkInfo.State.ENQUEUED, boundary.state)
                 assertEquals(ListenableWorker.Result.success(), worker { MinimalPlayBoundaryWorker(context, workerParameters()).doWork() })

@@ -1,13 +1,17 @@
 package com.openlattice.chronicle.services.notifications
 
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import androidx.work.*
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequest
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import com.google.gson.Gson
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.api.ChronicleStudyApi
@@ -34,6 +38,7 @@ import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 import org.apache.olingo.commons.api.edm.FullQualifiedName
 import org.dmfs.rfc5545.recur.RecurrenceRule
 import com.openlattice.chronicle.serialization.ChronicleCallException
+import java.io.IOException
 import java.time.Instant
 import java.time.ZoneId
 import java.util.*
@@ -130,6 +135,9 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
             Log.i(javaClass.name, "Exception happened! ", e)
             LocalTelemetry.recordException(e)
             LocalTelemetry.logEvent(TelemetryEvents.NOTIFICATIONS_FAILURE, null)
+            if (generateSequence<Throwable>(e) { it.cause }.any {
+                    it is IOException || it is ChronicleCallException && it.code in 502..504
+                }) throw e
             return Result.failure()
         }
         return if (armingFailed) Result.retry() else Result.success()
@@ -177,7 +185,7 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
             val currentCodes = notifications.map(NotificationDetails::requestCode).toSet()
             val staleCodes = enrollmentSettings.getMobileReminderRequestCodes() - currentCodes
             staleCodes.forEach(::cancelScheduledNotificationByRequestCode)
-            enrollmentSettings.setMobileReminderRequestCodes(currentCodes)
+            enrollmentSettings.setMobileReminderRequestCodes(currentCodes intersect enrollmentSettings.getMobileReminderRequestCodes())
         }
         enrollmentSettings.setAwarenessNotificationsEnabled(
             notifications.any { it.type == NotificationType.AWARENESS }
@@ -267,7 +275,8 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
                 ReminderArmOutcome.Failed -> armingFailed = true
             }
         } catch (e: Exception) {
-            Log.i(javaClass.name, "caught exception", e)
+            armingFailed = true
+            reportReminderArmFailure(applicationContext, notification, reminderAlarmIntent(applicationContext), e)
         }
     }
 
@@ -295,7 +304,7 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
         cancelReminderByRequestCode(applicationContext, requestCode)
 
     private fun createNotificationIntent(notification: NotificationDetails): Intent {
-        return Intent(applicationContext, SurveyNotificationsReceiver::class.java).apply {
+        return reminderAlarmIntent(applicationContext).apply {
             val scope = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.observationScope(
                 applicationContext, com.openlattice.chronicle.collection.CollectionModuleId.QUESTIONNAIRE,
             ) ?: error("Reminder enrollment retired")
@@ -303,7 +312,6 @@ class NotificationsWorker(context: Context, workerParameters: WorkerParameters) 
             putExtra(NOTIFICATION_DETAILS, Gson().toJson(notification))
             putExtra(STUDY_ID, enrollmentSettings.getStudyId().toString())
             putExtra(PARTICIPANT_ID, enrollmentSettings.getParticipantId())
-            action = SURVEY_NOTIFICATION_ACTION
         }
     }
 }
@@ -322,7 +330,7 @@ internal fun fetchReminderSchedule(
 ): MobileReminderConfiguration = try {
     api.getMobileReminderSchedule(studyId, participantId, sourceDeviceId, apiKey)
 } catch (error: ChronicleCallException) {
-    if (error.code == 401 || error.code == 403 || error.code == 429) throw error
+    if (error.code != 404 && error.code != 405 && error.code != 500) throw error
     api.getMobileReminderConfiguration(studyId, participantId, sourceDeviceId, apiKey)
 }
 
@@ -390,22 +398,7 @@ internal fun armReminderOutcome(
         val now = reminderClock()
         val zone = TimeZone.getDefault().id
         val boot = bootCount(context)
-        val triggerAt = if (consumedAtMillis != null) {
-            getNextRecurringDate(notification.recurrenceRule, maxOf(consumedAtMillis, now))
-        } else {
-            val storedAt = prefs.getLong(key, 0L)
-            val next = getNextRecurringDate(notification.recurrenceRule, now)
-            val sameBoot = prefs.contains(bootKey(key)) && prefs.getInt(bootKey(key), 0) == boot
-            when {
-                storedAt > now && next != null && storedAt <= next &&
-                    prefs.getString(ruleKey(key), null) == notification.recurrenceRule &&
-                    prefs.getString(zoneKey(key), null) == zone -> storedAt
-                // An overdue alarm may still be on its way (inexact delivery), but a reboot dropped it;
-                // past the grace it was lost (force-stop) or declined (study paused).
-                sameBoot && storedAt > 0L && now - storedAt in 0 until REMINDER_OVERDUE_GRACE_MS -> return@synchronized ReminderArmOutcome.NotDue
-                else -> next
-            }
-        }
+        val triggerAt = selectReminderOccurrence(notification, prefs, key, now, zone, boot, consumedAtMillis)
         if (triggerAt == null || triggerAt <= now) return@synchronized ReminderArmOutcome.NotDue
 
         val localDate = Instant.ofEpochMilli(triggerAt).atZone(ZoneId.of(zone)).toLocalDate().toString()
@@ -419,18 +412,8 @@ internal fun armReminderOutcome(
             alarmIntent,
             getPendingIntentMutabilityFlag(PendingIntent.FLAG_UPDATE_CURRENT),
         )
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val canScheduleExactAlarms = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            alarmManager.canScheduleExactAlarms()
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !canScheduleExactAlarms) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                LocalTelemetry.logEvent(TelemetryEvents.EXACT_ALARM_PERMISSION_DENIED, null)
-            }
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
-        } else {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
-        }
-        check(
+        if (!scheduleReminderAlarm(context, triggerAt, pendingIntent)) return@synchronized ReminderArmOutcome.NotDue
+        checkLocalStoreWrite(
             prefs.edit().putLong(key, triggerAt).putString(ruleKey(key), notification.recurrenceRule)
                 .putString(zoneKey(key), zone).putInt(bootKey(key), boot).commit(),
         ) { "Unable to persist reminder occurrence" }
@@ -439,7 +422,44 @@ internal fun armReminderOutcome(
         ReminderArmOutcome.Armed(triggerAt)
     }
 } catch (error: Exception) {
-    Log.w(TAG, "Unable to arm reminder occurrence", error)
+    reportReminderArmFailure(context, notification, intent, error)
+    ReminderArmOutcome.Failed
+}
+
+private fun selectReminderOccurrence(
+    notification: NotificationDetails,
+    prefs: android.content.SharedPreferences,
+    key: String,
+    now: Long,
+    zone: String,
+    boot: Int,
+    consumedAtMillis: Long?,
+): Long? {
+    return if (consumedAtMillis != null) {
+        getNextRecurringDate(notification.recurrenceRule, maxOf(consumedAtMillis, now))
+    } else {
+        val storedAt = prefs.getLong(key, 0L)
+        val next = getNextRecurringDate(notification.recurrenceRule, now)
+        val sameBoot = prefs.contains(bootKey(key)) && prefs.getInt(bootKey(key), 0) == boot
+        when {
+            storedAt > now && next != null && storedAt <= next &&
+                prefs.getString(ruleKey(key), null) == notification.recurrenceRule &&
+                prefs.getString(zoneKey(key), null) == zone -> storedAt
+            // An overdue alarm may still be on its way (inexact delivery), but a reboot dropped it;
+            // past the grace it was lost (force-stop) or declined (study paused).
+            sameBoot && storedAt > 0L && now - storedAt in 0 until REMINDER_OVERDUE_GRACE_MS -> null
+            else -> next
+        }
+    }
+}
+
+internal fun reminderAlarmIntent(context: Context) =
+    Intent(context, SurveyNotificationsReceiver::class.java).setAction(SURVEY_NOTIFICATION_ACTION)
+
+private fun reportReminderArmFailure(context: Context, notification: NotificationDetails, intent: Intent, error: Exception) {
+    Log.e(TAG, "Unable to arm reminder occurrence: ${error.javaClass.simpleName}")
+    val settings = EnrollmentSettings(context)
+    settings.setMobileReminderRequestCodes(settings.getMobileReminderRequestCodes() - notification.requestCode())
     runCatching {
         val pending = PendingIntent.getBroadcast(context, notification.requestCode(), intent,
             getPendingIntentMutabilityFlag(PendingIntent.FLAG_NO_CREATE))
@@ -457,9 +477,11 @@ internal fun armReminderOutcome(
             val scope = com.openlattice.chronicle.collection.state.ResearchErasureFence.enrollmentKey(owner)
             val previous = prefs.getString(key, null)
             val episode = previous?.takeIf { it.startsWith(scope + "|") }
-                ?: "$scope|${UUID.randomUUID()}".also { check(prefs.edit().putString(key, it).commit()) }
+                ?: "$scope|${UUID.randomUUID()}".also { checkLocalStoreWrite(prefs.edit().putString(key, it).commit()) }
             com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore.of(context).recordOperationalOnce(
+                // nosemgrep: chronicle-uuid-from-string -- Persisted reminder failure episode needs one diagnostic ID across subsequent arm attempts.
                 UUID.nameUUIDFromBytes(episode.toByteArray()).toString(),
+
                 com.openlattice.chronicle.services.upload.LocalUploadModuleFamily.APP_RUNTIME,
                 com.openlattice.chronicle.services.upload.LocalOperationalIssue.COLLECTION_ACCESS_MISSING, java.time.OffsetDateTime.now(),
                 ownerScope = "${owner.studyId}:${owner.participantId}",
@@ -467,7 +489,6 @@ internal fun armReminderOutcome(
             true
         }
     }
-    ReminderArmOutcome.Failed
 }
 
 private fun ruleKey(key: String) = "$key.rule"
@@ -479,9 +500,7 @@ private fun bootCount(context: Context) =
 
 internal fun cancelReminderByRequestCode(context: Context, requestCode: Int) {
         androidx.core.app.NotificationManagerCompat.from(context).cancel(SURVEY_NOTIFICATION_TAG, requestCode)
-        val intent = Intent(context, SurveyNotificationsReceiver::class.java).apply {
-            action = SURVEY_NOTIFICATION_ACTION
-        }
+        val intent = reminderAlarmIntent(context)
         val pendingIntent = PendingIntent.getBroadcast(
             context,
             requestCode,
@@ -503,7 +522,7 @@ internal fun clearReminderAlarmState(context: Context, requestCode: Int? = null)
     if (requestCode == null) editor.clear() else requestCode.toString().let {
         editor.remove(it).remove(ruleKey(it)).remove(zoneKey(it)).remove(bootKey(it))
     }
-    check(editor.commit()) { "Unable to clear reminder occurrence" }
+    checkLocalStoreWrite(editor.commit()) { "Unable to clear reminder occurrence" }
 }
 
 fun scheduleNotificationsWorker(context: Context) {
@@ -530,4 +549,4 @@ fun scheduleNotificationsWorker(context: Context) {
     )
 }
 
-private const val NOTIFICATIONS_WORK_NAME = "notifications"
+internal const val NOTIFICATIONS_WORK_NAME = "notifications"

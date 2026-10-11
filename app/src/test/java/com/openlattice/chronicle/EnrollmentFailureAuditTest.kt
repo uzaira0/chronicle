@@ -14,7 +14,9 @@ import com.openlattice.chronicle.api.EnrollmentPreviewResponse
 import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.utils.Utils
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -38,8 +40,10 @@ class EnrollmentFailureAuditTest {
         com.openlattice.chronicle.collection.state.ResearchPersistenceGate.resetAfterLocalStoreRecovery()
         val prefs = context.getSharedPreferences("enrollment-failure-audit", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
-        com.openlattice.chronicle.preferences.EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(com.openlattice.chronicle.preferences.EncryptedPrefsHelper, prefs)
-        val db = androidx.room.Room.inMemoryDatabaseBuilder(context, com.openlattice.chronicle.storage.ChronicleDb::class.java).allowMainThreadQueries().build()
+        com.openlattice.chronicle.preferences.EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(
+            com.openlattice.chronicle.preferences.EncryptedPrefsHelper, prefs)
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(context,
+            com.openlattice.chronicle.storage.ChronicleDb::class.java).allowMainThreadQueries().build()
         com.openlattice.chronicle.storage.ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
     }
     private fun await(condition: () -> Boolean) {
@@ -50,15 +54,23 @@ class EnrollmentFailureAuditTest {
         installEmptyStores()
         val preview = ChronicleJson.moshi.adapter(EnrollmentPreviewResponse::class.java)
             .fromJson(javaClass.getResource("/enrollment-preview.json")!!.readText())!!.let {
-                it.copy(manifest = it.manifest.copy(serverOrigin = "https://localhost"))
+                it.copy(manifest = it.manifest.copy(serverOrigin = "https://localhost",
+                    collectionSettings = it.manifest.collectionSettings.copy(
+                        modules = com.openlattice.chronicle.collection.CollectionModuleId.values().associateWith { module ->
+                            com.openlattice.chronicle.collection.CollectionModuleSetting(
+                                enabled = module == com.openlattice.chronicle.collection.CollectionModuleId.UPLOAD_TELEMETRY)
+                        },
+                    )))
             }
         var attempts = 0
         installApi { method -> if (method == "getEnrollmentPreview") {
             attempts++; if (attempts == 1) throw IOException("unique-private-transport-sentinel") else preview
         } else null }
         val code = "a".repeat(40)
-        val link = Uri.parse("chronicle://enroll?studyId=${preview.manifest.studyId}&participantId=${preview.manifest.participantId}&serverUrl=https%3A%2F%2Flocalhost#accessCode=$code")
-        val controller = Robolectric.buildActivity(Enrollment::class.java, Intent(context, Enrollment::class.java).setAction(Intent.ACTION_VIEW).setData(link)).setup()
+        val link = Uri.parse(
+            "chronicle://enroll?studyId=${preview.manifest.studyId}&participantId=${preview.manifest.participantId}&serverUrl=https%3A%2F%2Flocalhost#accessCode=$code")
+        val controller = Robolectric.buildActivity(Enrollment::class.java, Intent(context, Enrollment::class.java).setAction(
+            Intent.ACTION_VIEW).setData(link)).setup()
         val activity = controller.get()
         try {
             val button = activity.findViewById<View>(R.id.button)

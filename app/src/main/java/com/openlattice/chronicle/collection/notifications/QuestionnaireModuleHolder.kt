@@ -4,7 +4,6 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
 import com.google.gson.Gson
 import com.openlattice.chronicle.R
@@ -15,7 +14,8 @@ import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.receivers.lifecycle.SurveyNotificationsReceiver
 import com.openlattice.chronicle.services.notifications.NOTIFICATION_DETAILS
 import com.openlattice.chronicle.services.notifications.NotificationDetails
-import com.openlattice.chronicle.services.notifications.SURVEY_NOTIFICATION_ACTION
+import com.openlattice.chronicle.services.notifications.scheduleReminderAlarm
+import com.openlattice.chronicle.services.notifications.reminderAlarmIntent
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 import org.dmfs.rfc5545.DateTime
 import org.dmfs.rfc5545.recur.RecurrenceRule
@@ -126,37 +126,13 @@ public object QuestionnaireModuleHolder {
             )
 
             val date = getNextRecurringDate(notification.recurrenceRule)
-                ?: throw IllegalStateException("No next occurrence for recurrence rule")
+                ?: error("No next occurrence for recurrence rule")
             Log.i(TAG, "notification time: $date")
 
             val calendar = Calendar.getInstance()
             calendar.time = date
 
-            val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
-            val canScheduleExactAlarms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                alarmManager.canScheduleExactAlarms()
-            } else {
-                false
-            }
-
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !canScheduleExactAlarms) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    Log.e(TAG, "Exact alarm permission not granted... falling back to inexact")
-                }
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    calendar.timeInMillis,
-                    pendingIntent,
-                )
-                return
-            }
-
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                calendar.timeInMillis,
-                pendingIntent,
-            )
+            scheduleReminderAlarm(appContext, calendar.timeInMillis, pendingIntent)
         }
 
         /**
@@ -188,11 +164,10 @@ public object QuestionnaireModuleHolder {
          */
         private fun createNotificationIntent(notification: NotificationDetails): Intent {
             val enrollmentSettings = EnrollmentSettings(appContext)
-            return Intent(appContext, SurveyNotificationsReceiver::class.java).apply {
+            return reminderAlarmIntent(appContext).apply {
                 putExtra(NOTIFICATION_DETAILS, Gson().toJson(notification))
                 putExtra(STUDY_ID, enrollmentSettings.getStudyId().toString())
                 putExtra(PARTICIPANT_ID, enrollmentSettings.getParticipantId())
-                action = SURVEY_NOTIFICATION_ACTION
             }
         }
 

@@ -10,6 +10,7 @@ import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
 import com.openlattice.chronicle.collection.core.DataCollectionModule
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.core.collectionStatus
 
 private const val TAG = "QuestionnaireCollectionModule"
 
@@ -207,12 +208,7 @@ public class QuestionnaireCollectionModule(
     public fun cancelFor(schedule: QuestionnaireSchedule, enrolled: Boolean): Boolean =
         !schedule.active || !enrolled
 
-    override fun status(): CollectionModuleStatus = when (lastResult) {
-        is ModuleResult.Failed -> CollectionModuleStatus.FAILED
-        is ModuleResult.Ok -> CollectionModuleStatus.IDLE
-        is ModuleResult.Retry -> CollectionModuleStatus.DEGRADED
-        is ModuleResult.Skipped -> CollectionModuleStatus.IDLE
-    }
+    override fun status(): CollectionModuleStatus = lastResult.collectionStatus
 
     override fun diagnostics(): CollectionModuleDiagnostics = CollectionModuleDiagnostics(
         moduleId = id,

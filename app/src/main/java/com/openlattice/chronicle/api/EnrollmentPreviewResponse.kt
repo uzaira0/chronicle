@@ -19,6 +19,7 @@ data class MobileEnrollmentManifest(
     val settingsVersion: Int,
     val issuedAt: OffsetDateTime,
     val expiresAt: OffsetDateTime,
+    val withdrawalMode: com.openlattice.chronicle.study.WithdrawalMode = com.openlattice.chronicle.study.WithdrawalMode.ERASE,
 ) {
     init {
         require(schemaVersion == 1) { "Unsupported enrollment manifest schema: $schemaVersion" }

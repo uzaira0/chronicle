@@ -12,6 +12,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
+import com.openlattice.chronicle.collection.capability.DistributionChannel
 import com.openlattice.chronicle.preferences.DeviceInstanceIdentity
 import com.openlattice.chronicle.preferences.getDevice
 import com.openlattice.chronicle.services.upload.UploadWorker
@@ -67,6 +68,7 @@ class ServerEnrollmentActivity : AppCompatActivity() {
     private lateinit var statsText: TextView
 
     private var editServerId: Long = -1
+    private val manualEnrollmentAllowed = DistributionChannel.current() == DistributionChannel.RESEARCH
 
     companion object {
         const val EXTRA_SERVER_ID = "server_id"
@@ -75,7 +77,8 @@ class ServerEnrollmentActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (BuildConfig.DISTRIBUTION_CHANNEL != "RESEARCH") {
+        editServerId = intent.getLongExtra(EXTRA_SERVER_ID, -1)
+        if (!manualEnrollmentAllowed && (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS || editServerId <= 0)) {
             Toast.makeText(
                 this,
                 getString(R.string.server_enroll_invitation_required),
@@ -101,10 +104,14 @@ class ServerEnrollmentActivity : AppCompatActivity() {
         statsContainer = findViewById(R.id.statsContainer)
         statsText = findViewById(R.id.statsText)
 
-        editServerId = intent.getLongExtra(EXTRA_SERVER_ID, -1)
+        if (!manualEnrollmentAllowed) {
+            listOf(nameText, urlText, studyIdText, participantIdText).forEach { it.isEnabled = false }
+            listOf(saveBtn, enabledSwitch, healthBtn,
+                findViewById<View>(R.id.serverSigningSecretTextLayout)).forEach { it.visibility = View.GONE }
+        }
 
         if (editServerId > 0) {
-            title = getString(R.string.server_edit_title)
+            title = getString(if (manualEnrollmentAllowed) R.string.server_edit_title else R.string.server_delete)
             deleteBtn.visibility = View.VISIBLE
             loadServer(editServerId)
             loadStats(editServerId)
@@ -180,6 +187,7 @@ class ServerEnrollmentActivity : AppCompatActivity() {
     }
 
     private fun doSave() {
+        if (!manualEnrollmentAllowed) return
         val name = nameText.text.toString().trim()
         val inputUrl = urlText.text.toString().trim()
         val studyId = studyIdText.text.toString().trim()
@@ -214,7 +222,8 @@ class ServerEnrollmentActivity : AppCompatActivity() {
                 val mobileSigningSecretOverride = enteredSigningOverride
                     ?: existingServer?.mobileSigningSecretOverride
                 if (editServerId > 0 && !enabled) {
-                    val rowsUpdated = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.setServerEnabled(applicationContext, editServerId, false)
+                    val rowsUpdated = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.setServerEnabled(applicationContext,
+                        editServerId, false)
                     postIfCurrent {
                         progressBar.visibility = View.INVISIBLE
                         if (rowsUpdated == 0) {

@@ -35,7 +35,7 @@ class QuestionnaireCollectionModuleTest {
 
         override fun schedule(action: QuestionnaireNotificationAction.Schedule) {
             if (action.recurrenceRule == failScheduleForRule) {
-                throw IllegalStateException("bad recurrence rule")
+                error("bad recurrence rule")
             }
             scheduled.add(action)
         }

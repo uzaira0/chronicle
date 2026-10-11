@@ -147,7 +147,7 @@ internal fun freshReminderUrlFor(
     deadlineMs: Long = REMINDER_LINK_DEADLINE_MS,
 ): String = ResearchPersistenceGate.runIfExpectedOwner(context, owner) {
     CallDeadline.within(deadlineMs) { freshReminderUrl(context, details) }
-} ?: throw IllegalStateException("Enrollment changed before the reminder link was fetched")
+} ?: error("Enrollment changed before the reminder link was fetched")
 
 internal fun freshReminderUrl(context: Context, details: NotificationDetails): String {
     val settings = EnrollmentSettings(context)

@@ -18,7 +18,10 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.openlattice.chronicle.constants.TelemetryEvents
-import com.openlattice.chronicle.preferences.*
+import com.openlattice.chronicle.preferences.DeviceInstanceIdentity
+import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.preferences.SensorSettings
+import com.openlattice.chronicle.preferences.getDevice
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
