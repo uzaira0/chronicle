@@ -3,7 +3,7 @@
 #
 # Usage: scripts/verify-wire-dto-names.sh <release.aab | mapping.txt>
 #
-# Every Retrofit @Body type in the study API interfaces is serialized by Moshi's reflective
+# Every Retrofit body and response type in the study API interfaces uses Moshi's reflective
 # Kotlin adapter. If R8 renames it (and drops its kotlin.Metadata), the JSON keys become "a".."j"
 # and the server cannot bind them. A class absent from the mapping (e.g. restricted collectors in
 # the play flavor) is fine; a class present under another name is not. NotificationDetails is
@@ -54,7 +54,7 @@ else
 fi
 [[ -s "$mapping" ]] || { printf 'ERROR: empty mapping %s\n' "$mapping" >&2; exit 1; }
 
-# @Body parameter types, resolved to fully qualified names through each file's imports.
+# Request and response leaf types, including nested collections, resolved through imports.
 dtos=()
 for api in "${api_files[@]}"; do
   [[ -f "$api" ]] || continue
@@ -62,8 +62,16 @@ for api in "${api_files[@]}"; do
   while IFS= read -r simple; do
     fqn="$(sed -n "s/^import \(.*\.$simple\)$/\1/p" "$api" | head -n1)"
     dtos+=("${fqn:-$package.$simple}")
-  done < <(rg -o '@Body [A-Za-z_]+: [A-Za-z<>]+' "$api" \
-    | sed -E 's/.*: //; s/^(List|Set)<//; s/>$//' | sort -u)
+  done < <(python3 - "$api" <<'PY'
+import pathlib, re, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+types = re.findall(r'@Body\s+\w+:\s*([^\n]+)', source)
+types += re.findall(r'\)\s*:\s*([^\n{]+)', source)
+native = {'Int', 'Long', 'String', 'Boolean', 'Any', 'Unit', 'UUID', 'FullQualifiedName',
+          'List', 'Set', 'Map', 'Response', 'Body', 'ResponseBody', 'retrofit2', 'okhttp3'}
+print('\n'.join(sorted(set(re.findall(r'\b[A-Z]\w*\b', ' '.join(types))) - native)))
+PY
+)
 done
 (( ${#dtos[@]} > 0 )) || { printf 'ERROR: found no @Body types\n' >&2; exit 1; }
 

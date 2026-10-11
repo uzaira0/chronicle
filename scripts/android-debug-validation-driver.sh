@@ -175,9 +175,41 @@ fi
 run_broadcast "dump-before" "com.openlattice.chronicle.debug.DUMP_LOCAL_STATE"
 require_broadcast_ok "dump-before"
 
+original_enabled=true
+if [[ -n "$server_id" ]]; then
+  original_enabled="$(python3 - "$output_dir/dump-before.txt" "$server_id" <<'PY'
+import json, pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+match = re.search(r'data="(.*)"(?:, extras:.*)?$', text, re.M)
+if not match:
+    raise SystemExit("ERROR: broadcast omitted destination state")
+state = json.loads(match[1])
+server = next((s for s in state['servers'] if str(s['id']) == sys.argv[2]), None)
+if server is None or not isinstance(server.get('enabled'), bool):
+    raise SystemExit("ERROR: requested destination state is unknown")
+print(str(server['enabled']).lower())
+PY
+)"
+  restore_server() {
+    local rc=$?
+    trap - EXIT INT TERM
+    if ! run_broadcast "restore-server" "com.openlattice.chronicle.debug.SET_SERVER_ENABLED" \
+      --el server_id "$server_id" --ez enabled "$original_enabled" || \
+      ! rg -q 'result=-1' "$output_dir/restore-server.txt"; then
+      echo "ERROR: failed to restore original destination state." >&2
+      rc=1
+    fi
+    exit "$rc"
+  }
+  trap restore_server EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+fi
+expected_enabled=1
+[[ "$original_enabled" == true ]] || expected_enabled=0
 run_broadcast "assert-single-before" \
   "com.openlattice.chronicle.debug.ASSERT_SINGLE_DESTINATION" \
-  --ei expected_enabled_servers 1
+  --ei expected_enabled_servers "$expected_enabled"
 require_broadcast_ok "assert-single-before"
 
 if [[ -n "$server_id" ]]; then
@@ -203,12 +235,12 @@ if [[ -n "$server_id" ]]; then
   run_broadcast "enable-server" \
     "com.openlattice.chronicle.debug.SET_SERVER_ENABLED" \
     --el server_id "$server_id" \
-    --ez enabled true
+    --ez enabled "$original_enabled"
   require_broadcast_ok "enable-server"
 
   run_broadcast "assert-single-after-resume" \
     "com.openlattice.chronicle.debug.ASSERT_SINGLE_DESTINATION" \
-    --ei expected_enabled_servers 1
+    --ei expected_enabled_servers "$expected_enabled"
   require_broadcast_ok "assert-single-after-resume"
 fi
 

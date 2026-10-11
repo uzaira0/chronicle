@@ -832,6 +832,8 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
     # difference is embedded VCS provenance. Force one exact post-commit release rebuild.
     ./gradlew :app:bundlePlayRelease --rerun-tasks --no-build-cache --no-daemon --console=plain
   ) 2>&1 | tee "$OUTPUT_DIR/bundle-play-release.txt"
+  bash "$ROOT_DIR/scripts/android-exported-component-audit.sh" --variant playRelease play \
+    | tee "$OUTPUT_DIR/exported-components-playRelease.txt"
 fi
 
 [[ -f "$AAB_PATH" ]] || {

@@ -236,20 +236,6 @@ class MainActivityDecisionTest {
         onView(withText(containsString(text))).check(matches(isDisplayed()))
     }
 
-    private fun waitForViewText(viewId: Int, text: String) {
-        repeat(30) {
-            try {
-                onView(allOf(withId(viewId), withText(text))).check(matches(isDisplayed()))
-                return
-            } catch (_: AssertionError) {
-                Thread.sleep(100)
-            } catch (_: NoMatchingViewException) {
-                Thread.sleep(100)
-            }
-        }
-        onView(allOf(withId(viewId), withText(text))).check(matches(isDisplayed()))
-    }
-
     private fun waitForViewTextContaining(viewId: Int, text: String) {
         repeat(30) {
             try {

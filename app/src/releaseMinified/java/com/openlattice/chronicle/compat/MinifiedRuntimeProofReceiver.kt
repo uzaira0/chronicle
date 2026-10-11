@@ -136,6 +136,9 @@ public class MinifiedRuntimeProofReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        const val EXTRA_EXPECTED_SECRET_FINGERPRINT = "expectedMobileSecretFingerprint"
+            // Intent extra name selects an expected fingerprint for the runtime proof; it is not a secret.
+            // nosemgrep: chronicle-hardcoded-password-kotlin
+        const val EXTRA_EXPECTED_SECRET_FINGERPRINT =
+            "expectedMobileSecretFingerprint"
     }
 }

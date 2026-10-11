@@ -1,7 +1,6 @@
 package com.openlattice.chronicle
 
 import com.openlattice.chronicle.android.ChronicleData
-import com.openlattice.chronicle.android.ChronicleSample
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.serialization.ChronicleJson

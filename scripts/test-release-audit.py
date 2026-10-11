@@ -30,10 +30,11 @@ class ReleaseAudit(unittest.TestCase):
     p=subprocess.run(['java','-cp',str(d),'StoreReadinessVerifier',channel,str(manifest),str(policy)],capture_output=True,text=True)
     self.assertEqual(ok,p.returncode==0,p.stderr)
  def test_A38_next_candidate_has_unique_unpublished_version(self):
-  s=(ROOT/'app/build.gradle').read_text();self.assertEqual('68',re.search(r'versionCode (\d+)',s)[1])
-  self.assertNotEqual('2026.10.02-internal.open.1',re.search(r'versionName "([^"]+)"',s)[1])
-  policy=(ROOT/'store/play/privacy.properties').read_text()
-  self.assertIn('version_code=68',policy);self.assertIn('maximum_uploaded_version_code=67',policy)
+  s=(ROOT/'app/build.gradle').read_text();code=int(re.search(r'versionCode (\d+)',s)[1])
+  policy=dict(l.split('=',1) for l in (ROOT/'store/play/privacy.properties').read_text().splitlines() if '=' in l)
+  self.assertEqual(code,int(policy['version_code']));self.assertEqual(re.search(r'versionName "([^"]+)"',s)[1],policy['version_name'])
+  # Each candidate follows the last Play upload directly; a reused code is refused by Play.
+  self.assertEqual(code-1,int(policy['maximum_uploaded_version_code']))
   self.test_A33_candidate_gate_stores_a_variant_inventory_bound_to_sealed_artifact()
  def test_A33_candidate_gate_stores_a_variant_inventory_bound_to_sealed_artifact(self):
   import json, hashlib

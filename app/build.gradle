@@ -40,7 +40,10 @@ def requiresReleaseSigning = gradle.startParameter.taskNames.any { taskName ->
 
 
 def signingProperties = new Properties()
-def signingPropertiesFile = file('signing.properties')
+def signingPropertiesPath = providers.gradleProperty('chronicleSigningProperties')
+    .orElse(providers.environmentVariable('CHRONICLE_SIGNING_PROPERTIES'))
+    .getOrElse('signing.properties')
+def signingPropertiesFile = file(signingPropertiesPath)
 def hasChronicleSigning = requiresReleaseSigning && signingPropertiesFile.exists()
 if (hasChronicleSigning) {
     signingProperties.load(new FileInputStream(signingPropertiesFile))
@@ -342,8 +345,7 @@ android {
         releaseMinified {
             initWith release
             matchingFallbacks = ['release']
-            // Genuinely-minified variant: use this to validate the R8 keep rules are
-            // complete before ever re-enabling minification on `release`.
+            // Additional R8 validation variant; release also enables minification.
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -384,6 +386,8 @@ android {
             includeAndroidResources = true
             all {
                 systemProperty 'robolectric.pixelCopyRenderMode', 'hardware'
+                // Gradle's 512m default runs Robolectric's cached SDK resources out of heap.
+                maxHeapSize = '2g'
                 // Robolectric reaches into these JDK internals; JDK 17+ needs them opened.
                 jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED',
                         '--add-opens=java.base/java.lang=ALL-UNNAMED',
@@ -735,6 +739,15 @@ tasks.register('generateRuntimeSbom') {
 // inventory travels with the artifact that is uploaded or archived.
 ['play', 'amazon', 'research', 'open'].each { flavor ->
     def capitalized = flavor.capitalize()
+    def wireNamesTask = tasks.register("verify${capitalized}ReleaseWireDtoNames", Exec) {
+        group = 'verification'
+        description = "Verifies reflective wire DTO names in the ${flavor} release mapping."
+        dependsOn "minify${capitalized}ReleaseWithR8"
+        commandLine 'bash', rootProject.file('scripts/verify-wire-dto-names.sh'),
+            layout.buildDirectory.file("outputs/mapping/${flavor}Release/mapping.txt").get().asFile
+    }
+    tasks.matching { it.name == "assemble${capitalized}Release" || it.name == "bundle${capitalized}Release" }
+        .configureEach { dependsOn(wireNamesTask) }
     def sbomTask = tasks.register("generate${capitalized}ReleaseSbom") {
         group = 'verification'
         description = "Writes the CycloneDX SBOM for the ${flavor} release beside its bundle."

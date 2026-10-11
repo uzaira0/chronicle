@@ -96,6 +96,8 @@
 -keep class com.openlattice.chronicle.collection.Android<1>Event { *; }
 -if class com.openlattice.chronicle.android.AndroidSensorSample
 -keep class com.openlattice.chronicle.android.AndroidSensorSample { *; }
+-if class com.openlattice.chronicle.android.SensorUploadReceipt
+-keep class com.openlattice.chronicle.android.SensorUploadReceipt { *; }
 
 # Moshi's Kotlin adapter loads each property type by its source name from kotlin.Metadata, so an
 # enum field of a kept wire class must keep its class name (BatterySample.chargingState broke every

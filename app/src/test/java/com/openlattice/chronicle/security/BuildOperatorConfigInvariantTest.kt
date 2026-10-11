@@ -83,6 +83,17 @@ class BuildOperatorConfigInvariantTest {
     }
 
 
+
+    @Test fun releaseSigningAcceptsAnExternalPropertiesInputAndKeepsValidation() {
+        val source = locateBuildFile().readText()
+        assertTrue(source.contains("gradleProperty('chronicleSigningProperties')"))
+        assertTrue(source.contains("environmentVariable('CHRONICLE_SIGNING_PROPERTIES')"))
+        assertTrue(source.contains("file(signingPropertiesPath)"))
+        assertTrue(source.contains("requiresReleaseSigning"))
+        assertTrue(source.contains("androiddebugkey"))
+        assertTrue(source.contains("storeFile"))
+    }
+
     private fun locateBuildFile(): File {
         var directory: File? = File(".").absoluteFile
         repeat(6) {

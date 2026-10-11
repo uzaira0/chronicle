@@ -33,12 +33,13 @@ Options:
   -h, --help                    Show this help.
 
 Required local inputs:
-  Copy app/signing.properties.example to app/signing.properties, replace every
-  placeholder locally, and point storeFile at the intended Chronicle beta/release
-  keystore. app/signing.properties must stay ignored by Git. The script refuses
-  Android debug signing material before invoking Gradle.
+  Set CHRONICLE_SIGNING_PROPERTIES to an absolute path to a caller-owned properties
+  file, or copy app/signing.properties.example to ignored app/signing.properties.
+  Replace every placeholder locally and point storeFile at the intended Chronicle
+  beta/release keystore. The script refuses Android debug signing material before
+  invoking Gradle. Direct Gradle calls also accept -PchronicleSigningProperties.
 
-Expected app/signing.properties shape:
+Expected signing-properties shape:
   storeFile=/absolute/path/to/chronicle-release-or-beta.jks
   storePassword=<local secret>
   keyAlias=<release key alias>
@@ -137,10 +138,10 @@ context_file="$output_dir/context.txt"
   echo "package=$package_name"
 } | tee "$context_file"
 
-signing_file="$ROOT_DIR/app/signing.properties"
+signing_file="${CHRONICLE_SIGNING_PROPERTIES:-$ROOT_DIR/app/signing.properties}"
 if [[ ! -f "$signing_file" ]]; then
   {
-    echo "ERROR: missing app/signing.properties."
+    echo "ERROR: missing signing properties; set CHRONICLE_SIGNING_PROPERTIES for an external file."
     echo "Copy app/signing.properties.example to app/signing.properties and replace placeholders locally."
   } | tee "$output_dir/signing-audit.txt" >&2
   exit 1
@@ -207,11 +208,15 @@ if [[ "$skip_build" -eq 0 ]]; then
   if [[ -n "${JAVA_HOME:-}" ]]; then
     echo "JAVA_HOME=$JAVA_HOME" >>"$context_file"
   fi
-  echo "== Gradle $assemble_task =="
-  (cd "$ROOT_DIR" && ./gradlew "$assemble_task" --no-daemon --console=plain) 2>&1 | tee "$output_dir/assemble-$variant.txt"
+  echo "== Gradle lintOpenRelease $assemble_task =="
+  (cd "$ROOT_DIR" && ./gradlew :app:lintOpenRelease "$assemble_task" --no-daemon --console=plain) 2>&1 |
+    tee "$output_dir/assemble-$variant.txt"
 else
   echo "skip_build=true" >>"$context_file"
 fi
+
+bash "$ROOT_DIR/scripts/android-exported-component-audit.sh" --variant "$variant" "$flavor" \
+  | tee "$output_dir/exported-components-$variant.txt"
 
 if [[ ! -f "$apk_path" ]]; then
   echo "ERROR: APK not found after build: $apk_path" >&2

@@ -70,7 +70,8 @@ class ChronicleUploadTests {
         // Use a fixed test UUID instead of Android ID to avoid leaking hardware identifiers
         val deviceId = "test-device-00000000-0000-0000-0000-000000000000"
 
-        val device = AndroidDevice(deviceId, Build.MODEL, Build.VERSION.CODENAME, Build.BRAND, Build.DISPLAY, Build.VERSION.SDK_INT.toString(), Build.PRODUCT, deviceId, mapOf())
+        val device = AndroidDevice(deviceId, Build.MODEL, Build.VERSION.CODENAME, Build.BRAND, Build.DISPLAY, Build.VERSION.SDK_INT.toString(),
+            Build.PRODUCT, deviceId, mapOf())
         val studyId = UUID.fromString("28d661b8-a45a-41b6-aec4-ed9988fa28dc")
         val participantId = "participant1"
 
