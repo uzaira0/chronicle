@@ -2,6 +2,7 @@ package com.openlattice.chronicle.collection.battery
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.EnrollmentTestStores
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.device.ExpansionPullSchedule
@@ -132,6 +133,8 @@ class BatterySampleGateTest {
         val module = CollectionModuleId.BATTERY_TELEMETRY
         schedule.setIntervalSeconds(module, 3600)
         val claimedMs = checkNotNull(schedule.claimIfDue(module))
+        // Erasure clears the store before the schedule; without one installed the thread dies before the monitor.
+        val db = EnrollmentTestStores.install(context)
         val erasure = Thread { eraseResearchSourceState(context) }
         val threads = java.lang.management.ManagementFactory.getThreadMXBean()
 
@@ -145,6 +148,7 @@ class BatterySampleGateTest {
             assertFalse(schedule.isDue(module, System.currentTimeMillis()))
         }
         erasure.join(10_000)
+        db.close()
 
         assertFalse(erasure.isAlive)
         assertTrue(schedule.isDue(module, System.currentTimeMillis()))

@@ -2,6 +2,8 @@ package com.openlattice.chronicle.storage
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * Room row for one battery-telemetry sample, stored in the `battery_samples` table.
@@ -23,4 +25,12 @@ data class BatterySampleEntry(
     val temperatureDeciC: Int,
     val voltageMillivolts: Int,
     val health: String,
+    val producerVersion: String? = null,
 )
+
+/** Legacy queues never recorded the collector build; preserve that absence across upgrades. */
+internal val BATTERY_PROVENANCE_MIGRATION = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `battery_samples` ADD COLUMN `producerVersion` TEXT")
+    }
+}

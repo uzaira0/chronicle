@@ -15,8 +15,7 @@ import com.openlattice.chronicle.models.ExtractedUsageEvent
  * in memory: a repeat of the same `(interactionType, activityClass)` event within
  * [LIFECYCLE_DEDUPE_WINDOW_MS] of the last accepted occurrence is dropped.
  *
- * Because tests drive [com.openlattice.chronicle.collection.core.FixedCollectionClock]
- * for `now`, this faithfully exercises the dedupe window without `SharedPreferences`.
+ * Because tests inject a fixed `now`, this faithfully exercises the dedupe window without `SharedPreferences`.
  */
 class FakeLifecycleDedupeStore : LifecycleDedupeStore {
 

@@ -10,56 +10,50 @@ import android.os.BatteryManager
 import android.os.PowerManager
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.lifecycle.LifecycleEventMapper
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 
 class DeviceStateSampler(private val context: Context) {
 
     fun poll(timestampMillis: Long = System.currentTimeMillis()): List<ExtractedUsageEvent> {
-        val origin = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.captureObservation(
-            context, com.openlattice.chronicle.collection.CollectionModuleId.DEVICE_LIFECYCLE)
-        val events = mutableListOf<ExtractedUsageEvent>()
+        val origin = ResearchPersistenceGate.captureObservation(
+            context, CollectionModuleId.DEVICE_LIFECYCLE)
+        val observed = observe(origin, timestampMillis)
+        var events = emptyList<ExtractedUsageEvent>()
         origin.persist {
-        addChangedState(events, batteryState(), timestampMillis)
-        addChangedState(events, networkState(), timestampMillis)
-        addChangedState(events, powerSaveState(), timestampMillis)
+            val dedupe = RoomLifecycleDedupeStore(ChronicleDb.getInstance(context))
+            events = observed.filter { dedupe.shouldPersist(it, timestampMillis) }
         }
         return events
     }
 
-    private fun addChangedState(
-        events: MutableList<ExtractedUsageEvent>,
-        state: LifecycleState,
-        timestampMillis: Long
-    ) {
-        val db = ChronicleDb.getInstance(context)
-        if (db.lifecycleStateDao().get(checkNotNull(sampledStateKey(state.activityClass)))?.value == state.activityClass) return
-        events.add(
+    internal fun observe(origin: CollectionPersistenceGuard,
+                         timestampMillis: Long = System.currentTimeMillis()): List<ExtractedUsageEvent> {
+        if (!origin.isCurrent()) return emptyList()
+        val states = listOf(networkState(), powerSaveState()).map { state ->
             DeviceLifecycleEventRecorder.buildEvent(
                 activityClass = state.activityClass,
                 interactionType = state.interactionType,
                 timestampMillis = timestampMillis
             )
-        )
+        }
+        return listOfNotNull(batteryEvent(timestampMillis)) + states
     }
 
-    private fun batteryState(): LifecycleState {
+    /** Battery Saver as a sampled state, shared with PowerSaveModeReceiver so one dedupe marker covers both. */
+    internal fun powerSaveEvent(timestampMillis: Long = System.currentTimeMillis()): ExtractedUsageEvent =
+        powerSaveState().let { DeviceLifecycleEventRecorder.buildEvent(it.activityClass, it.interactionType, timestampMillis) }
+
+    private fun batteryEvent(timestampMillis: Long): ExtractedUsageEvent? {
         val intent = registerSystemBroadcastReceiver(context, null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        val percentage = if (level >= 0 && scale > 0) (level * 100 / scale) else -1
-        val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-            status == BatteryManager.BATTERY_STATUS_FULL
-        val interactionType = if (charging) INTERACTION_BATTERY_CHARGING else INTERACTION_BATTERY_DISCHARGING
-        val bucket = when {
-            percentage < 0 -> "unknown"
-            percentage <= 15 -> "critical"
-            percentage <= 30 -> "low"
-            percentage <= 60 -> "medium"
-            else -> "high"
-        }
-        return LifecycleState(
-            interactionType = interactionType,
-            activityClass = "battery:$bucket:${if (charging) "charging" else "discharging"}",
+            ?: return null
+        return LifecycleEventMapper.batteryStateEvent(
+            plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1),
+            level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
+            scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1),
+            timestampMillis = timestampMillis,
         )
     }
 

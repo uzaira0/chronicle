@@ -51,7 +51,7 @@ class DeviceLifecycleEventRecorderTest {
 
     @Test
     fun lowMemoryEventStoresOnlyCoarseTrimLevel() {
-        val event = DeviceLifecycleEventRecorder.lowMemoryEvent(80, 1_700_000_000_000)
+        val event = checkNotNull(DeviceLifecycleEventRecorder.lowMemoryEvent(80, 1_700_000_000_000))
 
         assertEquals(INTERACTION_LOW_MEMORY, event.interactionType)
         assertEquals("memory:trim-level:80", event.activityClass)

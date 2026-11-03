@@ -26,4 +26,5 @@ public fun BatterySampleEntry.toBatterySample(): BatterySample = BatterySample(
     temperatureDeciC = temperatureDeciC,
     voltageMillivolts = voltageMillivolts,
     health = BatteryHealth.valueOf(health),
+    producerVersion = producerVersion,
 )

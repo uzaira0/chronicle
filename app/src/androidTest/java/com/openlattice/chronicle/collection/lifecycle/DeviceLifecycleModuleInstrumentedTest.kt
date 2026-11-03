@@ -5,7 +5,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.openlattice.chronicle.IsolatedChronicleTestDb
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.LifecycleEventSink
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.serialization.JsonSerializer
@@ -60,22 +59,18 @@ class DeviceLifecycleModuleInstrumentedTest {
 
     private fun module(
         enrolled: Boolean,
-        onQueueSize: (Int) -> Unit = {},
     ) = DeviceLifecycleCollectionModule(
-        sink = LifecycleEventSink(db.queueEntryData(), NoOpCollectionLog),
+        sink = LifecycleEventSink(db.queueEntryData()),
         dedupeStore = AcceptAllDedupeStore(),
         enrolled = { enrolled },
-        updateQueueSize = onQueueSize,
         serializeQueueEntry = { data ->
-            com.openlattice.chronicle.serialization.JsonSerializer.serializeQueueEntry(data)
+            JsonSerializer.serializeQueueEntry(data)
         },
-        log = NoOpCollectionLog,
     )
 
     @Test
     fun lifecycleEventPersistsAsAQueueEntryThroughSqlCipherDataQueue() {
-        var reportedDepth = -1
-        val m = module(enrolled = true, onQueueSize = { reportedDepth = it })
+        val m = module(enrolled = true)
         val event = LifecycleEventMapper.eventForBroadcastAction(
             Intent.ACTION_POWER_CONNECTED,
             System.currentTimeMillis(),
@@ -85,7 +80,6 @@ class DeviceLifecycleModuleInstrumentedTest {
 
         assertEquals(ModuleResult.Ok(1), result)
         assertEquals(1, db.queueEntryData().getSize())
-        assertEquals(1, reportedDepth)
 
         // The persisted QueueEntry's ChronicleData round-trips back to the same event.
         val stored = db.queueEntryData().getNextEntries(1).single()
@@ -112,7 +106,7 @@ class DeviceLifecycleModuleInstrumentedTest {
     @Test
     fun nonEnrolledLifecyclePersistWritesNothingToTheRealDataQueue() {
         val m = module(enrolled = false)
-        val event = LifecycleEventMapper.lowMemoryEvent(80, System.currentTimeMillis())
+        val event = checkNotNull(LifecycleEventMapper.lowMemoryEvent(80, System.currentTimeMillis()))
 
         val result = m.persist(listOf(event))
 

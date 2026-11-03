@@ -8,8 +8,7 @@ import com.openlattice.chronicle.collection.BatteryPlugType
  * A point-in-time battery reading produced by a [BatterySampleSource].
  *
  * It carries no timestamp and no id — [BatteryTelemetryCollectionModule] adds those
- * from its injected [com.openlattice.chronicle.collection.core.CollectionClock] when it
- * builds the persisted row, so the time source stays a single injected seam.
+ * from its injected clock when it builds the persisted row.
  */
 public data class BatteryReading(
     public val levelPercent: Int,

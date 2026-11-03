@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.collection.lifecycle
 
+import android.content.ComponentCallbacks2
 import android.content.Intent
 import com.openlattice.chronicle.android.fromInteractionType
 import com.openlattice.chronicle.models.ExtractedUsageEvent
@@ -20,7 +21,7 @@ import java.util.TimeZone
  * plan §8.1 steps 2–17, guardrail §8.1.2 "lifecycle event mapping must be centralized
  * in lifecycle module").
  *
- * Phase 5A moves the event-building logic behind the module boundary. This is the single
+ * The event-building logic sits behind the module boundary. This is the single
  * place a broadcast `Intent` action or a memory-trim level becomes an
  * [ExtractedUsageEvent]; `DeviceLifecycleEventRecorder` and `DeviceStateSampler` delegate
  * here rather than building events themselves, so there is exactly one mapping.
@@ -33,7 +34,9 @@ import java.util.TimeZone
  *  - power connected → [INTERACTION_BATTERY_CHARGING]; power disconnected →
  *    [INTERACTION_BATTERY_DISCHARGING];
  *  - battery low → [INTERACTION_BATTERY_LOW]; battery okay → [INTERACTION_BATTERY_OKAY];
- *  - low memory → [INTERACTION_LOW_MEMORY] with `activityClass = "memory:trim-level:$level"`;
+ *  - the sampled battery state follows the same plug state ([batteryStateEvent]);
+ *  - memory-pressure trim levels → [INTERACTION_LOW_MEMORY] with
+ *    `activityClass = "memory:trim-level:$level"`; visibility trim levels map to nothing;
  *  - the `activityClass` of a broadcast event is the broadcast action string itself;
  *  - `appPackageName` is always [ANDROID_SYSTEM_PACKAGE] (`"android"`) and
  *    `applicationLabel` is always [ANDROID_SYSTEM_LABEL] (`"Android System"`) — lifecycle
@@ -68,16 +71,56 @@ public object LifecycleEventMapper {
         }
 
     /**
-     * Builds a [INTERACTION_LOW_MEMORY] event for an `onTrimMemory` callback. The trim
-     * [level] is recorded coarsely as `activityClass = "memory:trim-level:$level"` — no
-     * raw memory contents, exactly as the pre-Phase-5 recorder.
+     * Builds a [INTERACTION_LOW_MEMORY] event for an `onTrimMemory` callback, or `null` when the
+     * [level] does not report memory pressure. The trim [level] is recorded coarsely as
+     * `activityClass = "memory:trim-level:$level"` — no raw memory contents.
+     *
+     * Per https://developer.android.com/reference/android/content/ComponentCallbacks2,
+     * `TRIM_MEMORY_UI_HIDDEN` (20) means this app's UI left the screen and
+     * `TRIM_MEMORY_BACKGROUND` (40) means the process entered the cached LRU list: both are
+     * app-visibility transitions, not device memory state. The RUNNING_* levels (below 20) and
+     * MODERATE/COMPLETE (above 40) report memory pressure; Android 14 and later no longer
+     * deliver them, so those versions record no Low Memory rows.
      */
-    public fun lowMemoryEvent(level: Int, timestampMillis: Long): ExtractedUsageEvent =
-        buildEvent(
-            activityClass = "memory:trim-level:$level",
-            interactionType = INTERACTION_LOW_MEMORY,
+    public fun lowMemoryEvent(level: Int, timestampMillis: Long): ExtractedUsageEvent? =
+        if (level in ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN..ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            null
+        } else {
+            buildEvent(
+                activityClass = "memory:trim-level:$level",
+                interactionType = INTERACTION_LOW_MEMORY,
+                timestampMillis = timestampMillis,
+            )
+        }
+
+    /**
+     * Builds the sampled battery state from `ACTION_BATTERY_CHANGED` extras, or `null` when
+     * Android reported no plug state ([plugged] < 0, e.g. no battery broadcast yet).
+     *
+     * Charging follows `EXTRA_PLUGGED`
+     * (https://developer.android.com/reference/android/os/BatteryManager#EXTRA_PLUGGED:
+     * 0 means on battery, any other value names a power source) — the same plug state that
+     * `ACTION_POWER_CONNECTED` / `ACTION_POWER_DISCONNECTED` report above. A plugged phone that
+     * is full or holding its charge (`BATTERY_STATUS_NOT_CHARGING`) is therefore not recorded
+     * as discharging, and an unknown reading is not recorded at all.
+     */
+    public fun batteryStateEvent(plugged: Int, level: Int, scale: Int, timestampMillis: Long): ExtractedUsageEvent? {
+        if (plugged < 0) return null
+        val charging = plugged != 0
+        val percentage = if (level >= 0 && scale > 0) level * 100 / scale else -1
+        val bucket = when {
+            percentage < 0 -> "unknown"
+            percentage <= 15 -> "critical"
+            percentage <= 30 -> "low"
+            percentage <= 60 -> "medium"
+            else -> "high"
+        }
+        return buildEvent(
+            activityClass = "battery:$bucket:${if (charging) "charging" else "discharging"}",
+            interactionType = if (charging) INTERACTION_BATTERY_CHARGING else INTERACTION_BATTERY_DISCHARGING,
             timestampMillis = timestampMillis,
         )
+    }
 
     /**
      * Builds a system-origin lifecycle [ExtractedUsageEvent].

@@ -10,14 +10,13 @@ import androidx.core.content.ContextCompat
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.UserIdentificationActivity
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.identification.TargetUserRouter
 import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_NOTIFICATION_TAG
 import com.openlattice.chronicle.services.notifications.NOTIFICATION_DELETED_ACTION
 import com.openlattice.chronicle.services.notifications.postNotificationIfPermitted
 import com.openlattice.chronicle.services.notifications.userIdentificationMayRun
+import com.openlattice.chronicle.services.notifications.userIdentificationMonitorRetained
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -53,25 +52,15 @@ class UnlockDeviceReceiver : BroadcastReceiver() {
 
     private fun handleReceive(context: Context, intent: Intent) {
         appContext = context
+        DeviceUnlockMonitoringService.resetObservedUser(context)
 
         if (!userIdentificationMayRun(context)) {
-            DeviceUnlockMonitoringService.stopService(context)
+            // A paused enrollment keeps its receivers registered: no prompt, and no restart either.
+            if (!userIdentificationMonitorRetained(context)) DeviceUnlockMonitoringService.reconcile(context)
             return
         }
-        var posted = false
         ResearchPersistenceGate.persistIfActive(context) {
-            posted = postIdentifyNotification(context, intent)
-        }
-        // A posted prompt means the current user is unknown until someone answers it, so usage
-        // from here on is "unassigned" instead of credited to whoever answered last. The original
-        // app did this from a NotificationListener, which needs notification access; Chronicle
-        // posts the prompt itself, so it resets here in every build. Outside persistIfActive:
-        // TargetUserRouter takes the same barrier.
-        if (posted) {
-            val result = TargetUserRouter.setTargetUser(context, context.getString(R.string.user_unassigned))
-            if (result !is ModuleResult.Ok) {
-                Log.w(javaClass.name, "Target-user reset after identify prompt failed: ${result.label}")
-            }
+            postIdentifyNotification(context, intent)
         }
     }
 

@@ -32,8 +32,7 @@ private const val BATTERY_COLLECTION_INTERVAL_MIN = 15L
  * Each run takes exactly one battery sample through the shared, app-scoped
  * [BatteryTelemetryCollectionModule] (via [BatteryTelemetryModuleHolder]). The module
  * itself enforces the enrollment check and never throws — see
- * [BatteryTelemetryCollectionModule.sample]. This worker only branches on
- * [BatteryCollectionMigration.USE_MODULE_MANAGER_BATTERY_PATH] and maps the
+ * [BatteryTelemetryCollectionModule.sample]. This worker maps the
  * [ModuleResult] to a WorkManager [Result]:
  *  - [ModuleResult.Ok] / [ModuleResult.Skipped] → [Result.success];
  *  - [ModuleResult.Retry] → [Result.retry] (battery state momentarily unavailable);
@@ -73,10 +72,6 @@ fun collectBatterySampleIfDue(
 
 /** Takes one battery sample through the module path, without the interval gate. */
 fun collectBatterySample(context: Context): ModuleResult {
-    if (!BatteryCollectionMigration.USE_MODULE_MANAGER_BATTERY_PATH) {
-        Log.i(TAG, "Battery collection disabled by USE_MODULE_MANAGER_BATTERY_PATH; skipping")
-        return ModuleResult.Skipped("battery collection disabled")
-    }
     return try {
         val result = BatteryTelemetryModuleHolder.get(context.applicationContext).sample()
         if (result is ModuleResult.Failed) {

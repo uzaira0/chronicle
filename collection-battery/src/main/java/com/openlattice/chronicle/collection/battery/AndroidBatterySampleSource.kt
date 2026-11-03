@@ -35,44 +35,48 @@ public class AndroidBatterySampleSource(
 
         val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
         val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-        if (level < 0 || scale <= 0) {
-            return null
-        }
+        val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
+        if (level < 0 || scale <= 0 || voltage < 0) return null
+        if (!intent.hasExtra(BatteryManager.EXTRA_TEMPERATURE) || !intent.hasExtra(BatteryManager.EXTRA_VOLTAGE)) return null
+        val plug = plugTypeOf(intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)) ?: return null
 
         return BatteryReading(
             levelPercent = (level * 100 / scale).coerceIn(0, 100),
             chargingState = chargingStateOf(intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)),
-            plugType = plugTypeOf(intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)),
+            plugType = plug,
             temperatureDeciC = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0),
-            voltageMillivolts = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0).coerceAtLeast(0),
+            voltageMillivolts = voltage,
             health = healthOf(intent.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)),
         )
     }
+}
 
-    private fun chargingStateOf(status: Int): BatteryChargingState = when (status) {
-        BatteryManager.BATTERY_STATUS_CHARGING -> BatteryChargingState.CHARGING
-        BatteryManager.BATTERY_STATUS_DISCHARGING -> BatteryChargingState.DISCHARGING
-        BatteryManager.BATTERY_STATUS_NOT_CHARGING -> BatteryChargingState.NOT_CHARGING
-        BatteryManager.BATTERY_STATUS_FULL -> BatteryChargingState.FULL
-        else -> BatteryChargingState.UNKNOWN
-    }
+/** Android's EXTRA_STATUS code as the exported charging state. */
+internal fun chargingStateOf(status: Int): BatteryChargingState = when (status) {
+    BatteryManager.BATTERY_STATUS_CHARGING -> BatteryChargingState.CHARGING
+    BatteryManager.BATTERY_STATUS_DISCHARGING -> BatteryChargingState.DISCHARGING
+    BatteryManager.BATTERY_STATUS_NOT_CHARGING -> BatteryChargingState.NOT_CHARGING
+    BatteryManager.BATTERY_STATUS_FULL -> BatteryChargingState.FULL
+    else -> BatteryChargingState.UNKNOWN
+}
 
-    private fun plugTypeOf(plugged: Int): BatteryPlugType = when (plugged) {
-        0 -> BatteryPlugType.UNPLUGGED
-        BatteryManager.BATTERY_PLUGGED_AC -> BatteryPlugType.AC
-        BatteryManager.BATTERY_PLUGGED_USB -> BatteryPlugType.USB
-        BatteryManager.BATTERY_PLUGGED_WIRELESS -> BatteryPlugType.WIRELESS
-        BatteryManager.BATTERY_PLUGGED_DOCK -> BatteryPlugType.DOCK
-        else -> BatteryPlugType.UNPLUGGED
-    }
+/** Android's EXTRA_PLUGGED code as the exported plug type; null for a code this build does not know. */
+internal fun plugTypeOf(plugged: Int): BatteryPlugType? = when (plugged) {
+    0 -> BatteryPlugType.UNPLUGGED
+    BatteryManager.BATTERY_PLUGGED_AC -> BatteryPlugType.AC
+    BatteryManager.BATTERY_PLUGGED_USB -> BatteryPlugType.USB
+    BatteryManager.BATTERY_PLUGGED_WIRELESS -> BatteryPlugType.WIRELESS
+    BatteryManager.BATTERY_PLUGGED_DOCK -> BatteryPlugType.DOCK
+    else -> null
+}
 
-    private fun healthOf(health: Int): BatteryHealth = when (health) {
-        BatteryManager.BATTERY_HEALTH_GOOD -> BatteryHealth.GOOD
-        BatteryManager.BATTERY_HEALTH_OVERHEAT -> BatteryHealth.OVERHEAT
-        BatteryManager.BATTERY_HEALTH_DEAD -> BatteryHealth.DEAD
-        BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> BatteryHealth.OVER_VOLTAGE
-        BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> BatteryHealth.UNSPECIFIED_FAILURE
-        BatteryManager.BATTERY_HEALTH_COLD -> BatteryHealth.COLD
-        else -> BatteryHealth.UNKNOWN
-    }
+/** Android's EXTRA_HEALTH code as the exported battery health. */
+internal fun healthOf(health: Int): BatteryHealth = when (health) {
+    BatteryManager.BATTERY_HEALTH_GOOD -> BatteryHealth.GOOD
+    BatteryManager.BATTERY_HEALTH_OVERHEAT -> BatteryHealth.OVERHEAT
+    BatteryManager.BATTERY_HEALTH_DEAD -> BatteryHealth.DEAD
+    BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> BatteryHealth.OVER_VOLTAGE
+    BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> BatteryHealth.UNSPECIFIED_FAILURE
+    BatteryManager.BATTERY_HEALTH_COLD -> BatteryHealth.COLD
+    else -> BatteryHealth.UNKNOWN
 }

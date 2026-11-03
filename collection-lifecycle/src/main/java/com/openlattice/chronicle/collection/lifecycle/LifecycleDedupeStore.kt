@@ -39,6 +39,11 @@ public const val LIFECYCLE_RECORDER_PREFS_NAME: String = "chronicle_lifecycle_re
 /** Dedupe window: a repeat of the same lifecycle event within this many millis is dropped. */
 public const val LIFECYCLE_DEDUPE_WINDOW_MS: Long = 2_000L
 
+public const val LIFECYCLE_DEDUPE_KEY_PREFIX: String = "last:"
+
+public fun lifecycleDedupeKey(event: ExtractedUsageEvent): String =
+    "$LIFECYCLE_DEDUPE_KEY_PREFIX${event.interactionType}:${event.activityClass.orEmpty()}"
+
 /** A wall-clock correction into the past starts a new dedupe window. */
 public fun isDuplicateLifecycleEvent(lastSeenMillis: Long?, nowMillis: Long): Boolean =
     lastSeenMillis != null && nowMillis >= lastSeenMillis && nowMillis - lastSeenMillis < LIFECYCLE_DEDUPE_WINDOW_MS
@@ -46,12 +51,6 @@ public fun isDuplicateLifecycleEvent(lastSeenMillis: Long?, nowMillis: Long): Bo
 /**
  * Production [LifecycleDedupeStore] backed by the `chronicle_lifecycle_recorder`
  * shared-preferences file.
- *
- * This preserves the pre-Phase-5 behaviour **exactly** — same prefs file
- * ([LIFECYCLE_RECORDER_PREFS_NAME]), same key format (`last:<interactionType>:<activityClass>`),
- * same [LIFECYCLE_DEDUPE_WINDOW_MS] window — so the dedupe state survives the migration
- * whether [LifecycleWorkerMigration.USE_MODULE_MANAGER_LIFECYCLE_PATH] is on or off, and
- * the two paths suppress identically.
  *
  * It is constructed per use from a [Context]; it holds no `Context` in a long-lived
  * field — only the resolved [android.content.SharedPreferences] handle.
@@ -62,7 +61,7 @@ public class PrefsLifecycleDedupeStore(context: Context) : LifecycleDedupeStore 
         context.applicationContext.getSharedPreferences(LIFECYCLE_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
 
     override fun shouldPersist(event: ExtractedUsageEvent, now: Long): Boolean {
-        val key = "last:${event.interactionType}:${event.activityClass ?: ""}"
+        val key = lifecycleDedupeKey(event)
         val last = prefs.getLong(key, Long.MIN_VALUE).takeUnless { it == Long.MIN_VALUE }
         if (isDuplicateLifecycleEvent(last, now)) {
             return false

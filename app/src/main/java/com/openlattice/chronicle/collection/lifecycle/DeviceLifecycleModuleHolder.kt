@@ -13,7 +13,6 @@ import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.nextQueueWriteTimestamp
-import com.openlattice.chronicle.utils.Utils
 import com.openlattice.chronicle.services.lifecycle.RoomLifecycleDedupeStore
 import com.openlattice.chronicle.services.lifecycle.persistLifecycleEntries
 
@@ -36,7 +35,6 @@ import com.openlattice.chronicle.services.lifecycle.persistLifecycleEntries
  *  - persistence → [LifecycleEventSink] over `ChronicleDb.queueEntryData()`;
  *  - dedupe → Room state committed with the queue entry;
  *  - enrollment check → `EnrollmentSettings.getParticipationStatus() == ENROLLED`;
- *  - queue-size update → `Utils.updateUploadQueueSize`.
  *
  */
 public object DeviceLifecycleModuleHolder {
@@ -68,13 +66,12 @@ public object DeviceLifecycleModuleHolder {
                 EnrollmentSettings(appContext).getParticipationStatus() == ParticipationStatus.ENROLLED &&
                     CollectionGate.collects(appContext, CollectionModuleId.DEVICE_LIFECYCLE)
             },
-            updateQueueSize = { depth -> Utils.updateUploadQueueSize(appContext, depth) },
             serializeQueueEntry = { data -> JsonSerializer.serializeQueueEntry(data) },
             nextWriteTimestamp = { wallClockMillis -> db.nextQueueWriteTimestamp(wallClockMillis) },
-            originOwner = { ResearchPersistenceGate.captureOwner(appContext) },
-            accountLossForOwner = { owner, code, count ->
-                recordForExpectedOwner(appContext, owner, LocalUploadModuleFamily.USAGE_LIFECYCLE,
-                    LocalOperationalIssue.valueOf(code), count)
+            captureLossRecorder = {
+                val owner = ResearchPersistenceGate.captureOwner(appContext)
+                fun(code: String, count: Int) = recordForExpectedOwner(appContext, owner,
+                    LocalUploadModuleFamily.USAGE_LIFECYCLE, LocalOperationalIssue.valueOf(code), count)
             },
         )
     }

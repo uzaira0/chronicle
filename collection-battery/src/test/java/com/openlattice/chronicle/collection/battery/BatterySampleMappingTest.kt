@@ -16,6 +16,7 @@ class BatterySampleMappingTest {
         chargingState: String = "DISCHARGING",
         plugType: String = "UNPLUGGED",
         health: String = "GOOD",
+        producerVersion: String? = null,
     ): BatterySampleEntry = BatterySampleEntry(
         id = "battery-row-1",
         timestamp = timestamp,
@@ -26,6 +27,7 @@ class BatterySampleMappingTest {
         temperatureDeciC = 298,
         voltageMillivolts = 4012,
         health = health,
+        producerVersion = producerVersion,
     )
 
     @Test fun testHappyMappingRoundTrips() {
@@ -38,6 +40,12 @@ class BatterySampleMappingTest {
         assertEquals(298, sample.temperatureDeciC)
         assertEquals(4012, sample.voltageMillivolts)
         assertEquals("UTC", sample.timezone)
+    }
+
+    @Test fun uploadKeepsTheCapturedVersionAndDoesNotInventLegacyMetadata() {
+        for (version in listOf(null, "2026.10.01 (80)")) {
+            assertEquals(version, entry(producerVersion = version).toBatterySample().producerVersion)
+        }
     }
 
     @Test fun testCorruptTimestampThrows() {
