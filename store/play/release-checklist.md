@@ -1,47 +1,25 @@
-# Minimal Google Play release checklist
+# Google Play release checklist
 
-Current qualification status and exact evidence are recorded in the
-[current handoff](../../../docs/handoff/play-selfhost-release-handoff-2026-08-26.md).
-Older diagnostic hashes below are retained as historical evidence; they do not identify the final
-candidate and must not be uploaded.
+Play ships the **open** variant (`bundleOpenRelease`, `play_variant=openRelease` in
+`privacy.properties`) since v58. Sections below that name older version codes are historical
+evidence only. Current qualification evidence: `privacy.properties`, `verify-play-submission.py` and
+`scripts/play-upload.py check`.
 
-This checklist currently covers Chronicle Internal Testing: exact-server enrollment, informed
-consent, app usage/basic device telemetry, unlock-based user identification, reliable upload,
-and uninstall-based withdrawal from future collection. Health Connect, audio, interaction/accessibility capture, notification content,
-activity/sleep expansion, location, and optional high-rate sensors are not part of this release.
+This checklist covers Chronicle Internal Testing of the open variant: exact-server enrollment,
+informed consent, the modules in `app/src/open/assets/approved-module-registry.json` (app usage
+and in-app activity class, device lifecycle and settings, battery, connectivity and app network
+usage, unlock-based user identification, 11 hardware sensors up to 200 Hz, upload diagnostics,
+questionnaire reminders),
+reliable upload, and in-app Withdraw from study (stops collection and sends a withdrawal request; the
+study team keeps or erases earlier data according to the study's withdrawal policy). Interaction events, notification activity, audio, Health Connect, sleep, activity recognition and step counter are excluded;
+a study enabling one is refused at enrollment.
 
 ## Merged source and diagnostic artifact
 
-- [x] The August 26 independent Android/Play review found no P0 issue. Its implementable P1
-  findings are addressed in the current `develop` change: participant-form/questionnaire runtime
-  removal, withdrawal-safe enrollment monitoring, mandatory disclosed upload diagnostics,
-  structured diagnostic minimization, 30-day pruning (superseded 2026-09-28: diagnostics follow
-  study retention or explicit erasure), and removal of unsupported legacy Firebase/Crashlytics
-  claims. Final artifact/reviewer/Play-delivery findings remain gates below.
-- [x] Android `develop` contains the reviewed minimal-public-artifact and sealed-submission work
-  through `99c6d4f94b8dcb364ffbd7b98f5b5cb461e74822` (PRs #46 through #50).
-- [x] The permanent package ID is `com.bcm.chronicle`; the current diagnostic candidate is
-  version code `54`, target SDK 36. The final Play version/name still requires the Console
-  ownership and maximum-version-code checks below.
-- [x] A post-merge Play AAB was built from that exact source and independently verified:
-  SHA-256 `6fd9787dbfdb76858d7e3e786f9299d4cfd6fa6f29ea743afda1f4f161103cba`,
-  RC ID `minimal-play-merged-diagnostic-20260822c`, evidence directory
-  `app/build/play-aab-evidence/20260822-post-merge-reminder-fixed-installed`.
-- [x] A later pre-commit diagnostic AAB includes the final exact-origin Settings disclosure and
-  verifier hardening: SHA-256
-  `912453246e595f1081f21efd5fc02a6d9ffa197efcdaabda45c6e2f799902b9a`, RC ID
-  `minimal-play-final-diagnostic-20260822d`, upload-certificate SHA-256
-  `77A05B33A4BAA8D51137A491919556E4E836E5972227486E0AA574D2DEC2D76D`. It is
-  diagnostic evidence only and must not be promoted in place of the sealed post-merge RC.
-- [x] The current post-review diagnostic AAB rebuilt all Android source changes and passed unit,
-  Play-release lint, bundle, and complete AAB verification. SHA-256:
-  `8906a8c2340746313cdf3d7fad0dac68a32083764511efbe0b4997bd7c3eec9e`; receipt SHA-256:
-  `60fad7d1870664c8a565814875a55c44719e8e4f45505b44842ffc439f5e8bb9`; evidence:
-  `app/build/play-aab-evidence/local-post-review-final-20260826`. It is `UNSEALED`, diagnostic
-  only, and must never be uploaded.
-- [x] The verified AAB-derived split set was clean-installed on an API 33 emulator. Built and
-  installed split-content manifests both hash to
-  `b71ca03b2650134bca1c8e6a2f6c943c50a3da8f7986112589094fa748059d97`.
+- [x] Participant-form/questionnaire runtime removed; enrollment monitoring is withdrawal-safe;
+  upload diagnostics are mandatory, disclosed and minimized, and follow study retention or explicit
+  erasure; unsupported legacy Firebase/Crashlytics claims removed. Artifact, reviewer and
+  Play-delivery checks remain gates below.
 - [x] The verifier binds the AAB's embedded R8 mapping, complete delivered split set, package,
   version, RC ID, approved-registry hash, signer, permissions, components, classes, resources,
   native libraries, and prohibited strings. Artifact tests reject package replacement.
@@ -49,9 +27,8 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
   byte-identical APKs, while Play-delivered splits require the pinned Play app-signing certificate
   and identical normalized payloads. Normalization excludes only signing artifacts and retains
   runtime-relevant `META-INF`, resources, code, manifests, and native libraries.
-- [ ] Do not promote the diagnostic AAB above. Build one sealed final RC only after the
-  version/signing, policy-copy, and Play-account inputs are resolved. A public reviewer environment
-  is not an Internal Testing gate.
+- [ ] Build one sealed final RC only after the version/signing, policy-copy, and Play-account
+  inputs are resolved. A public reviewer environment is not an Internal Testing gate.
 
 ## Submission contract and sealed-RC gate
 
@@ -89,38 +66,6 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
   fail closed.
 - [ ] The current manifest deliberately remains `pending_owner_approval`; a diagnostic verification
   may pass, but a sealed verification must fail until the exact owner inputs below are supplied.
-
-## Minimal public artifact
-
-- [x] Operational audio capture is absent from Play and Amazon: no audio collector, DAO,
-  service, permission, consent/UI, persistence/upload path, delivered DEX class, native library,
-  resource, or participant-facing audio copy ships in the verified artifact.
-- [x] Health Connect, activity/sleep expansion, interaction/accessibility capture, notification
-  listener/content capture, screen content, precise location, and optional high-rate sensors are
-  absent from the public implementation and are rejected by artifact verification.
-- [x] The approved public modules are exactly app-usage events, in-app activity class, device
-  lifecycle, unlock user identification, battery telemetry, connectivity state, and device
-  settings. Per-app network usage is excluded. Upload diagnostics use bounded encrypted local
-  persistence, authenticated delivery to the exact enrolled study server, local retention
-  until study retention ends or explicit erasure. Uninstall removes app-local data but cannot notify the
-  server or request server erasure. Their payload is limited to a
-  closed issue code, count, times, optional HTTP status, and bounded exception class; it contains
-  no free-form error text, server URL, credentials, or stack trace. Participant/device identity is
-  supplied by the authenticated request and the receiving server is inherent in the connection.
-- [x] The approved-module registry is the machine-readable authority for fields, permissions,
-  retention, destination, upload behavior, and deletion behavior; tests bind it to runtime module
-  permissions and the packaged registry hash.
-- [x] Public Settings/Data Sharing hides excluded notification-listener, accessibility, and sensor
-  controls rather than showing nonfunctional high-risk options.
-- [x] Credentialed HTTP redirects are disabled, and enrollment accepts only a validated public
-  HTTPS Chronicle origin with no URL credentials, query, or fragment.
-- [x] Public Play/Open/Amazon builds contain no global mobile signing secret. A one-time invitation
-  issues a scoped per-device credential used for subsequent authenticated calls.
-- [x] R8 preserves the three reminder response types required by Retrofit/Moshi; the verifier and
-  minified runtime proof cover their constructors, getters, and enum constants.
-- [x] Notification permission denial/recovery, current accepted settings, local participant choice,
-  reboot, enrollment state, and the minimal-artifact boundary all gate unlock monitoring. Uninstall
-  removes the app and therefore stops the service.
 
 ## Android and selfhost interoperability proved
 
@@ -182,11 +127,20 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
   the dedicated upload-key certificate derived outside the repository, and the matching release
   workflow configuration. The first Internal Testing upload must still confirm Play accepted that
   upload certificate; that is delivery evidence, not a prerequisite for sealing the upload itself.
-- [x] Version code `54` was uploaded to Internal Testing on 2026-08-27, so the authoritative
-  `maximum_uploaded_version_code` is `54`.
-- [x] The owner approved the optimized replacement as version code `55`, version name
-  `2026.08.27-internal.2`, and RC identifier `chronicle-play-v55-internal-20260827.2` for Internal
-  Testing on 2026-08-27.
+- [x] `maximum_uploaded_version_code` in `privacy.properties` is the highest version code Play has
+  accepted; `scripts/play-upload.py` raises it after each upload and refuses a version code at or
+  below it.
+- [ ] Whenever an accepted Play version first ships a `ChronicleDb` version, add that version's
+  unchanged exported identity hash to `ChronicleDbMigrationTest.PUBLISHED_IDENTITY` with its Play
+  version code. Run `:app:testOpenDebugUnitTest --tests '*ChronicleDbMigrationTest*'` and preserve
+  already published schema files; an entity change needs a new database version and migration.
+  Verify queued rows and enrollment also survive the released predecessor's in-place upgrade.
+- [x] `scripts/play-upload.py upload` runs only with the hash-pinned Google client libraries in
+  `scripts/play-upload.requirements.txt`, installed into a dedicated virtualenv
+  (`uv pip sync --require-hashes`); it refuses before reading credentials when an installed version
+  differs from the lock.
+- [ ] Each version bump sets a `release_candidate_id` that names the new version code
+  (`-v<versionCode>-`); `scripts/play-upload.py check` refuses one that does not.
 - [x] `upload_certificate_sha256` records the dedicated production upload certificate and
   `play_app_signing_certificate_sha256` records Play's separate app-signing certificate
   fingerprint. The upload-key recovery credentials are stored outside the repository and the
@@ -198,9 +152,14 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
   identity are recorded as owner-approved decisions.
 - [x] The owner selected the Play store category `Parenting`; the accountable decision manifest
   records and validates that category so it cannot drift during final sealing.
-- [x] The Console Data Safety declaration was completed against `data-safety.md`, without Crash
-  logs or legacy Firebase/Crashlytics installation/interaction data. The final sealed AAB audit
-  must mechanically reconfirm these answers before submission.
+- [ ] Export the current Console Data Safety CSV to `store/play/data-safety-console.csv`.
+  The sealed-submission verifier compares its deletion-request answer to the UI-tested declaration.
+- [ ] Approve the bundled policy in the declared Play AAB and record the SHA-256 of its compiled
+  `platform_privacy_policy_full` text in `store/play/platform-policy-approved.sha256`.
+  The bundle task verifies the exact AAB; a digest from another flavor or policy text fails.
+- [ ] Update the Console Data Safety declaration against `data-safety.md` to include Crash logs:
+  first-party app-crash, native-crash and app not responding counts with occurrence times.
+  The earlier declaration omitted these reports. Reconfirm the answers against the final sealed AAB.
 - [x] The owner approved the BCM compliance URL, uninstall wording, retention wording, and current
   Internal Testing legal copy; the decision manifest records the approver and approval time.
 - [ ] Before a later Play review stage—not Internal Testing—deploy any required reviewer access,
@@ -208,9 +167,10 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
 - [ ] Refresh all bound hashes, set all
   remaining approval statuses plus `submission_status` to `approved`, and set
   `release_candidate_id`.
-- [ ] Run `scripts/verify-store-readiness.sh play --sealed`; then export the same approved upload
-  certificate SHA-256 as `PLAY_UPLOAD_CERT_SHA256`, build the sealed RC from a fresh detached
-  checkout, and rerun `scripts/verify-play-aab.sh` without `--allow-unpinned-cert`.
+- [ ] Run `scripts/verify-store-readiness.sh play`; then build the `openRelease` AAB from a fresh
+  detached checkout and run `scripts/play-upload.py check` on it. Keep `app-open-release.cdx.json`
+  beside the AAB: the check refuses a bundle without the SBOM that names its SHA-256, and both are
+  archived together.
 
 ## Final Play delivery and assets
 
@@ -227,10 +187,14 @@ activity/sleep expansion, location, and optional high-rate sensors are not part 
   Never rebuild the AAB or accept an unattested parent receipt during this post-upload phase.
 - [ ] Capture the required phone, 7-inch, and 10-inch screenshots from that same delivered candidate
   and synthetic test environment, following `assets/screenshots/README.md`.
-- [ ] Record the single `DeviceUnlockMonitoringService` foreground-service demonstration video if
-  required by the Console declaration.
+- [x] Accessibility API declaration is not applicable: the submitted `openRelease` artifact contains no
+  AccessibilityService. See `accessibility-declaration.md`.
+- [ ] File the specialUse foreground-service declarations and demonstration videos for both
+  `DeviceUnlockMonitoringService` and `HardwareSensorService`; follow `foreground-service-declaration.md`.
+  Record each Console filing date and video URL here: pending owner filing.
 - [ ] Submit the declarations/listing copy and mechanically compare them with the approved registry;
-  no Health Connect or AccessibilityService declaration should be present.
+  the open artifact includes both foreground services and excludes Accessibility, the notification listener,
+  audio collectors and Health Connect.
 - [ ] Internal test and Play pre-launch report pass with every finding triaged before rollout.
 
 ## Qualification still to run last

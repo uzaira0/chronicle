@@ -82,9 +82,9 @@ Signing, app bundles, the production hostname, the existing package ID, and the 
 ## Smoke and release plan
 
 1. Run web unit tests and `selfhost/verify-config.sh`.
-2. Build/process the merged `playRelease` manifest; run `scripts/verify-store-readiness.sh play`.
+2. Build/process the merged `openRelease` manifest; run `scripts/verify-store-readiness.sh play`.
 3. Run Android unit tests, lint, release runtime dependency/SBOM checks, and 16 KB native-library check.
-4. Produce a signed `bundlePlayRelease` AAB with no global mobile-signing secret, using the upload key
+4. Produce a signed `bundleOpenRelease` AAB with no global mobile-signing secret, using the upload key
    registered for `com.bcm.chronicle`; inspect the AAB/package/version/signing identity and verify that
    enrollment installs only the per-device API credential issued by the selected study server.
 5. Verify the store privacy-policy URL points to the BCM compliance page.

@@ -1,9 +1,9 @@
 # Foreground service declarations
 
-The Play artifact has one `specialUse` service. It needs one Play Console declaration and a durable
-unlisted demo-video URL. It runs only while enrolled/configured, shows an ongoing notification, and
-stops when identification is disabled, access is revoked, enrollment becomes inactive, or the app
-is uninstalled.
+The open artifact Play ships has two `specialUse` services. Each needs a Play Console declaration
+and a durable unlisted demo-video URL. Each runs only while enrolled and its module is active, shows
+an ongoing notification, and stops when the module is turned off, access is revoked, enrollment
+becomes inactive, or the app is uninstalled.
 
 ## DeviceUnlockMonitoringService
 
@@ -18,5 +18,17 @@ is uninstalled.
   for Device user prompts), lock/unlock, show the prompt and ongoing notification, turn off
   Identify device user, and show that the service stops.
 
-If Play rejects this `specialUse`, do not relabel it as an inaccurate service type. Redesign the
-runtime around an approved API or remove that feature from the Play flavor.
+## HardwareSensorService
+
+- Functionality: sample the motion and device sensors the study requests (`sensor_*` modules) at
+  the study's rate and duty cycle, and store the samples for upload to the enrolled study server.
+- Why immediate/continuous: research sensor streams need sampling while the app is in the
+  background; Android stops sensor listeners in a backgrounded process without a foreground service.
+- Why specialUse: continuous research sampling of non-body sensors does not match a standard FGS
+  type. `health` was considered and not used: the service is not a fitness or health tracker for
+  the user.
+- Video: enroll in a study with a sensor module requested, accept it, show the ongoing sensor
+  notification, then remove the sensor module (or withdraw) and show that the service stops.
+
+If Play rejects either `specialUse`, do not relabel it as an inaccurate service type. Redesign the
+runtime around an approved API or remove that feature from the Play artifact.

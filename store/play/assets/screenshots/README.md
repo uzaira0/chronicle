@@ -1,10 +1,10 @@
 # Google Play screenshot capture contract
 
-No screenshot PNG is currently approved or tracked. The obsolete pre-minimal set was removed because
-it showed Health Connect UI that is absent from the Play artifact. Do not restore or submit that set.
+No screenshot PNG is currently approved or tracked. Play ships the `openRelease` artifact, so
+capture from that artifact only. Health Connect and activity/sleep recognition are absent from it and
+must not appear.
 
-Capture replacements only after one release candidate is sealed and installed from its signed AAB
-split set (or from the identical Internal Testing delivery). Every capture must be bound to:
+Capture only after one release candidate is sealed and installed from its signed AAB split set (or from the identical Internal Testing delivery). Every capture must be bound to:
 
 - package `com.bcm.chronicle`, version code/name, release-candidate identifier, and AAB SHA-256;
 - installed split paths, split SHA-256 values, and signing-certificate SHA-256;
@@ -30,13 +30,13 @@ Create the following files in each directory. Alt text must remain truthful, spe
 
 1. `01-enrollment-review.png` — study identity, purpose, collection summary, privacy link, and accept/cancel controls.
 2. `02-overview.png` — one active synthetic study, collection state, upload state, and server-health status.
-3. `03-data-sharing.png` — only minimal approved modules and participant-controlled collection choices.
+3. `03-data-sharing.png` — modules from the open approved-module registry and participant-controlled collection choices.
 4. `04-unlock-identification.png` — the optional post-unlock user-category prompt and its skip/control path.
 5. `05-uploads.png` — local queue and successful synthetic delivery status without participant records.
-6. `06-settings.png` — settings and the uninstall-based exit disclosure; no withdrawal button or
-   server-deletion claim may appear.
+6. `06-settings.png` — study server details with Withdraw from study visible.
 
-Health Connect, activity/sleep recognition, physical sensors, notification/media access, audio,
-AccessibilityService, location, and other excluded surfaces must not appear anywhere in the images.
+Sensor, notification-access, audio and AccessibilityService screens may appear, because the open
+artifact ships those modules. Health Connect, activity/sleep recognition, location, and other surfaces
+absent from the open approved-module registry must not appear anywhere in the images.
 The capture gate must reject unexpected files, missing required files, wrong dimensions, alpha,
 metadata, or a screenshot whose recorded artifact identity differs from the sealed release receipt.

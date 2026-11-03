@@ -1,6 +1,6 @@
 # AccessibilityService declaration
 
-No AccessibilityService declaration or review video is required for the Play artifact. Its merged
-manifest must not contain `BIND_ACCESSIBILITY_SERVICE` or `InteractionCollectionService`, and its
-distribution policy rejects the Interaction Events module before consent. Accessibility collection
-remains research-build-only and must not be described or enabled in the Play reviewer study.
+Not applicable to the Play-shipped open artifact. It contains no AccessibilityService or
+BIND_ACCESSIBILITY_SERVICE declaration and does not collect interaction_events.
+
+The accessibility collector remains available only in the research flavor.

@@ -6,7 +6,7 @@
   editable source is `assets/feature-graphic.svg`.
 - Screenshots: capture from the signed Play release candidate with synthetic data. Include
   enrollment review, Data Sharing, Overview/collection status, unlock identification, uploads, and
-  the uninstall-based exit disclosure. Capture at least two phone screenshots and tablet screenshots
+  the Withdraw from study screen. Capture at least two phone screenshots and tablet screenshots
   appropriate to every form factor selected in Console.
 - Never show a real participant/study identifier, API key, signing secret, notification content,
   user-identification response, app-usage record, or other participant data.

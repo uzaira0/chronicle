@@ -19,9 +19,10 @@ release and therefore do not gate it.
    and each settings jump is preceded by a separate disclosure. App usage needs the Usage access
    special permission: after its disclosure, Android opens Settings > Special app access > Usage
    access; turn it on for Chronicle and press Back.
-5. The Play reviewer study requests only app usage, basic device telemetry, upload diagnostics, and
-   unlock user identification. The Play artifact does not expose Health Connect, activity/sleep
-   recognition, physical sensor, notification/media, audio, or AccessibilityService collection.
+5. The open artifact Play ships can also collect motion and device sensors,
+   each only when the study requests it. Before review, decide which of these the reviewer study requests and list them in the
+   paragraph at the end. Each one shows its own disclosure before the matching Android Settings
+   page or permission dialog.
 6. To review unlock identification, open Settings in Chronicle and turn on Identify device user,
    then tap Continue on the disclosure. The prompt needs three notification settings:
    a. If Android shows "Allow Chronicle notifications", tap Open notification settings and turn on
@@ -33,10 +34,11 @@ release and therefore do not gate it.
       and turn on Pop on screen, then press Back.
    c. Lock and unlock the device. Choose a synthetic user category in the prompt. Then turn off
       Identify device user and confirm the ongoing unlock-monitoring notification stops.
-7. To withdraw from Chronicle collection, uninstall the app. Android removes Chronicle's on-device
-   app data and future collection stops. Uninstalling cannot notify the enrolled study server or
-   request deletion of records already uploaded; questions about those records go to the research
-   team identified in the study consent.
+7. To withdraw, open Settings > Study server details > Withdraw from study. Collection stops and
+   Chronicle sends a withdrawal request to the enrolled study server. Data already collected is kept
+   or erased by the study team, according to this study's withdrawal policy. Keep
+   the app installed until the request is acknowledged. Uninstalling alone removes on-device data
+   but does not request server deletion.
 
 Before Play review, replace this paragraph with the exact synthetic review study identity, durable
 reviewer URL, reset instructions, server hostname, allowed module list, and configuration reviewers
