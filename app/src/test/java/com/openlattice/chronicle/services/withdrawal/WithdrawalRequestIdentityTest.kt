@@ -59,6 +59,40 @@ class WithdrawalRequestIdentityTest {
         assertNotEquals(first, second)
     }
 
+    /**
+     * A state name this build cannot read (written by a newer build before a downgrade, or damaged) must keep
+     * collection stopped and send the participant to the study team, never read as "no withdrawal".
+     */
+    @Test
+    fun `an unreadable stored withdrawal state reads as needs support`() {
+        val prefs = InMemorySharedPreferences()
+        prefs.edit().putString("participant_withdrawal_state", "ARCHIVED").commit()
+        val store = WithdrawalStateStore(prefs)
+
+        assertEquals(WithdrawalState.NEEDS_SUPPORT, store.state())
+        assertEquals(WithdrawalState.NEEDS_SUPPORT, store.stateOrThrow())
+        assertTrue(store.state().requiresResolution)
+    }
+
+    /**
+     * A pending withdrawal persisted by a client that predated request ids (or holding a non-canonical id) gets one
+     * canonical id, committed before any request, and every later retry and process restart sends that same id.
+     */
+    @Test
+    fun `a legacy pending withdrawal without a canonical request id gets one durable id`() {
+        val prefs = InMemorySharedPreferences()
+        prefs.edit().putString("participant_withdrawal_state", WithdrawalState.PENDING.name).commit()
+
+        val generated = WithdrawalStateStore(prefs).withdrawalRequestIdForRetry()
+        assertEquals(UUID.fromString(generated).toString(), generated)
+        assertEquals(generated, WithdrawalStateStore(prefs).withdrawalRequestIdForRetry())
+
+        prefs.edit().putString("participant_withdrawal_request_id", generated.uppercase()).commit()
+        val replaced = WithdrawalStateStore(prefs).withdrawalRequestIdForRetry()
+        assertEquals(UUID.fromString(replaced).toString(), replaced)
+        assertEquals(replaced, WithdrawalStateStore(prefs).persistedWithdrawalRequestId())
+    }
+
     @Test
     fun `withdrawal endpoint requires the durable request id header`() {
         val method = ChronicleStudyApi::class.java.methods.single {
@@ -70,7 +104,7 @@ class WithdrawalRequestIdentityTest {
 
         assertEquals(
             listOf(
-                "X-Chronicle-Device-Id",
+                "X-Chronicle-Random-Device-Id",
                 "X-Api-Key",
                 "X-Chronicle-Withdrawal-Request-Id",
             ),
