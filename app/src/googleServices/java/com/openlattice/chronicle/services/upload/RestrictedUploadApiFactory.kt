@@ -9,16 +9,11 @@ import java.util.concurrent.ConcurrentHashMap
 internal object RestrictedUploadApiFactory {
     private val cache = ConcurrentHashMap<String, RestrictedChronicleStudyApi>()
 
-    fun get(
-        url: String,
-        mobileSigningSecretOverride: String? = null,
-    ): RestrictedChronicleStudyApi {
+    fun get(url: String): RestrictedChronicleStudyApi {
         val trustedUrl = Utils.normalizeTrustedServerUrl(url)
             ?: throw IllegalArgumentException("Untrusted Chronicle server URL")
-        val cacheKey = trustedUrl + "|" +
-            Utils.mobileSigningSecretFingerprint(mobileSigningSecretOverride)
-        return cache.getOrPut(cacheKey) {
-            createRetrofitAdapter(trustedUrl, mobileSigningSecretOverride)
+        return cache.getOrPut(trustedUrl) {
+            createRetrofitAdapter(trustedUrl)
                 .create(RestrictedChronicleStudyApi::class.java)
         }
     }

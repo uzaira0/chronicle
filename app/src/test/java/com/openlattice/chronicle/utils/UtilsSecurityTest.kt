@@ -1,7 +1,7 @@
 package com.openlattice.chronicle.utils
 
 import com.openlattice.chronicle.BuildConfig
-import okhttp3.OkHttpClient
+import com.openlattice.chronicle.services.upload.UploadTransport
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -70,22 +70,6 @@ class UtilsSecurityTest {
     }
 
     @Test
-    fun effectiveMobileSigningSecretPrefersPerServerOverride() {
-        assertEquals(
-            "server-override-secret",
-            Utils.effectiveMobileSigningSecret("server-override-secret"),
-        )
-    }
-
-    @Test
-    fun blankMobileSigningOverrideFallsBackToApkDefaultSecret() {
-        assertEquals(
-            Utils.effectiveMobileSigningSecret(null),
-            Utils.effectiveMobileSigningSecret("  "),
-        )
-    }
-
-    @Test
     fun chronicleClientNeverFollowsServerRedirects() {
         val trustedHost = if (BuildConfig.ALLOW_ANY_SERVER) {
             "research.example.org"
@@ -94,7 +78,7 @@ class UtilsSecurityTest {
         }
         if (trustedHost.isBlank()) return
 
-        val client = Utils.createRetrofitAdapter("https://$trustedHost").callFactory() as OkHttpClient
+        val client = (Utils.createRetrofitAdapter("https://$trustedHost").callFactory() as UploadTransport).interactiveClient
         assertFalse(client.followRedirects)
         assertFalse(client.followSslRedirects)
     }

@@ -8,30 +8,22 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import com.openlattice.chronicle.collection.AndroidConnectivityStateEvent
+import com.openlattice.chronicle.collection.AndroidDeviceSettingsEvent
 import com.openlattice.chronicle.collection.DistributionCollectionContributions
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-import com.openlattice.chronicle.crypto.EncryptedPayloadType
-import com.openlattice.chronicle.serialization.JsonSerializer
-import com.openlattice.chronicle.services.crypto.EncryptionRequiredButUnavailableException
-import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
-import com.openlattice.chronicle.services.crypto.PayloadSealer
-import com.openlattice.chronicle.services.upload.UPLOAD_NETWORK_CONSTRAINT
-import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
-import com.openlattice.chronicle.services.upload.UploadWorker
+import com.openlattice.chronicle.services.upload.DedicatedUploadBatch
+import com.openlattice.chronicle.services.upload.DedicatedUploadSource
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
-import com.openlattice.chronicle.services.upload.quarantineMalformedSample
+import com.openlattice.chronicle.services.upload.UPLOAD_NETWORK_CONSTRAINT
+import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
+import com.openlattice.chronicle.services.upload.runEnrolledUpload
+import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServerResolution
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.UploadQueueTable
 import com.openlattice.chronicle.storage.UploadServerEntity
-import com.openlattice.chronicle.services.upload.UploadRetryGate
-import com.openlattice.chronicle.services.upload.acknowledgePendingUploadBatch
-import com.openlattice.chronicle.services.upload.handleRejectedUploadBatch
-import com.openlattice.chronicle.services.upload.pendingUploadBatchVersion
-import com.openlattice.chronicle.services.upload.pendingUploadBatchIdentity
-import com.openlattice.chronicle.services.upload.quarantineRejectedRows
-import com.openlattice.chronicle.services.upload.selectPendingUploadBatch
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 private val TAG = ExpansionUploadWorker::class.java.simpleName
@@ -39,7 +31,6 @@ private val TAG = ExpansionUploadWorker::class.java.simpleName
 internal const val EXPANSION_UPLOAD_WORK_NAME = "expansion_modules_upload"
 internal const val INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD = "collect_expansion_before_upload"
 private const val EXPANSION_UPLOAD_INTERVAL_MIN = 15L
-private const val EXPANSION_UPLOAD_MAX_BATCH = 5000
 private const val EXPANSION_UPLOAD_MAX_ATTEMPTS = 5
 
 /**
@@ -48,26 +39,25 @@ private const val EXPANSION_UPLOAD_MAX_ATTEMPTS = 5
  *
  * Mirrors [com.openlattice.chronicle.collection.audio.AudioUploadWorkerDelegate]: each stream is
  * uploaded to the active study server and its batch deleted only once it succeeds (endpoints are
- * idempotent via `ON CONFLICT DO NOTHING`). Encryption routing matches the other Android upload
- * paths — plaintext, sealed envelope, or fail-closed (retain + retry, never plaintext PHI).
+ * idempotent via `ON CONFLICT DO NOTHING`).
  */
 class ExpansionUploadWorker(context: Context, workerParameters: WorkerParameters) :
-    com.openlattice.chronicle.security.LeaseBoundWorker(context, workerParameters) {
+    Worker(context, workerParameters) {
 
-    override fun runWork(): Result {
+    override fun doWork(): Result {
         return try {
             if (inputData.getBoolean(INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD, false)) {
                 ResearchPersistenceGate.collectForCurrentOwner(applicationContext) {
                     collectExpansionSamples(applicationContext)
                 }
             }
-            val result = ResearchPersistenceGate.runIfEnrolled(applicationContext) {
+            runEnrolledUpload(applicationContext, TAG) {
                 if (!UploadQueueSingleFlight.tryAcquire(EXPANSION_UPLOAD_WORK_NAME)) {
                     Log.i(TAG, "Expansion upload deferred because the queue is already being drained")
                     Result.retry()
                 } else try {
                     val failures = ExpansionUploadWorkerDelegate(
-                        applicationContext, ChronicleDb.getInstance(applicationContext),
+                        applicationContext, ChronicleDb.getInstance(applicationContext), stopped = ::isStopped,
                     ).execute()
                     when {
                         failures == 0 -> Result.success()
@@ -78,10 +68,6 @@ class ExpansionUploadWorker(context: Context, workerParameters: WorkerParameters
                     UploadQueueSingleFlight.release(EXPANSION_UPLOAD_WORK_NAME)
                 }
             }
-            if (result == null) {
-                Log.i(TAG, "Expansion upload skipped without an active study enrollment")
-            }
-            result ?: Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "Expansion upload worker failed", e)
             Result.failure()
@@ -92,6 +78,7 @@ class ExpansionUploadWorker(context: Context, workerParameters: WorkerParameters
 class ExpansionUploadWorkerDelegate(
     internal val context: Context,
     internal val db: ChronicleDb,
+    private val stopped: () -> Boolean = { false },
 ) {
 
     /** @return number of (stream, server) upload failures this run; `0` = everything succeeded. */
@@ -107,135 +94,48 @@ class ExpansionUploadWorkerDelegate(
             return 1
         }
         val servers = listOf(server)
-        var failures = 0
-        failures += DistributionCollectionContributions.uploadAdditionalStreams(this, servers)
-        failures += uploadStream(
-            servers,
-            getOldest = { db.connectivityStateSampleDao().getOldest(it) },
-            getByIds = { db.connectivityStateSampleDao().getByIds(it) },
-            idOf = { it.id },
-            toDto = { it.toAndroidConnectivityStateEvent() },
-            payloadType = EncryptedPayloadType.CONNECTIVITY_STATE,
-            deleteByIds = { db.connectivityStateSampleDao().deleteByIds(it) },
-            plainUpload = { studyId, server, events, version ->
-                UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
-                    .uploadAndroidConnectivityStateData(
-                        studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, version,
-                    )
-            },
-            label = "connectivity_state",
-        )
-        failures += uploadStream(
-            servers,
-            getOldest = { db.deviceSettingsSampleDao().getOldest(it) },
-            getByIds = { db.deviceSettingsSampleDao().getByIds(it) },
-            idOf = { it.id },
-            toDto = { it.toAndroidDeviceSettingsEvent() },
-            payloadType = EncryptedPayloadType.DEVICE_SETTINGS,
-            deleteByIds = { db.deviceSettingsSampleDao().deleteByIds(it) },
-            plainUpload = { studyId, server, events, version ->
-                UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
-                    .uploadAndroidDeviceSettingsData(
-                        studyId, server.participantId, server.sourceDeviceId, server.apiKey, events, version,
-                    )
-            },
-            label = "device_settings",
-        )
-        return failures
+        val streams = linkedMapOf<UploadQueueTable, () -> Int>()
+        streams.putAll(DistributionCollectionContributions.uploadAdditionalStreams(this, servers))
+        streams[UploadQueueTable.CONNECTIVITY_STATE] = {
+            uploadStream(
+                servers,
+                source = DedicatedUploadSource(
+                    elementType = AndroidConnectivityStateEvent::class.java,
+                    getOldest = { db.connectivityStateSampleDao().getOldest(it) },
+                    idOf = { it.id },
+                    toDto = { it.toAndroidConnectivityStateEvent() },
+                    table = UploadQueueTable.CONNECTIVITY_STATE,
+                    deleteByIds = { db.connectivityStateSampleDao().deleteByIds(it) },
+                    plainUpload = { studyId, server, headers, body ->
+                        UploadWorker.getChronicleStudyApi(server.url)
+                            .uploadAndroidConnectivityStateData(studyId, server.participantId, headers, body)
+                    },
+                ),
+            )
+        }
+        streams[UploadQueueTable.DEVICE_SETTINGS] = {
+            uploadStream(
+                servers,
+                source = DedicatedUploadSource(
+                    elementType = AndroidDeviceSettingsEvent::class.java,
+                    getOldest = { db.deviceSettingsSampleDao().getOldest(it) },
+                    idOf = { it.id },
+                    toDto = { it.toAndroidDeviceSettingsEvent() },
+                    table = UploadQueueTable.DEVICE_SETTINGS,
+                    deleteByIds = { db.deviceSettingsSampleDao().deleteByIds(it) },
+                    plainUpload = { studyId, server, headers, body ->
+                        UploadWorker.getChronicleStudyApi(server.url)
+                            .uploadAndroidDeviceSettingsData(studyId, server.participantId, headers, body)
+                    },
+                ),
+            )
+        }
+        return streams.values.sumOf { it() }
     }
 
-    internal fun <T, D> uploadStream(
-        servers: List<UploadServerEntity>,
-        getOldest: (Int) -> List<T>,
-        getByIds: (List<String>) -> List<T>,
-        idOf: (T) -> String,
-        toDto: (T) -> D,
-        payloadType: EncryptedPayloadType,
-        deleteByIds: (List<String>) -> Unit,
-        plainUpload: (UUID, UploadServerEntity, List<D>, Int?) -> Unit,
-        label: String,
-    ): Int {
-        if (!com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db).allows(payloadType)) return 0
-        val family = UploadRetryGate.familyFor(payloadType)
-        if (servers.any { !UploadRetryGate.shouldAttempt(context, it, family, db) }) return 0
-        val pending = selectPendingUploadBatch(
-            db, servers.single(), payloadType,
-            loadNew = { getOldest(UploadRetryGate.batchLimit(context, servers.single(), family, EXPANSION_UPLOAD_MAX_BATCH)) },
-            loadByIds = getByIds, idOf = idOf,
-        )
-        if (pending.isEmpty()) return 0
-
-        var malformed = 0
-        val validIds = mutableListOf<String>()
-        val events = pending.mapNotNull { entry ->
-            try {
-                toDto(entry).also { validIds += idOf(entry) }
-            } catch (e: Exception) {
-                malformed++
-                Log.w(TAG, "Quarantining corrupt $label sample ${idOf(entry)}", e)
-                quarantineMalformedSample(db, servers.single(), label, idOf(entry),
-                    serializeMalformedRow(entry as Any),
-                    family) {
-                    deleteByIds(listOf(idOf(entry)))
-                }
-                null
-            }
-        }
-
-        var failureCount = 0
-        for (server in servers) {
-            try {
-                if (events.isNotEmpty()) {
-                    val studyId = UUID.fromString(server.studyId)
-                    val studyApi = UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
-                    val store = EncryptionSettingStore.of(context)
-                    val setting = store.get(studyId)
-                    val routing = PayloadSealer.routing(setting, store.isEncryptionRequired(studyId))
-                    when (routing) {
-                        PayloadSealer.EncryptionRouting.FAIL_CLOSED ->
-                            throw EncryptionRequiredButUnavailableException(studyId)
-                        PayloadSealer.EncryptionRouting.ENCRYPT -> {
-                            val plaintext = JsonSerializer.serializeToBytes(events)
-                            val envelope = PayloadSealer.seal(
-                                setting = setting!!,
-                                studyId = studyId,
-                                participantId = server.participantId,
-                                payloadType = payloadType,
-                                plaintext = plaintext,
-                                sampleCount = events.size,
-                                batchIdentity = pendingUploadBatchIdentity(db, server, payloadType),
-                            )
-                            studyApi.uploadAndroidEncryptedData(
-                                studyId, server.participantId, server.sourceDeviceId, server.apiKey, listOf(envelope), pendingUploadBatchVersion(db,
-                                    server, payloadType),
-                            )
-                        }
-                        else -> plainUpload(studyId, server, events, pendingUploadBatchVersion(db, server, payloadType))
-                    }
-                    Log.i(TAG, "[${server.name}] Uploaded ${events.size} $label sample(s)")
-                }
-            } catch (e: Exception) {
-                if (handleRejectedUploadBatch(context, db, server, payloadType, e, validIds.size) { status ->
-                    quarantineRejectedRows(db, server, payloadType, status, label,
-                        pending.filter { idOf(it) in validIds }, idOf, deleteByIds)
-                }) return 0
-                failureCount++
-                UploadRetryGate.recordFailure(context, server, family, e, db)
-                LocalUploadDiagnosticsStore.of(context).recordFailure(
-                    LocalUploadModuleFamily.DEVICE_TELEMETRY,
-                    e,
-                )
-                Log.e(TAG, "[${server.name}] $label upload failed", e)
-            }
-        }
-
-        if (failureCount == 0) db.runInTransaction {
-            deleteByIds(validIds)
-            acknowledgePendingUploadBatch(db, servers.single(), payloadType, context)
-        }
-        Log.i(TAG, "$label upload complete: serverFailures=$failureCount, malformedSkipped=$malformed")
-        return failureCount
-    }
+    internal fun <T : Any, D : Any> uploadStream(
+        servers: List<UploadServerEntity>, source: DedicatedUploadSource<T, D>,
+    ): Int = DedicatedUploadBatch(context, db, servers.single(), source, stopped).execute()
 }
 
 /** Schedules the periodic [ExpansionUploadWorker]. Idempotent; constrained to run only with network. */

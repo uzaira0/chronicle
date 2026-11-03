@@ -1,13 +1,13 @@
 package com.openlattice.chronicle.services.upload
 
+import java.time.OffsetDateTime
+
 import android.content.Context
 import android.util.Log
 import com.openlattice.chronicle.constants.TelemetryEvents
-import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.insertOwnedDay
 import com.openlattice.chronicle.telemetry.LocalTelemetry
-import com.openlattice.chronicle.utils.Utils.updateUploadQueueSize
 import java.time.LocalDate
 
 private val UPLOAD_WORKER_DELEGATE_TAG = UploadWorkerDelegate::class.java.simpleName
@@ -16,14 +16,12 @@ class UploadWorkerDelegate(
     private val context: Context,
     private val chronicleDb: ChronicleDb
 ) {
-    private val settings = EnrollmentSettings(context)
-
     /**
      * @return 1 when the active study server failed during this run, otherwise 0.
      *   Caller (worker) uses the count to decide between Result.success/retry/failure
      *   so partial-failure runs aren't silently reported as success.
      */
-    fun execute(): Int {
+    fun execute(stopped: () -> Boolean = { false }): Int {
         Log.i(UPLOAD_WORKER_DELEGATE_TAG, "Usage upload started")
         LocalTelemetry.logEvent(TelemetryEvents.UPLOAD_START, null)
 
@@ -38,66 +36,18 @@ class UploadWorkerDelegate(
             Log.w(UPLOAD_WORKER_DELEGATE_TAG, "Active enrollment has no eligible upload server")
             return 1
         }
-        val servers = listOf(server)
-
-        val executor = UploadExecutor(
-            context, chronicleDb, settings.getPropertyTypeIds()
-        )
-
-        return runUsageUploadForEligibleServers(
-            servers = servers,
-            uploadForServer = { server -> executor.uploadForServer(server) },
-            recordFailure = { server, e ->
-                handleServerUploadFailure(
-                    context,
-                    UPLOAD_WORKER_DELEGATE_TAG,
-                    server,
-                    e,
-                    LocalUploadModuleFamily.USAGE_LIFECYCLE,
-                    server.consecutiveFailures,
-                ) { failures, errorMsg ->
-                    chronicleDb.uploadServerDao().recordUsageUploadFailure(
-                        server.id,
-                        java.time.OffsetDateTime.now().toString(),
-                        errorMsg,
-                        failures
-                    )
-                }
-                val today = LocalDate.now().toString()
-                chronicleDb.uploadStatsDao().insertOwnedDay(server, today)
-                chronicleDb.uploadStatsDao().incrementUsageFailureCount(server.id, today, 1)
-            },
-            afterUploads = {
-                val queue = chronicleDb.queueEntryData()
-                val minCursor = chronicleDb.uploadServerDao().getMinUploadQueueCursor()
-                if (minCursor != null && minCursor.lastUploadedTimestamp > 0) {
-                    queue.deleteEntriesBeforeOrAt(minCursor.lastUploadedTimestamp, minCursor.lastUploadedQueueId)
-                }
-                updateUploadQueueSize(context, queue.getSize())
-            },
-        )
+        return UploadExecutor(context, chronicleDb).uploadForServer(server, stopped) { error ->
+            handleServerUploadFailure(context, UPLOAD_WORKER_DELEGATE_TAG, error,
+                LocalUploadModuleFamily.USAGE_LIFECYCLE, server.consecutiveFailures) { failures, errorMsg ->
+                chronicleDb.uploadServerDao().recordUsageUploadFailure(server.id, OffsetDateTime.now().toString(), errorMsg, failures)
+            }
+            val today = LocalDate.now().toString()
+            chronicleDb.uploadStatsDao().insertOwnedDay(server, today)
+            chronicleDb.uploadStatsDao().incrementUsageFailureCount(server.id, today, 1)
+        }
     }
 }
 
 /** Reserve for existing data and the diagnostics journal. Collection pauses below this level. */
 internal const val LOW_STORAGE_BYTES: Long = 200L * 1024 * 1024
 internal const val LOCAL_STORAGE_RESERVE_BYTES: Long = LOW_STORAGE_BYTES
-
-internal fun runUsageUploadForEligibleServers(
-    servers: List<com.openlattice.chronicle.storage.UploadServerEntity>,
-    uploadForServer: (com.openlattice.chronicle.storage.UploadServerEntity) -> Unit,
-    recordFailure: (com.openlattice.chronicle.storage.UploadServerEntity, Exception) -> Unit,
-    afterUploads: () -> Unit,
-): Int {
-    var failureCount = 0
-    for (server in servers) {
-        try {
-            uploadForServer(server)
-        } catch (e: Exception) {
-            failureCount++
-            recordFailure(server, e)
-        }
-    }
-    afterUploads()
-    return failureCount
-}

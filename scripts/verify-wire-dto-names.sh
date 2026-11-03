@@ -21,27 +21,21 @@ gson_classes=(
   com.openlattice.chronicle.constants.NotificationType
 )
 persisted_classes=(
-  'com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer$Batch'
-  'com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Owner'
-  'com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Event'
-  'com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$State'
+  com.openlattice.chronicle.storage.UploadDiagnosticEntity
   com.openlattice.chronicle.services.upload.LocalUploadIssueBucket
   com.openlattice.chronicle.preferences.InteractionPolicySnapshot
   com.openlattice.chronicle.collection.InteractionPolicy
   com.openlattice.chronicle.collection.state.PendingCollectionAckRecord
-  com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry
-  com.openlattice.chronicle.study.StudyEncryptionSetting
+  com.openlattice.chronicle.collection.state.CollectionModuleState
   com.openlattice.chronicle.api.MobileEnrollmentManifest
+  com.openlattice.chronicle.android.ChronicleUsageEvent
   com.openlattice.chronicle.models.ExtractedUsageEvent
-  com.openlattice.chronicle.models.ExtractedActivities
-  com.openlattice.chronicle.models.ExtractUsageStat
 )
 while IFS= read -r source; do
   persisted_classes+=("com.openlattice.chronicle.storage.$(basename "$source" .kt)")
 done < <(rg --files "$repo_root/collection-base/src/main/java/com/openlattice/chronicle/storage" | rg 'SampleEntry\.kt$')
 
-mkdir -p "$repo_root/build"
-work="$(mktemp -d "$repo_root/build/verify-wire-dto.XXXXXX")"
+work="$(mktemp -d "${TMPDIR:-$repo_root/build}/verify-wire-dto.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 if [[ "$input" == *.aab ]]; then
   unzip -p "$input" BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map >"$work/map" || {
@@ -49,6 +43,7 @@ if [[ "$input" == *.aab ]]; then
     exit 1
   }
   mapping="$work/map"
+  python3 "$repo_root/scripts/verify-retrofit-map-signatures.py" "$input" "$mapping"
 else
   mapping="$input"
 fi
@@ -59,19 +54,20 @@ dtos=()
 for api in "${api_files[@]}"; do
   [[ -f "$api" ]] || continue
   package="$(sed -n 's/^package \(.*\)$/\1/p' "$api")"
-  while IFS= read -r simple; do
-    fqn="$(sed -n "s/^import \(.*\.$simple\)$/\1/p" "$api" | head -n1)"
-    dtos+=("${fqn:-$package.$simple}")
-  done < <(python3 - "$api" <<'PY'
+  python3 - "$api" >"$work/api-dtos" <<'PY'
 import pathlib, re, sys
 source = pathlib.Path(sys.argv[1]).read_text()
 types = re.findall(r'@Body\s+\w+:\s*([^\n]+)', source)
 types += re.findall(r'\)\s*:\s*([^\n{]+)', source)
 native = {'Int', 'Long', 'String', 'Boolean', 'Any', 'Unit', 'UUID', 'FullQualifiedName',
-          'List', 'Set', 'Map', 'Response', 'Body', 'ResponseBody', 'retrofit2', 'okhttp3'}
+          'List', 'Set', 'Map', 'Response', 'Body', 'ResponseBody', 'retrofit2', 'okhttp3',
+          'CollectedUploadBody'}  # Exact transport bytes are never reflected by Moshi.
 print('\n'.join(sorted(set(re.findall(r'\b[A-Z]\w*\b', ' '.join(types))) - native)))
 PY
-)
+  while IFS= read -r simple; do
+    fqn="$(sed -n "s/^import \(.*\.$simple\)$/\1/p" "$api" | head -n1)"
+    dtos+=("${fqn:-$package.$simple}")
+  done < "$work/api-dtos"
 done
 (( ${#dtos[@]} > 0 )) || { printf 'ERROR: found no @Body types\n' >&2; exit 1; }
 
@@ -104,8 +100,9 @@ done
 # ClassNotFoundException. Static fields (companions, constants, synthetic $ entries) are not
 # serialized and are skipped. Generic element types are erased in the mapping and not covered here.
 checked="$(printf '%s\n' "${dtos[@]}" "${gson_classes[@]}" "${persisted_classes[@]}")"
-renamed_types="$(awk -v checked="$checked" '
-    BEGIN { n = split(checked, c, "\n"); for (i = 1; i <= n; i++) want[c[i]] = 1 }
+# The list goes through the environment: BSD awk (macOS) rejects a newline inside -v.
+renamed_types="$(checked="$checked" awk '
+    BEGIN { n = split(ENVIRON["checked"], c, "\n"); for (i = 1; i <= n; i++) want[c[i]] = 1 }
     /^[^ #]/ { split($0, p, " -> "); cls = p[1]; sub(/:$/, "", p[2]); if (p[1] != p[2]) renamed[p[1]] = p[2]; next }
     want[cls] && $0 !~ /\(/ && $0 ~ / -> / { split($0, p, " -> "); n = split(p[1], a, " "); if (a[n] == "Companion" || a[n] ~ /^[$]/ || a[n] ~ /^[A-Z0-9_]+$/) next; t = a[1]; sub(/(\[\])+$/, "", t); fields[cls " " t] = 1 }
     END { for (k in fields) { split(k, f, " "); if (f[2] in renamed) print f[1] ": " f[2] " -> " renamed[f[2]] } }

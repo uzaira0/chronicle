@@ -5,13 +5,10 @@ import com.openlattice.chronicle.android.ChronicleSample
 import com.openlattice.chronicle.android.ChronicleUsageEvent
 import com.openlattice.chronicle.api.EnrollmentResponse
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
 import com.openlattice.chronicle.collection.HealthConnectRecordType
-import com.openlattice.chronicle.crypto.EncryptedPayloadType
-import com.openlattice.chronicle.models.ExtractUsageStat
-import com.openlattice.chronicle.models.ExtractedActivities
+import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.sources.AndroidDevice
 import com.openlattice.chronicle.sources.IOSDevice
@@ -26,9 +23,7 @@ import com.squareup.moshi.ToJson
 import com.squareup.moshi.Types
 import com.squareup.moshi.adapters.PolymorphicJsonAdapterFactory
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import org.apache.olingo.commons.api.edm.FullQualifiedName
 import java.lang.reflect.Type
-import java.lang.reflect.ParameterizedType
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -41,7 +36,6 @@ object ChronicleJson {
         .add(EnrollmentResponse::class.java, EnrollmentResponseJsonAdapter())
         .add(AndroidDataCollectionSettingJsonAdapterFactory)
         .add(ChronicleDataJsonAdapterFactory)
-        .add(FullQualifiedNameMapJsonAdapterFactory)
         .add(
             PolymorphicJsonAdapterFactory.of(SourceDevice::class.java, "@class")
                 .withSubtype(AndroidDevice::class.java, AndroidDevice::class.java.name)
@@ -50,8 +44,6 @@ object ChronicleJson {
         .add(
             PolymorphicJsonAdapterFactory.of(ChronicleSample::class.java, "@class")
                 .withSubtype(ExtractedUsageEvent::class.java, ExtractedUsageEvent::class.java.name)
-                .withSubtype(ExtractUsageStat::class.java, ExtractUsageStat::class.java.name)
-                .withSubtype(ExtractedActivities::class.java, ExtractedActivities::class.java.name)
                 .withSubtype(ChronicleUsageEvent::class.java, ChronicleUsageEvent::class.java.name)
         )
         .addLast(KotlinJsonAdapterFactory())
@@ -85,6 +77,7 @@ private object NameStableEnumJsonAdapterFactory : JsonAdapter.Factory {
             override fun fromJson(reader: JsonReader): Enum<*> {
                 val name = reader.nextString()
                 return constantsByName[name]
+                    ?: ParticipationStatus.UNKNOWN.takeIf { rawType == ParticipationStatus::class.java }
                     ?: throw JsonDataException("Unknown ${rawType.name} value '$name' at ${reader.path}")
             }
 
@@ -120,17 +113,7 @@ private class PlatformValueJsonAdapters {
     @FromJson
     fun uuidFromJson(value: String): UUID = UUID.fromString(value)
 
-    @ToJson
-    fun fullQualifiedNameToJson(value: FullQualifiedName): String = value.toString()
-
-    @FromJson
-    fun fullQualifiedNameFromJson(value: String): FullQualifiedName = FullQualifiedName(value)
-
-    // These three enums cross the wire as their Jackson @JsonValue ids, which Moshi's default
-    // enum adapter does not honor — it emits constant names ("USAGE_EVENTS"), which the server
-    // rejects with 400. That broke every collection-ack upload in v49, so the consent trail was
-    // never recorded. Decode also accepts the constant-name form so retry records and settings
-    // persisted by v49 stay readable after upgrade and queued acks deliver instead of dropping.
+    // Protocol enums use their stable wire ids rather than JVM constant names.
 
     @ToJson
     fun collectionModuleIdToJson(value: CollectionModuleId): String = value.id
@@ -138,17 +121,7 @@ private class PlatformValueJsonAdapters {
     @FromJson
     fun collectionModuleIdFromJson(value: String): CollectionModuleId =
         CollectionModuleId.fromIdOrNull(value)
-            ?: runCatching { CollectionModuleId.valueOf(value) }.getOrNull()
             ?: throw JsonDataException("Unknown collection module id: $value")
-
-    @ToJson
-    fun collectionDataDispositionToJson(value: CollectionDataDisposition): String = value.id
-
-    @FromJson
-    fun collectionDataDispositionFromJson(value: String): CollectionDataDisposition =
-        CollectionDataDisposition.fromIdOrNull(value)
-            ?: runCatching { CollectionDataDisposition.valueOf(value) }.getOrNull()
-            ?: throw JsonDataException("Unknown collection data disposition: $value")
 
     @ToJson
     fun healthConnectRecordTypeToJson(value: HealthConnectRecordType): String = value.id
@@ -156,17 +129,7 @@ private class PlatformValueJsonAdapters {
     @FromJson
     fun healthConnectRecordTypeFromJson(value: String): HealthConnectRecordType =
         runCatching { HealthConnectRecordType.fromId(value) }.getOrNull()
-            ?: runCatching { HealthConnectRecordType.valueOf(value) }.getOrNull()
             ?: throw JsonDataException("Unknown Health Connect record type: $value")
-
-    @ToJson
-    fun encryptedPayloadTypeToJson(value: EncryptedPayloadType): String = value.id
-
-    @FromJson
-    fun encryptedPayloadTypeFromJson(value: String): EncryptedPayloadType =
-        EncryptedPayloadType.fromIdOrNull(value)
-            ?: runCatching { EncryptedPayloadType.valueOf(value) }.getOrNull()
-            ?: throw JsonDataException("Unknown encrypted payload type: $value")
 }
 
 private class EnrollmentResponseJsonAdapter : JsonAdapter<EnrollmentResponse>() {
@@ -181,12 +144,16 @@ private class EnrollmentResponseJsonAdapter : JsonAdapter<EnrollmentResponse>() 
         var chronicleId: UUID? = null
         var enrollmentId: UUID? = null
         var apiKey: String? = null
+        var hardStopGeneration: Long? = null
         reader.beginObject()
         while (reader.hasNext()) {
             when (reader.nextName()) {
                 "chronicleId" -> chronicleId = readRequiredUuid(reader, "chronicleId")
                 "enrollmentId" -> enrollmentId = readNullableUuid(reader, "enrollmentId")
                 "apiKey" -> apiKey = readNullableString(reader, "apiKey")
+                "hardStopGeneration" -> hardStopGeneration = if (reader.peek() == JsonReader.Token.NULL) {
+                    reader.nextNull<Long>()
+                } else reader.nextLong().also { require(it >= 0) { "Negative hard-stop generation" } }
                 else -> reader.skipValue()
             }
         }
@@ -196,6 +163,7 @@ private class EnrollmentResponseJsonAdapter : JsonAdapter<EnrollmentResponse>() 
                 ?: throw JsonDataException("EnrollmentResponse missing chronicleId at ${reader.path}"),
             enrollmentId = enrollmentId,
             apiKey = apiKey,
+            hardStopGeneration = hardStopGeneration,
         )
     }
 
@@ -210,6 +178,7 @@ private class EnrollmentResponseJsonAdapter : JsonAdapter<EnrollmentResponse>() 
         value.enrollmentId?.let { writer.value(it.toString()) } ?: writer.nullValue()
         writer.name("apiKey")
         value.apiKey?.let(writer::value) ?: writer.nullValue()
+        writer.name("hardStopGeneration").value(value.hardStopGeneration)
         writer.endObject()
     }
 
@@ -320,44 +289,6 @@ private object AndroidDataCollectionSettingJsonAdapterFactory : JsonAdapter.Fact
                 writer.endObject()
                 writer.name("version").value(value.version)
                 writer.name("settingsVersion").value(value.settingsVersion)
-                writer.endObject()
-            }
-        }
-    }
-}
-
-/** Moshi's standard map adapter cannot encode Olingo keys as JSON object field names. */
-private object FullQualifiedNameMapJsonAdapterFactory : JsonAdapter.Factory {
-    override fun create(
-        type: Type,
-        annotations: MutableSet<out Annotation>,
-        moshi: Moshi,
-    ): JsonAdapter<*>? {
-        if (annotations.isNotEmpty() || Types.getRawType(type) != Map::class.java) return null
-        val keyAndValue = (type as? ParameterizedType)?.actualTypeArguments ?: return null
-        if (keyAndValue[0] != FullQualifiedName::class.java) return null
-        val valueAdapter = moshi.adapter<Any?>(keyAndValue[1])
-        return object : JsonAdapter<Map<FullQualifiedName, Any?>>() {
-            override fun fromJson(reader: JsonReader): Map<FullQualifiedName, Any?> {
-                val result = linkedMapOf<FullQualifiedName, Any?>()
-                reader.beginObject()
-                while (reader.hasNext()) {
-                    result[FullQualifiedName(reader.nextName())] = valueAdapter.fromJson(reader)
-                }
-                reader.endObject()
-                return result
-            }
-
-            override fun toJson(writer: JsonWriter, value: Map<FullQualifiedName, Any?>?) {
-                if (value == null) {
-                    writer.nullValue()
-                    return
-                }
-                writer.beginObject()
-                value.forEach { (key, item) ->
-                    writer.name(key.toString())
-                    valueAdapter.toJson(writer, item)
-                }
                 writer.endObject()
             }
         }

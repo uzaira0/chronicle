@@ -38,3 +38,6 @@ class QueueEntry(
 
 
 }
+
+/** Persisted identity shared by pending uploads, quarantine and capture evidence. */
+val QueueEntry.queueKey: String get() = "$writeTimestamp:$id"

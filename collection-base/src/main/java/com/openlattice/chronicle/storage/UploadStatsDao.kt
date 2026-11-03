@@ -11,11 +11,6 @@ interface UploadStatsDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insertDay(stats: UploadStatsEntity)
 
-    @Query(
-        "UPDATE upload_stats SET studyId = :studyId, participantId = :participantId, deviceId = :deviceId, enrollmentEpoch = :epoch WHERE " +
-        "serverId = :serverId AND date = :date AND studyId IS NULL AND participantId IS NULL AND deviceId IS NULL AND enrollmentEpoch IS NULL")
-    fun backfillOwner(serverId: Long, date: String, studyId: String, participantId: String, deviceId: String, epoch: String): Int
-
     @Query("UPDATE upload_stats SET usageEventsUploaded = usageEventsUploaded + :count WHERE serverId = :serverId AND date = :date")
     fun incrementUsageCount(serverId: Long, date: String, count: Int)
 
@@ -42,7 +37,7 @@ interface UploadStatsDao {
 
     /**
      * Total number of `(serverId, date)` counter rows. Read-only; used by the
-     * upload-telemetry diagnostics module (Phase 8) — no schema change.
+     * upload-telemetry diagnostics module.
      */
     @Query("SELECT COUNT(*) FROM upload_stats")
     fun rowCount(): Int
@@ -67,25 +62,21 @@ interface UploadStatsDao {
     @Query(
         "SELECT COALESCE(SUM(batteryUploadFailures), 0) FROM upload_stats WHERE date = :date AND serverId = :serverId AND enrollmentEpoch = :epoch")
     fun batteryFailuresOn(date: String, serverId: Long, epoch: String): Int
-
-    @Query("DELETE FROM upload_stats WHERE date < :cutoffDate")
-    fun deleteOlderThan(cutoffDate: String): Int
 }
 
-/** Preserve the proven owner if a legacy sensor writer created this day without columns. */
+/** Counters are attributed only to their original, complete enrollment identity. */
 fun UploadStatsDao.insertOwnedDay(stats: UploadStatsEntity) {
-    val study = requireNotNull(stats.studyId)
-    val participant = requireNotNull(stats.participantId)
-    val device = requireNotNull(stats.deviceId)
-    val epoch = requireNotNull(stats.enrollmentEpoch)
+    requireNotNull(stats.studyId)
+    requireNotNull(stats.participantId)
+    requireNotNull(stats.randomDeviceId)
+    requireNotNull(stats.enrollmentEpoch)
     insertDay(stats)
-    backfillOwner(stats.serverId, stats.date, study, participant, device, epoch)
 }
 
 fun UploadStatsDao.insertOwnedDay(server: UploadServerEntity, date: String) = insertOwnedDay(
     UploadStatsEntity(
         serverId = server.id, date = date, studyId = server.studyId,
-        participantId = server.participantId, deviceId = server.sourceDeviceId,
+        participantId = server.participantId, randomDeviceId = server.sourceRandomDeviceId,
         enrollmentEpoch = "${server.id}:${server.createdAt}",
     ),
 )

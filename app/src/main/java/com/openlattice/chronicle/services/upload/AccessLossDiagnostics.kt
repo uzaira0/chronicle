@@ -20,13 +20,15 @@ import com.openlattice.chronicle.services.notifications.postNotificationIfPermit
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
+import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 
 private const val ACCESS_TAG = "AccessLossDiagnostics"
 private const val PREFS = "chronicle_access_missing_episodes"
 private const val NOTIFICATION_ID_ACCESS = 47_004
 
 internal fun clearAccessLossEpisodes(context: Context) {
-    com.openlattice.chronicle.storage.checkLocalStoreWrite(
+    checkLocalStoreWrite(
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit())
 }
 
@@ -38,8 +40,8 @@ internal fun missingAccessFamilies(status: PermissionStatus): Set<LocalUploadMod
     if (status.needHealthConnect) add(LocalUploadModuleFamily.HEALTH)
     status.runtimeAccessModules.forEach { module ->
         when (module) {
-            com.openlattice.chronicle.collection.CollectionModuleId.ACTIVITY_RECOGNITION -> add(LocalUploadModuleFamily.ACTIVITY_RECOGNITION)
-            com.openlattice.chronicle.collection.CollectionModuleId.SLEEP -> add(LocalUploadModuleFamily.SLEEP)
+            CollectionModuleId.ACTIVITY_RECOGNITION -> add(LocalUploadModuleFamily.ACTIVITY_RECOGNITION)
+            CollectionModuleId.SLEEP -> add(LocalUploadModuleFamily.SLEEP)
             else -> add(LocalUploadModuleFamily.SENSOR)
         }
     }
@@ -50,8 +52,9 @@ internal fun missingAccessFamilies(status: PermissionStatus): Set<LocalUploadMod
  * accessibility service Android removes on force-stop) and returns the families that lost access
  * they had been granted, so the participant is told once. A family accepted but never granted (still
  * in onboarding) is reported to the server only. An episode ends when access returns; the next loss
- * is a new episode. The episode is persisted before it is recorded, and its stable ID makes a retry
- * after process death safe. [required] is every family an ACTIVE module needs access for.
+ * is a new episode. The episode is persisted before it is recorded, its checkpoint is removed only
+ * after its diagnostic is recorded, and its stable ID makes a replay after process death safe.
+ * [required] is every family an ACTIVE module needs access for.
  * [notifyInitiallyMissing] also notifies for a service that needs a foreground restart.
  */
 internal fun recordAccessEpisodes(
@@ -68,8 +71,7 @@ internal fun recordAccessEpisodes(
     val granted = (required - missing).mapTo(hashSetOf()) { grantedPrefix + it.name }
     val keep = missing.mapTo(hashSetOf()) { prefix + it.name } +
         required.map { grantedPrefix + it.name }.filter { it in granted || prefs.contains(it) }
-    val stale = prefs.all.keys - keep
-    if (stale.isNotEmpty()) check(prefs.edit().apply { stale.forEach(::remove) }.commit())
+    dropStaleEpisodes(store, prefs, ownerScope, prefs.all.keys - keep)
     val began = missing.filterTo(linkedSetOf()) { prefs.getString(prefix + it.name, null) == null }
     val lost = began.filterTo(linkedSetOf()) { it in notifyInitiallyMissing || prefs.contains(grantedPrefix + it.name) }
     if (began.isNotEmpty() || granted.isNotEmpty()) {
@@ -79,15 +81,29 @@ internal fun recordAccessEpisodes(
         }.commit())
     }
     missing.forEach { family ->
-        val startedAt = prefs.getString(prefix + family.name, null) ?: return@forEach
-        // nosemgrep: chronicle-uuid-from-string -- Access-loss episode key deduplicates repeated reports for this owner, family and start time.
-        val id = UUID.nameUUIDFromBytes("access-missing:$prefix${family.name}:$startedAt".toByteArray()).toString()
-        store.recordOperationalOnce(
-            id, family, LocalOperationalIssue.COLLECTION_ACCESS_MISSING, OffsetDateTime.parse(startedAt),
-            ownerScope = ownerScope,
-        )
+        prefs.getString(prefix + family.name, null)?.let { recordEpisode(store, ownerScope, family, it) }
     }
     return lost
+}
+
+/** An ended episode of this owner may have died before its diagnostic was written: record it, then drop it. */
+private fun dropStaleEpisodes(store: LocalUploadDiagnosticsStore, prefs: SharedPreferences, ownerScope: String, stale: Set<String>) {
+    if (stale.isEmpty()) return
+    val prefix = "$ownerScope|"
+    stale.filter { it.startsWith(prefix) && !it.startsWith("${prefix}granted|") }.forEach { key ->
+        val family = LocalUploadModuleFamily.entries.firstOrNull { it.name == key.removePrefix(prefix) } ?: return@forEach
+        prefs.getString(key, null)?.let { recordEpisode(store, ownerScope, family, it) }
+    }
+    check(prefs.edit().apply { stale.forEach(::remove) }.commit())
+}
+
+private fun recordEpisode(store: LocalUploadDiagnosticsStore, ownerScope: String, family: LocalUploadModuleFamily, startedAt: String) {
+    // nosemgrep: chronicle-uuid-from-string -- Access-loss episode key deduplicates repeated reports for this owner, family and start time.
+    val id = UUID.nameUUIDFromBytes("access-missing:$ownerScope|${family.name}:$startedAt".toByteArray()).toString()
+    store.recordOperationalOnce(
+        id, family, LocalOperationalIssue.COLLECTION_ACCESS_MISSING, OffsetDateTime.parse(startedAt),
+        ownerScope = ownerScope,
+    )
 }
 
 /** Reports missing Android access or a stopped sensor service for accepted modules. Never throws. */

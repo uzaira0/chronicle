@@ -9,7 +9,7 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["serverId", "date"], unique = true),
         Index(value = ["serverId"]),
-        Index(value = ["studyId", "participantId", "deviceId", "enrollmentEpoch", "date"])
+        Index(value = ["studyId", "participantId", "randomDeviceId", "enrollmentEpoch", "date"])
     ]
 )
 data class UploadStatsEntity(
@@ -18,7 +18,7 @@ data class UploadStatsEntity(
     val date: String,
     val studyId: String? = null,
     val participantId: String? = null,
-    val deviceId: String? = null,
+    val randomDeviceId: String? = null,
     val enrollmentEpoch: String? = null,
     val usageEventsUploaded: Int = 0,
     val sensorSamplesUploaded: Int = 0,

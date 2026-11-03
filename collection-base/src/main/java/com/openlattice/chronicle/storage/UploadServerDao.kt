@@ -6,10 +6,7 @@ import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
-data class UploadQueueCursor(
-    val lastUploadedTimestamp: Long,
-    val lastUploadedQueueId: Long
-)
+import java.util.UUID
 
 @Dao
 interface UploadServerDao {
@@ -36,54 +33,6 @@ interface UploadServerDao {
 
     @Query("""
         UPDATE upload_servers
-        SET name = :name,
-            sourceDeviceId = :sourceDeviceId,
-            authMode = :authMode,
-            apiKey = :apiKey,
-            mobileSigningSecretOverride = :mobileSigningSecretOverride,
-            studyDisclosureJson = :studyDisclosureJson,
-            disclosureVersion = :disclosureVersion,
-            manifestDigest = :manifestDigest,
-            enabled = 1,
-            enrollmentSetupComplete = 1,
-            reservationNonce = NULL,
-            reservationExpiresAtEpochMillis = NULL,
-            enrollmentIssuedAtEpochMillis = COALESCE(enrollmentIssuedAtEpochMillis, :issuedAtEpochMillis),
-            pendingAcceptedModuleIds = NULL,
-            pendingDeclinedModuleIds = NULL,
-            pendingUnavailableModuleIds = NULL,
-            pendingEnrollmentAttemptId = NULL,
-            pendingEnrollmentAccessCode = NULL,
-            pendingEnrollmentInviteExpiresAtEpochMillis = NULL,
-            pendingProposedApiKey = NULL,
-            pendingEnrollmentSourceDeviceJson = NULL,
-            pendingEnrollmentFirstRequestAtEpochMillis = NULL,
-            pendingEnrollmentReplayDeadlineEpochMillis = NULL,
-            sensorDeliveryGeneration = sensorDeliveryGeneration + 1,
-            consecutiveFailures = 0,
-            sensorConsecutiveFailures = 0,
-            batteryConsecutiveFailures = 0,
-            lastUploadError = NULL,
-            lastSensorUploadError = NULL,
-            lastBatteryUploadError = NULL
-        WHERE id = :id AND reservationNonce = :ownerNonce
-    """)
-    fun updateEnrollmentCredentials(
-        id: Long,
-        name: String,
-        sourceDeviceId: String,
-        authMode: String,
-        apiKey: String?,
-        mobileSigningSecretOverride: String?,
-        studyDisclosureJson: String?,
-        disclosureVersion: String?,
-        manifestDigest: String?,
-        ownerNonce: String,
-        issuedAtEpochMillis: Long,
-    ): Int
-
-    @Query("""
-        UPDATE upload_servers
         SET reservationNonce = :ownerNonce,
             reservationExpiresAtEpochMillis = :expiresAtEpochMillis
         WHERE id = :id
@@ -103,23 +52,6 @@ interface UploadServerDao {
         expiresAtEpochMillis: Long,
     ): Int
 
-    @Query("UPDATE upload_servers SET sourceDeviceId = :legacyDeviceId WHERE sourceDeviceId = ''")
-    fun backfillEmptySourceDeviceId(legacyDeviceId: String): Int
-
-    @Query("""
-        UPDATE upload_servers
-        SET url = :currentUrl,
-            sensorDeliveryGeneration = sensorDeliveryGeneration + 1,
-            consecutiveFailures = 0,
-            sensorConsecutiveFailures = 0,
-            batteryConsecutiveFailures = 0,
-            lastUploadError = NULL,
-            lastSensorUploadError = NULL,
-            lastBatteryUploadError = NULL
-        WHERE url = :retiredUrl
-    """)
-    fun replaceServerUrl(retiredUrl: String, currentUrl: String): Int
-
     @Query("SELECT COUNT(*) FROM upload_servers")
     fun count(): Int
 
@@ -137,36 +69,12 @@ interface UploadServerDao {
     @Transaction
     fun reserveSingleEnrollment(
         server: UploadServerEntity,
-        ownerNonce: String = java.util.UUID.randomUUID().toString(),
+        ownerNonce: String = UUID.randomUUID().toString(),
         nowEpochMillis: Long = System.currentTimeMillis(),
         leaseMillis: Long = ENROLLMENT_RESERVATION_LEASE_MILLIS,
     ): SingleEnrollmentReservation {
         require(ownerNonce.isNotBlank()) { "Enrollment reservation owner must not be blank" }
-        val pendingReplayFields = listOf(
-            server.pendingEnrollmentAttemptId,
-            server.pendingEnrollmentAccessCode,
-            server.pendingEnrollmentInviteExpiresAtEpochMillis,
-            server.pendingProposedApiKey,
-            server.pendingEnrollmentSourceDeviceJson,
-        )
-        require(pendingReplayFields.all { it == null } || pendingReplayFields.all { it != null }) {
-            "Replay-safe enrollment fields must be persisted together"
-        }
-        val pendingDecisionFields = listOf(
-            server.pendingAcceptedModuleIds,
-            server.pendingDeclinedModuleIds,
-            server.pendingUnavailableModuleIds,
-        )
-        require(
-            pendingDecisionFields.all { it == null } || pendingDecisionFields.all { it != null },
-        ) { "Replay-safe enrollment evidence must be persisted together" }
-        require(
-            (server.pendingEnrollmentAttemptId == null) == pendingDecisionFields.all { it == null },
-        ) { "Enrollment request and acknowledgment evidence must be persisted together" }
-        require(
-            (server.pendingEnrollmentFirstRequestAtEpochMillis == null) ==
-                (server.pendingEnrollmentReplayDeadlineEpochMillis == null),
-        ) { "Enrollment request timing must be persisted together" }
+        server.validatePendingEnrollment()
         val expiresAtEpochMillis = Math.addExact(nowEpochMillis, leaseMillis)
         return when (
             val resolution = resolveSingleEnrollment(
@@ -174,241 +82,114 @@ interface UploadServerDao {
                 server.url,
                 server.studyId,
                 server.participantId,
-                nowEpochMillis,
             )
         ) {
-            SingleEnrollmentResolution.Insert -> {
-                val id = insert(
-                    server.copy(
-                        enabled = false,
-                        apiKey = null,
-                        enrollmentSetupComplete = false,
-                        enrollmentIssuedAtEpochMillis = null,
-                        reservationNonce = ownerNonce,
-                        reservationExpiresAtEpochMillis = expiresAtEpochMillis,
-                    ),
-                )
-                SingleEnrollmentReservation(id, provisional = true, ownerNonce = ownerNonce)
-            }
-            is SingleEnrollmentResolution.Refresh -> {
-                val existing = getById(resolution.serverId)
-                    ?: throw SingleEnrollmentConflictException()
-                if (
-                    claimEnrollmentReservation(
-                        existing.id,
-                        ownerNonce,
-                        nowEpochMillis,
-                        expiresAtEpochMillis,
-                    ) != 1
-                ) throw SingleEnrollmentConflictException()
-                if (server.pendingEnrollmentAttemptId != null &&
-                    preparePendingEnrollmentAttempt(
-                        id = existing.id,
-                        ownerNonce = ownerNonce,
-                        name = server.name,
-                        sourceDeviceId = server.sourceDeviceId,
-                        mobileSigningSecretOverride = server.mobileSigningSecretOverride,
-                        studyDisclosureJson = server.studyDisclosureJson,
-                        disclosureVersion = server.disclosureVersion,
-                        manifestDigest = server.manifestDigest,
-                        pendingAcceptedModuleIds = server.pendingAcceptedModuleIds,
-                        pendingDeclinedModuleIds = server.pendingDeclinedModuleIds,
-                        pendingUnavailableModuleIds = server.pendingUnavailableModuleIds,
-                        pendingEnrollmentAttemptId = server.pendingEnrollmentAttemptId,
-                        pendingEnrollmentAccessCode = requireNotNull(server.pendingEnrollmentAccessCode),
-                        pendingEnrollmentInviteExpiresAtEpochMillis = requireNotNull(
-                            server.pendingEnrollmentInviteExpiresAtEpochMillis,
-                        ),
-                        pendingProposedApiKey = requireNotNull(server.pendingProposedApiKey),
-                        pendingEnrollmentSourceDeviceJson = requireNotNull(
-                            server.pendingEnrollmentSourceDeviceJson,
-                        ),
-                    ) != 1
-                ) throw SingleEnrollmentConflictException()
-                SingleEnrollmentReservation(
-                    resolution.serverId,
-                    provisional = !existing.enabled && existing.enrollmentIssuedAtEpochMillis == null,
-                    ownerNonce = ownerNonce,
-                )
-            }
+            SingleEnrollmentResolution.Insert -> insertEnrollmentReservation(server, ownerNonce, expiresAtEpochMillis)
+            is SingleEnrollmentResolution.Refresh -> refreshEnrollmentReservation(
+                server, resolution.serverId, ownerNonce, nowEpochMillis, expiresAtEpochMillis,
+            )
             is SingleEnrollmentResolution.ReplaceProvisional -> {
                 if (deleteAbandonedProvisional(resolution.serverId, nowEpochMillis) != 1) {
                     throw SingleEnrollmentConflictException()
                 }
-                val id = insert(
-                    server.copy(
-                        enabled = false,
-                        apiKey = null,
-                        enrollmentSetupComplete = false,
-                        enrollmentIssuedAtEpochMillis = null,
-                        reservationNonce = ownerNonce,
-                        reservationExpiresAtEpochMillis = expiresAtEpochMillis,
-                    ),
-                )
-                SingleEnrollmentReservation(id, provisional = true, ownerNonce = ownerNonce)
+                insertEnrollmentReservation(server, ownerNonce, expiresAtEpochMillis)
             }
             is SingleEnrollmentResolution.Reject -> throw SingleEnrollmentConflictException()
         }
     }
 
+    /** A provisional slot whose reservation lease lapsed before any attempt was bound to it. */
     @Query("""
         DELETE FROM upload_servers
         WHERE id = :id
           AND enabled = 0
           AND enrollmentIssuedAtEpochMillis IS NULL
+          AND pendingEnrollmentAttemptId IS NULL
           AND (
-              (
-                  pendingEnrollmentAttemptId IS NULL AND (
-                      reservationNonce IS NULL OR
-                      reservationExpiresAtEpochMillis IS NULL OR
-                      reservationExpiresAtEpochMillis < :nowEpochMillis
-                  )
-              ) OR (
-                  pendingEnrollmentAttemptId IS NOT NULL AND (
-                      (
-                          pendingEnrollmentFirstRequestAtEpochMillis IS NULL AND
-                          pendingEnrollmentInviteExpiresAtEpochMillis <= :nowEpochMillis
-                      ) OR (
-                          pendingEnrollmentFirstRequestAtEpochMillis IS NOT NULL AND
-                          pendingEnrollmentReplayDeadlineEpochMillis <= :nowEpochMillis
-                      )
-                  )
-              )
+              reservationNonce IS NULL OR
+              reservationExpiresAtEpochMillis IS NULL OR
+              reservationExpiresAtEpochMillis < :nowEpochMillis
           )
     """)
     fun deleteAbandonedProvisional(id: Long, nowEpochMillis: Long): Int
 
-    @Query("""
-        UPDATE upload_servers
-        SET name = :name,
-            sourceDeviceId = :sourceDeviceId,
-            mobileSigningSecretOverride = :mobileSigningSecretOverride,
-            studyDisclosureJson = :studyDisclosureJson,
-            disclosureVersion = :disclosureVersion,
-            manifestDigest = :manifestDigest,
-            pendingAcceptedModuleIds = :pendingAcceptedModuleIds,
-            pendingDeclinedModuleIds = :pendingDeclinedModuleIds,
-            pendingUnavailableModuleIds = :pendingUnavailableModuleIds,
-            pendingEnrollmentAttemptId = :pendingEnrollmentAttemptId,
-            pendingEnrollmentAccessCode = :pendingEnrollmentAccessCode,
-            pendingEnrollmentInviteExpiresAtEpochMillis = :pendingEnrollmentInviteExpiresAtEpochMillis,
-            pendingProposedApiKey = :pendingProposedApiKey,
-            pendingEnrollmentSourceDeviceJson = :pendingEnrollmentSourceDeviceJson,
-            pendingEnrollmentFirstRequestAtEpochMillis = NULL,
-            pendingEnrollmentReplayDeadlineEpochMillis = NULL,
-            enrollmentSetupComplete = 0,
-            enabled = 0
-        WHERE id = :id
-          AND reservationNonce = :ownerNonce
-          AND enrollmentIssuedAtEpochMillis IS NULL
-    """)
-    fun preparePendingEnrollmentAttempt(
-        id: Long,
-        ownerNonce: String,
-        name: String,
-        sourceDeviceId: String,
-        mobileSigningSecretOverride: String?,
-        studyDisclosureJson: String?,
-        disclosureVersion: String?,
-        manifestDigest: String?,
-        pendingAcceptedModuleIds: String?,
-        pendingDeclinedModuleIds: String?,
-        pendingUnavailableModuleIds: String?,
-        pendingEnrollmentAttemptId: String,
-        pendingEnrollmentAccessCode: String,
-        pendingEnrollmentInviteExpiresAtEpochMillis: Long,
-        pendingProposedApiKey: String,
-        pendingEnrollmentSourceDeviceJson: String,
-    ): Int
+    @Transaction
+    fun preparePendingEnrollmentAttempt(reservation: SingleEnrollmentReservation, server: UploadServerEntity): Int {
+        val current = getById(reservation.serverId) ?: return 0
+        if (current.reservationNonce != reservation.ownerNonce || current.enrollmentIssuedAtEpochMillis != null) return 0
+        requireNotNull(server.pendingEnrollmentAttemptId)
+        server.validatePendingEnrollment()
+        update(current.withEnrollmentDetails(server).copy(
+            pendingAcceptedModuleIds = server.pendingAcceptedModuleIds,
+            pendingDeclinedModuleIds = server.pendingDeclinedModuleIds,
+            pendingUnavailableModuleIds = server.pendingUnavailableModuleIds,
+            pendingEnrollmentAttemptId = server.pendingEnrollmentAttemptId,
+            pendingEnrollmentAccessCode = server.pendingEnrollmentAccessCode,
+            pendingProposedApiKey = server.pendingProposedApiKey,
+            pendingEnrollmentSourceDeviceJson = server.pendingEnrollmentSourceDeviceJson,
+            pendingEnrollmentFirstRequestAtEpochMillis = null,
+            enrollmentSetupComplete = false,
+            enabled = false,
+        ))
+        return 1
+    }
 
     /** Finalizes only the exact identity that acquired the singleton slot. */
     @Transaction
-    fun finalizeSingleEnrollment(
-        reservation: SingleEnrollmentReservation,
-        requestedUrl: String,
-        requestedStudyId: String,
-        requestedParticipantId: String,
-        name: String,
-        sourceDeviceId: String,
-        authMode: String,
-        apiKey: String?,
-        mobileSigningSecretOverride: String?,
-        studyDisclosureJson: String? = null,
-        disclosureVersion: String? = null,
-        manifestDigest: String? = null,
-    ) {
-        val current = getById(reservation.serverId)
-            ?: throw SingleEnrollmentConflictException()
-        if (
-            current.url != requestedUrl ||
-            current.studyId != requestedStudyId ||
-            current.participantId != requestedParticipantId
-        ) {
+    fun finalizeSingleEnrollment(reservation: SingleEnrollmentReservation, server: UploadServerEntity) {
+        require(server.hasDeviceCredential()) { "Enrollment response did not contain a device credential" }
+        val current = getById(reservation.serverId) ?: throw SingleEnrollmentConflictException()
+        if (current.url != server.url || current.studyId != server.studyId || current.participantId != server.participantId) {
             throw SingleEnrollmentConflictException()
         }
-        check(
-            updateEnrollmentCredentials(
-                reservation.serverId,
-                name,
-                sourceDeviceId,
-                authMode,
-                apiKey,
-                mobileSigningSecretOverride,
-                studyDisclosureJson,
-                disclosureVersion,
-                manifestDigest,
-                reservation.ownerNonce,
-                System.currentTimeMillis(),
-            ) == 1
-        ) { "Enrollment slot disappeared before it could be finalized" }
+        check(current.reservationNonce == reservation.ownerNonce) { "Enrollment slot changed before finalization" }
+        update(current.withEnrollmentDetails(server).copy(
+            apiKey = server.apiKey,
+            enabled = true,
+            enrollmentIssuedAtEpochMillis = current.enrollmentIssuedAtEpochMillis ?: System.currentTimeMillis(),
+            consecutiveFailures = 0,
+            sensorConsecutiveFailures = 0,
+            batteryConsecutiveFailures = 0,
+            lastUploadError = null,
+            lastSensorUploadError = null,
+        ))
+        check(completeEnrollmentSetup(reservation.serverId, reservation.ownerNonce) == 1) {
+            "Enrollment slot disappeared before it could be finalized"
+        }
+        check(setEnabled(reservation.serverId, server.enabled) == 1) { "Finalized enrollment disappeared before activation" }
     }
 
     /** Durably records the remote-issued credential before any fallible local setup step. */
-    @Query("""
-        UPDATE upload_servers
-        SET name = :name,
-            sourceDeviceId = :sourceDeviceId,
-            authMode = :authMode,
-            apiKey = :apiKey,
-            mobileSigningSecretOverride = :mobileSigningSecretOverride,
-            studyDisclosureJson = :studyDisclosureJson,
-            disclosureVersion = :disclosureVersion,
-            manifestDigest = :manifestDigest,
-            pendingAcceptedModuleIds = :pendingAcceptedModuleIds,
-            pendingDeclinedModuleIds = :pendingDeclinedModuleIds,
-            pendingUnavailableModuleIds = :pendingUnavailableModuleIds,
-            enrollmentIssuedAtEpochMillis = :issuedAtEpochMillis,
-            enrollmentSetupComplete = 0,
-            enabled = 0,
-            pendingEnrollmentAttemptId = NULL,
-            pendingEnrollmentAccessCode = NULL,
-            pendingEnrollmentInviteExpiresAtEpochMillis = NULL,
-            pendingProposedApiKey = NULL,
-            pendingEnrollmentSourceDeviceJson = NULL,
-            pendingEnrollmentFirstRequestAtEpochMillis = NULL,
-            pendingEnrollmentReplayDeadlineEpochMillis = NULL
-        WHERE id = :id
-          AND reservationNonce = :ownerNonce
-          AND pendingEnrollmentAttemptId = :enrollmentAttemptId
-          AND pendingProposedApiKey = :apiKey
-    """)
+    @Transaction
     fun persistIssuedEnrollment(
-        id: Long,
-        ownerNonce: String,
-        name: String,
-        sourceDeviceId: String,
-        authMode: String,
-        apiKey: String,
-        mobileSigningSecretOverride: String?,
-        studyDisclosureJson: String,
-        disclosureVersion: String,
-        manifestDigest: String,
-        pendingAcceptedModuleIds: String,
-        pendingDeclinedModuleIds: String,
-        pendingUnavailableModuleIds: String,
+        reservation: SingleEnrollmentReservation,
         enrollmentAttemptId: String,
+        server: UploadServerEntity,
         issuedAtEpochMillis: Long,
-    ): Int
+    ): Int {
+        val current = getById(reservation.serverId) ?: return 0
+        if (current.reservationNonce != reservation.ownerNonce || current.pendingEnrollmentAttemptId != enrollmentAttemptId ||
+            current.pendingProposedApiKey != server.apiKey
+        ) return 0
+        requireNotNull(server.studyDisclosureJson)
+        requireNotNull(server.disclosureVersion)
+        requireNotNull(server.manifestDigest)
+        update(current.withEnrollmentDetails(server).copy(
+            apiKey = requireNotNull(server.apiKey),
+            pendingAcceptedModuleIds = requireNotNull(server.pendingAcceptedModuleIds),
+            pendingDeclinedModuleIds = requireNotNull(server.pendingDeclinedModuleIds),
+            pendingUnavailableModuleIds = requireNotNull(server.pendingUnavailableModuleIds),
+            enrollmentIssuedAtEpochMillis = issuedAtEpochMillis,
+            enrollmentSetupComplete = false,
+            enabled = false,
+            pendingEnrollmentAttemptId = null,
+            pendingEnrollmentAccessCode = null,
+            pendingProposedApiKey = null,
+            pendingEnrollmentSourceDeviceJson = null,
+            pendingEnrollmentFirstRequestAtEpochMillis = null,
+        ))
+        return 1
+    }
 
     @Query("""
         UPDATE upload_servers SET enabled = 1
@@ -429,11 +210,9 @@ interface UploadServerDao {
             pendingUnavailableModuleIds = NULL,
             pendingEnrollmentAttemptId = NULL,
             pendingEnrollmentAccessCode = NULL,
-            pendingEnrollmentInviteExpiresAtEpochMillis = NULL,
             pendingProposedApiKey = NULL,
             pendingEnrollmentSourceDeviceJson = NULL,
-            pendingEnrollmentFirstRequestAtEpochMillis = NULL,
-            pendingEnrollmentReplayDeadlineEpochMillis = NULL
+            pendingEnrollmentFirstRequestAtEpochMillis = NULL
         WHERE id = :id
           AND reservationNonce = :ownerNonce
           AND enrollmentIssuedAtEpochMillis IS NOT NULL
@@ -465,21 +244,18 @@ interface UploadServerDao {
 
     @Query("""
         UPDATE upload_servers
-        SET pendingEnrollmentFirstRequestAtEpochMillis = :firstRequestAtEpochMillis,
-            pendingEnrollmentReplayDeadlineEpochMillis = :replayDeadlineEpochMillis
+        SET pendingEnrollmentFirstRequestAtEpochMillis = :firstRequestAtEpochMillis
         WHERE id = :id
           AND reservationNonce = :ownerNonce
           AND pendingEnrollmentAttemptId = :enrollmentAttemptId
           AND enrollmentIssuedAtEpochMillis IS NULL
           AND pendingEnrollmentFirstRequestAtEpochMillis IS NULL
-          AND pendingEnrollmentReplayDeadlineEpochMillis IS NULL
     """)
     fun markPendingEnrollmentRequestStarted(
         id: Long,
         ownerNonce: String,
         enrollmentAttemptId: String,
         firstRequestAtEpochMillis: Long,
-        replayDeadlineEpochMillis: Long,
     ): Int
 
     @Query("""
@@ -489,11 +265,13 @@ interface UploadServerDao {
           AND pendingEnrollmentAttemptId = :enrollmentAttemptId
           AND enrollmentIssuedAtEpochMillis IS NULL
           AND enabled = 0
+          AND pendingEnrollmentFirstRequestAtEpochMillis IS :firstRequestAtEpochMillis
     """)
     fun deletePendingEnrollmentAttempt(
         id: Long,
         ownerNonce: String,
         enrollmentAttemptId: String,
+        firstRequestAtEpochMillis: Long?,
     ): Int
 
     @Query("""
@@ -502,47 +280,9 @@ interface UploadServerDao {
           AND enrollmentSetupComplete = 0
           AND enrollmentIssuedAtEpochMillis IS NULL
           AND enabled = 0
+          AND pendingEnrollmentFirstRequestAtEpochMillis IS NULL
     """)
     fun deleteCorruptPendingEnrollment(id: Long): Int
-
-    /** Releases only an unfinished slot created by this enrollment attempt. */
-    @Query("""
-        DELETE FROM upload_servers
-        WHERE id = :id
-          AND reservationNonce = :ownerNonce
-          AND enabled = 0
-          AND enrollmentIssuedAtEpochMillis IS NULL
-    """)
-    fun releaseProvisionalEnrollment(id: Long, ownerNonce: String): Int
-
-    @Query("""
-        UPDATE upload_servers
-        SET reservationNonce = NULL,
-            reservationExpiresAtEpochMillis = NULL,
-            pendingAcceptedModuleIds = NULL,
-            pendingDeclinedModuleIds = NULL,
-            pendingUnavailableModuleIds = NULL,
-            pendingEnrollmentAttemptId = NULL,
-            pendingEnrollmentAccessCode = NULL,
-            pendingEnrollmentInviteExpiresAtEpochMillis = NULL,
-            pendingProposedApiKey = NULL,
-            pendingEnrollmentSourceDeviceJson = NULL,
-            pendingEnrollmentFirstRequestAtEpochMillis = NULL,
-            pendingEnrollmentReplayDeadlineEpochMillis = NULL
-        WHERE id = :id
-          AND reservationNonce = :ownerNonce
-          AND enrollmentIssuedAtEpochMillis IS NULL
-    """)
-    fun clearUnissuedReservation(id: Long, ownerNonce: String): Int
-
-    @Transaction
-    fun releaseEnrollmentReservation(reservation: SingleEnrollmentReservation) {
-        if (reservation.provisional) {
-            releaseProvisionalEnrollment(reservation.serverId, reservation.ownerNonce)
-        } else {
-            clearUnissuedReservation(reservation.serverId, reservation.ownerNonce)
-        }
-    }
 
     @Update
     fun update(server: UploadServerEntity)
@@ -551,43 +291,26 @@ interface UploadServerDao {
     fun delete(id: Long)
 
     @Query(
-        "UPDATE upload_servers SET lastUploadTime = :time, lastUploadError = :error, consecutiveFailures = :failures, lastUploadedTimestamp " +
-        "= :lastTimestamp, lastUploadedQueueId = :lastQueueId WHERE id = :id")
-    fun updateUploadStatus(id: Long, time: String, error: String?, failures: Int, lastTimestamp: Long, lastQueueId: Long): Int
-
-    @Query(
         "UPDATE upload_servers SET lastSensorUploadTime = :time, lastSensorUploadError = :error, sensorConsecutiveFailures = :failures, " +
         "lastUploadedSensorId = :lastSensorId WHERE id = :id")
     fun updateSensorUploadStatus(id: Long, time: String, error: String?, failures: Int, lastSensorId: String?): Int
-
-    @Query(
-        "UPDATE upload_servers SET lastBatteryUploadTime = :time, lastBatteryUploadError = :error, batteryConsecutiveFailures = :failures " +
-        "WHERE id = :id")
-    fun updateBatteryUploadStatus(id: Long, time: String, error: String?, failures: Int): Int
 
     @Query("""
         UPDATE upload_servers
         SET lastUploadTime = :time,
             lastUploadError = NULL,
             consecutiveFailures = 0,
-            lastUploadedTimestamp = :lastTimestamp,
-            lastUploadedQueueId = :lastQueueId,
-            lastUsageUploadAttemptTime = :time,
             lastUsageUploadSuccessTime = :time,
             usageUploadSuccessCount = usageUploadSuccessCount + :count
         WHERE id = :id
     """)
-    fun recordUsageUploadSuccess(id: Long, time: String, lastTimestamp: Long, lastQueueId: Long, count: Int): Int
-
-    @Query("UPDATE upload_servers SET lastUploadedTimestamp = :lastTimestamp, lastUploadedQueueId = :lastQueueId WHERE id = :id")
-    fun advanceUsageCursor(id: Long, lastTimestamp: Long, lastQueueId: Long): Int
+    fun recordUsageUploadSuccess(id: Long, time: String, count: Int): Int
 
     @Query("""
         UPDATE upload_servers
         SET lastUploadTime = :time,
             lastUploadError = :error,
             consecutiveFailures = :failures,
-            lastUsageUploadAttemptTime = :time,
             usageUploadFailureCount = usageUploadFailureCount + 1
         WHERE id = :id
     """)
@@ -599,7 +322,6 @@ interface UploadServerDao {
             lastSensorUploadError = NULL,
             sensorConsecutiveFailures = 0,
             lastUploadedSensorId = :lastSensorId,
-            lastSensorUploadAttemptTime = :time,
             lastSensorUploadSuccessTime = :time,
             sensorUploadSuccessCount = sensorUploadSuccessCount + :count
         WHERE id = :id
@@ -611,7 +333,6 @@ interface UploadServerDao {
         SET lastSensorUploadTime = :time,
             lastSensorUploadError = :error,
             sensorConsecutiveFailures = :failures,
-            lastSensorUploadAttemptTime = :time,
             sensorUploadFailureCount = sensorUploadFailureCount + 1
         WHERE id = :id
     """)
@@ -620,9 +341,7 @@ interface UploadServerDao {
     @Query("""
         UPDATE upload_servers
         SET lastBatteryUploadTime = :time,
-            lastBatteryUploadError = NULL,
             batteryConsecutiveFailures = 0,
-            lastBatteryUploadAttemptTime = :time,
             lastBatteryUploadSuccessTime = :time,
             batteryUploadSuccessCount = batteryUploadSuccessCount + :count
         WHERE id = :id
@@ -632,25 +351,11 @@ interface UploadServerDao {
     @Query("""
         UPDATE upload_servers
         SET lastBatteryUploadTime = :time,
-            lastBatteryUploadError = :error,
             batteryConsecutiveFailures = :failures,
-            lastBatteryUploadAttemptTime = :time,
             batteryUploadFailureCount = batteryUploadFailureCount + 1
         WHERE id = :id
     """)
-    fun recordBatteryUploadFailure(id: Long, time: String, error: String, failures: Int): Int
-
-    // Cursor MIN must include disabled rows so a temporarily-disabled server's data
-    // isn't trimmed past its frozen cursor; re-enabling would otherwise lose
-    // every event between the disabled cursor and the new MIN. Hard delete
-    // (Settings → Delete Server) removes the row entirely and is the only path
-    // that releases data held for that server.
-    @Query("SELECT MIN(lastUploadedTimestamp) FROM upload_servers")
-    fun getMinUploadCursor(): Long?
-
-    @Query(
-        "SELECT lastUploadedTimestamp, lastUploadedQueueId FROM upload_servers ORDER BY lastUploadedTimestamp ASC, lastUploadedQueueId ASC LIMIT 1")
-    fun getMinUploadQueueCursor(): UploadQueueCursor?
+    fun recordBatteryUploadFailure(id: Long, time: String, failures: Int): Int
 
     @Query(
         "UPDATE upload_servers SET enabled = :enabled, consecutiveFailures = CASE WHEN :enabled = 1 THEN 0 ELSE consecutiveFailures END, " +
@@ -662,3 +367,83 @@ interface UploadServerDao {
         const val ENROLLMENT_RESERVATION_LEASE_MILLIS: Long = 15 * 60 * 1_000L
     }
 }
+
+private fun UploadServerEntity.validatePendingEnrollment() {
+    val pendingReplayFields = listOf(
+        pendingEnrollmentAttemptId,
+        pendingEnrollmentAccessCode,
+        pendingProposedApiKey,
+        pendingEnrollmentSourceDeviceJson,
+    )
+    require(pendingReplayFields.all { it == null } || pendingReplayFields.all { it != null }) {
+        "Replay-safe enrollment fields must be persisted together"
+    }
+    val pendingDecisionFields = listOf(
+        pendingAcceptedModuleIds,
+        pendingDeclinedModuleIds,
+        pendingUnavailableModuleIds,
+    )
+    require(
+        pendingDecisionFields.all { it == null } || pendingDecisionFields.all { it != null },
+    ) { "Replay-safe enrollment evidence must be persisted together" }
+    require(
+        (pendingEnrollmentAttemptId == null) == pendingDecisionFields.all { it == null },
+    ) { "Enrollment request and acknowledgment evidence must be persisted together" }
+}
+
+private fun UploadServerDao.insertEnrollmentReservation(
+    server: UploadServerEntity,
+    ownerNonce: String,
+    expiresAtEpochMillis: Long,
+): SingleEnrollmentReservation {
+    val id = insert(
+        server.copy(
+            enabled = false,
+            apiKey = null,
+            enrollmentSetupComplete = false,
+            enrollmentIssuedAtEpochMillis = null,
+            reservationNonce = ownerNonce,
+            reservationExpiresAtEpochMillis = expiresAtEpochMillis,
+        ),
+    )
+    return SingleEnrollmentReservation(id, provisional = true, ownerNonce = ownerNonce)
+}
+
+private fun UploadServerDao.refreshEnrollmentReservation(
+    server: UploadServerEntity,
+    serverId: Long,
+    ownerNonce: String,
+    nowEpochMillis: Long,
+    expiresAtEpochMillis: Long,
+): SingleEnrollmentReservation {
+    val existing = getById(serverId)
+        ?: throw SingleEnrollmentConflictException()
+    val provisional = !existing.enabled && existing.enrollmentIssuedAtEpochMillis == null
+    if (
+        claimEnrollmentReservation(
+            existing.id,
+            ownerNonce,
+            nowEpochMillis,
+            expiresAtEpochMillis,
+        ) != 1
+    ) throw SingleEnrollmentConflictException()
+    if (server.pendingEnrollmentAttemptId != null &&
+        preparePendingEnrollmentAttempt(
+            SingleEnrollmentReservation(serverId, provisional = provisional, ownerNonce = ownerNonce),
+            server,
+        ) != 1
+    ) throw SingleEnrollmentConflictException()
+    return SingleEnrollmentReservation(
+        serverId,
+        provisional = provisional,
+        ownerNonce = ownerNonce,
+    )
+}
+
+private fun UploadServerEntity.withEnrollmentDetails(server: UploadServerEntity): UploadServerEntity = copy(
+    name = server.name,
+    sourceRandomDeviceId = server.sourceRandomDeviceId,
+    studyDisclosureJson = server.studyDisclosureJson,
+    disclosureVersion = server.disclosureVersion,
+    manifestDigest = server.manifestDigest,
+)

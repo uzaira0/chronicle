@@ -2,7 +2,7 @@ package com.openlattice.chronicle.services.sync
 
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import com.openlattice.chronicle.BuildConfig
+import com.openlattice.chronicle.collection.capability.DistributionChannel
 import com.openlattice.chronicle.collection.device.EXPANSION_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.collection.device.ExpansionUploadWorker
 import com.openlattice.chronicle.collection.device.INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD
@@ -11,20 +11,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
 
 class ImmediateSyncFanoutTest {
     @Test
     fun `upload now includes every queue outside the combined worker`() {
+        val shipsAuxiliaryCollectors = DistributionChannel.current() == DistributionChannel.RESEARCH
         val expectedWorkerNames = buildList {
-            if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
+            if (shipsAuxiliaryCollectors) {
                 add("com.openlattice.chronicle.collection.interaction.InteractionUploadWorker")
                 add("com.openlattice.chronicle.collection.audio.AudioUploadWorker")
             }
             add(ExpansionUploadWorker::class.java.name)
         }
         val expectedQueueOwners = buildSet {
-            if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
+            if (shipsAuxiliaryCollectors) {
                 add("interaction_events_upload")
                 add("app_audio_upload")
             }
@@ -43,7 +43,6 @@ class ImmediateSyncFanoutTest {
 
     @Test
     fun `manual upload always collects before upload and coalesces repeat taps`() {
-        assertEquals(ChronicleSyncStrategy.COORDINATED_COLLECT_THEN_UPLOAD, MANUAL_SYNC_STRATEGY)
         assertEquals(ExistingWorkPolicy.KEEP, IMMEDIATE_UPLOAD_EXISTING_WORK_POLICY)
         assertEquals(NetworkType.CONNECTED, UPLOAD_NETWORK_CONSTRAINT.requiredNetworkType)
 
@@ -53,11 +52,7 @@ class ImmediateSyncFanoutTest {
             AUXILIARY_UPLOADS.filterNot { it == expansion }.any { it.collectBeforeManualUpload },
         )
 
-        val syncSource = executableSource(
-            "src/main/java/com/openlattice/chronicle/services/sync/ChronicleSyncWorker.kt",
-        )
-        assertTrue(syncSource.contains("uniqueWorkName, IMMEDIATE_UPLOAD_EXISTING_WORK_POLICY, requests"))
-        assertTrue(syncSource.contains("requests = listOf(request) + buildImmediateAuxiliaryUploadRequests"))
+
     }
 
     /**
@@ -85,6 +80,22 @@ class ImmediateSyncFanoutTest {
     }
 
     @Test
+    fun `upload retry backoff varies between requests within the bounded window`() {
+        val samples = (1..100).map {
+            listOf(
+                buildPeriodicChronicleSyncRequest().workSpec.backoffDelayDuration,
+                buildImmediateChronicleSyncRequest().workSpec.backoffDelayDuration,
+            ) + buildImmediateAuxiliaryUploadRequests(collectExpansionBeforeUpload = true)
+                .map { it.workSpec.backoffDelayDuration }
+        }
+        for (queue in samples.first().indices) {
+            val delays = samples.map { it[queue] }
+            assertTrue(delays.all { it in 30_000L..90_000L })
+            assertTrue("Retry base for queue $queue must vary", delays.toSet().size > 1)
+        }
+    }
+
+    @Test
     fun `a periodic auxiliary drain never pre-collects`() {
         val requests = buildImmediateAuxiliaryUploadRequests(collectExpansionBeforeUpload = false)
 
@@ -93,71 +104,5 @@ class ImmediateSyncFanoutTest {
                 it.workSpec.input.getBoolean(INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD, false)
             },
         )
-    }
-
-    /**
-     * Kotlin source with comments stripped: a wiring assertion must not be satisfiable by the
-     * searched text surviving in a comment after the call itself is deleted.
-     */
-    private fun executableSource(path: String): String = File(path).readText()
-        .replace(Regex("""/\*[\s\S]*?\*/"""), "")
-        .replace(Regex("""(?m)//.*$"""), "")
-
-    @Test
-    fun `coordinated periodic sync preserves offline collection and battery gate`() {
-        val unconstrainedBattery = coordinatedSyncConstraints(requiresBatteryNotLow = false)
-        assertEquals(NetworkType.NOT_REQUIRED, unconstrainedBattery.requiredNetworkType)
-        assertFalse(unconstrainedBattery.requiresBatteryNotLow())
-
-        val batteryAware = coordinatedSyncConstraints(requiresBatteryNotLow = true)
-        assertEquals(NetworkType.NOT_REQUIRED, batteryAware.requiredNetworkType)
-        assertTrue(batteryAware.requiresBatteryNotLow())
-    }
-
-    @Test
-    fun `periodic and manual auxiliary workers share queue leases`() {
-        val workers = mapOf(
-            "collection/interaction/InteractionUploadWorker.kt" to "INTERACTION_UPLOAD_WORK_NAME",
-            "collection/audio/AudioUploadWorker.kt" to "AUDIO_UPLOAD_WORK_NAME",
-            "collection/device/ExpansionUploadWorker.kt" to "EXPANSION_UPLOAD_WORK_NAME",
-        )
-        workers.forEach { (path, owner) ->
-            val sourceRoot = if (
-                path.startsWith("collection/audio/") ||
-                path.startsWith("collection/interaction/")
-            ) {
-                "src/googleServices/java"
-            } else {
-                "src/main/java"
-            }
-            val source = executableSource("$sourceRoot/com/openlattice/chronicle/$path")
-            assertTrue(source.contains("UploadQueueSingleFlight.tryAcquire($owner)"))
-            assertTrue(source.contains("UploadQueueSingleFlight.release($owner)"))
-        }
-
-        val expansionSource = executableSource(
-            "src/main/java/com/openlattice/chronicle/collection/device/ExpansionUploadWorker.kt",
-        )
-        assertTrue(expansionSource.contains("inputData.getBoolean(INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD, false)"))
-        assertTrue(expansionSource.contains("collectExpansionSamples(applicationContext)"))
-    }
-
-    @Test
-    fun `every independently schedulable uploader joins the withdrawal mutation barrier`() {
-        val workers = mapOf(
-            "collection/battery/BatteryUploadWorker.kt" to "BATTERY_UPLOAD_WORK_NAME",
-            "services/sensors/SensorUploadWorker.kt" to "LEGACY_SENSOR_UPLOAD_WORK_NAME",
-        )
-        workers.forEach { (path, owner) ->
-            val sourceRoot = if (path.startsWith("services/sensors/")) {
-                "src/googleServices/java"
-            } else {
-                "src/main/java"
-            }
-            val source = executableSource("$sourceRoot/com/openlattice/chronicle/$path")
-            assertTrue(source.contains("UploadQueueSingleFlight.tryAcquire($owner)"))
-            assertTrue(source.contains("UploadQueueSingleFlight.release($owner)"))
-            assertTrue(source.contains("ResearchPersistenceGate.runIfEnrolled(applicationContext)"))
-        }
     }
 }

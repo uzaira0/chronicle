@@ -12,7 +12,7 @@ import androidx.room.Transaction
  * plans of performing set operations on returned data.
  */
 @Dao
-interface StorageQueue {
+interface StorageQueue : BoundedQueueWriter {
     @Query("SELECT * FROM dataQueue ORDER BY writeTimestamp ASC LIMIT :size")
     fun getNextEntries( size : Int ) : List<QueueEntry>
 
@@ -22,12 +22,13 @@ interface StorageQueue {
     @Query("SELECT count(*) FROM dataQueue")
     fun getSize(): Int
 
+    /** Keys of the rows queued at or after [writeTimestamp], including rows a bounded insert split off. */
+    @Query("SELECT CAST(writeTimestamp AS TEXT) || ':' || CAST(id AS TEXT) FROM dataQueue WHERE writeTimestamp >= :writeTimestamp")
+    fun keysFrom(writeTimestamp: Long): List<String>
+
     /** Highest write cursor currently queued, or null when the queue is empty. */
     @Query("SELECT MAX(writeTimestamp) FROM dataQueue")
     fun maxWriteTimestamp(): Long?
-    
-    @Query("SELECT MAX(lastUploadedTimestamp) FROM upload_servers")
-    fun maxUploadedTimestamp(): Long?
 
     @Transaction
     fun insertEntry(entry: QueueEntry) = insertEntries(listOf(entry))
@@ -42,24 +43,30 @@ interface StorageQueue {
         insertAllocatedEntries(entries.map { QueueEntry(it.writeTimestamp + shift, it.id, it.data) })
     }
 
-    fun nextWriteTimestamp(wallClockMillis: Long): Long = monotonicQueueWriteTimestamp(
-        wallClockMillis, listOfNotNull(maxWriteTimestamp(), maxUploadedTimestamp()).maxOrNull(),
-    )
+    fun nextWriteTimestamp(wallClockMillis: Long): Long = monotonicQueueWriteTimestamp(wallClockMillis, maxWriteTimestamp())
 
     @Query("UPDATE dataQueue SET data = :data WHERE writeTimestamp = :writeTimestamp AND id = :id")
-    fun updateData(writeTimestamp: Long, id: Long, data: ByteArray)
+    fun updateBoundedData(writeTimestamp: Long, id: Long, data: ByteArray)
+
+    @Transaction
+    fun insertAllocatedEntries(entries: List<QueueEntry>) {
+        if (entries.all { it.data.size <= MAX_PERSISTED_QUEUE_PAYLOAD_BYTES }) { insertBoundedEntries(entries); return }
+        val bounded = boundedUsageRows(entries)
+        var nextTimestamp = bounded.minOfOrNull { it.writeTimestamp } ?: return
+        insertBoundedEntries(bounded.map { row ->
+            nextTimestamp = maxOf(nextTimestamp, row.writeTimestamp)
+            QueueEntry(nextTimestamp++, row.id, row.data)
+        })
+    }
 
     @Insert
-    fun insertAllocatedEntries(entries: List<QueueEntry>)
+    fun insertBoundedEntries(entries: List<QueueEntry>)
 
     @Delete
     fun deleteEntry( entry : QueueEntry)
 
     @Delete
     fun deleteEntries( entries : List<QueueEntry> )
-
-    @Query("SELECT * FROM dataQueue WHERE writeTimestamp > :cursor ORDER BY writeTimestamp ASC LIMIT :limit")
-    fun getEntriesAfter(cursor: Long, limit: Int): List<QueueEntry>
 
     @Query(
         """
@@ -71,22 +78,6 @@ interface StorageQueue {
         """
     )
     fun getEntriesAfter(cursorTimestamp: Long, cursorId: Long, limit: Int): List<QueueEntry>
-
-    @Query("DELETE FROM dataQueue WHERE writeTimestamp <= :maxTimestamp")
-    fun deleteEntriesBefore(maxTimestamp: Long)
-
-    @Query(
-        """
-        DELETE FROM dataQueue
-        WHERE writeTimestamp < :maxTimestamp
-            OR (writeTimestamp = :maxTimestamp AND id <= :maxId)
-        """
-    )
-    fun deleteEntriesBeforeOrAt(maxTimestamp: Long, maxId: Long)
-
-    /** Low-storage eviction: removes the [count] oldest rows, returning how many went. */
-    @Query("DELETE FROM dataQueue WHERE rowid IN (SELECT rowid FROM dataQueue ORDER BY writeTimestamp ASC, id ASC LIMIT :count)")
-    fun deleteOldest(count: Int): Int
 
     /** Privacy-first fallback for untagged shared usage/lifecycle rows. */
     @Query("DELETE FROM dataQueue")

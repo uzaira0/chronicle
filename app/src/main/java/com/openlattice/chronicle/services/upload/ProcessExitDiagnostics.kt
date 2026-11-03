@@ -8,13 +8,19 @@ import android.util.Log
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
+import android.content.SharedPreferences
+import android.os.Process
+import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import java.time.OffsetDateTime
 
 private const val PROCESS_EXIT_TAG = "ProcessExitDiagnostics"
 internal const val PROCESS_EXIT_PREFS = "chronicle_process_exit_watermark"
 private const val KEY_WATERMARK = "last_reported_exit_ms"
-internal const val LEGACY_CRASH_TIMESTAMP = "last_uncaught_crash_ms"
+/** One key per pre-R crash, so a second crash before import never overwrites the first. */
+internal const val PRE_R_CRASH_PREFIX = "uncaught_crash_ms:"
 
-internal fun installLegacyCrashHandler(context: Context) {
+internal fun installPreAndroid11CrashHandler(context: Context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return
     val previous = Thread.getDefaultUncaughtExceptionHandler()
     if (previous is CrashTimestampHandler) return
@@ -23,18 +29,23 @@ internal fun installLegacyCrashHandler(context: Context) {
 }
 
 internal class CrashTimestampHandler(
-    private val prefs: android.content.SharedPreferences,
+    private val prefs: SharedPreferences,
     private val previous: Thread.UncaughtExceptionHandler?,
 ) : Thread.UncaughtExceptionHandler {
     override fun uncaughtException(thread: Thread, error: Throwable) {
         try {
-            prefs.edit().putLong(LEGACY_CRASH_TIMESTAMP, System.currentTimeMillis()).commit()
+            val now = System.currentTimeMillis()
+            prefs.edit().putLong("$PRE_R_CRASH_PREFIX$now", now).commit()
         } finally {
             if (previous != null) previous.uncaughtException(thread, error)
-            else android.os.Process.killProcess(android.os.Process.myPid())
+            else Process.killProcess(Process.myPid())
         }
     }
 }
+
+/** Pre-R crash times awaiting import, keyed as the handler wrote them. */
+internal fun pendingPreRCrashes(prefs: SharedPreferences): Map<String, Long> =
+    prefs.all.filterKeys { it.startsWith(PRE_R_CRASH_PREFIX) }.mapNotNull { (key, value) -> (value as? Long)?.let { key to it } }.toMap()
 
 /** Only the reason and time of a past exit; message, stack, and trace are never read. */
 internal data class ProcessExit(val reason: Int, val timestampMillis: Long, val pid: Int = 0)
@@ -79,26 +90,31 @@ internal fun recordProcessExits(
 /** Reports timestamp-only pre-R crashes or platform process exits through redacted diagnostics. */
 fun recordRecentProcessExits(context: Context) {
     try {
-        val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+        val gate = ResearchPersistenceGate
         val owner = gate.captureOwner(context) ?: return
         gate.runIfExpectedOwner(context, owner) {
-        val scope = gate.observationScope(context, com.openlattice.chronicle.collection.CollectionModuleId.UPLOAD_TELEMETRY)
+        val scope = gate.observationScope(context, CollectionModuleId.UPLOAD_TELEMETRY)
             ?: return@runIfExpectedOwner false
-        val floor = maxOf(scope.second, owner.enrollmentIssuedAtEpochMillis ?: 0, java.time.OffsetDateTime.parse(owner.createdAt).toInstant(
+        val floor = maxOf(scope.floorMillis, owner.enrollmentIssuedAtEpochMillis ?: 0, OffsetDateTime.parse(owner.createdAt).toInstant(
             ).toEpochMilli())
         val prefs = context.getSharedPreferences(PROCESS_EXIT_PREFS, Context.MODE_PRIVATE)
+        val crashPrefs = context.createDeviceProtectedStorageContext().getSharedPreferences(PROCESS_EXIT_PREFS, Context.MODE_PRIVATE)
+        val crashes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) emptyMap() else pendingPreRCrashes(crashPrefs)
         val exits = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val activityManager = context.getSystemService(ActivityManager::class.java) ?: return@runIfExpectedOwner false
             activityManager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
                 .map { ProcessExit(it.reason, it.timestamp, it.pid) }
         } else {
-            val crash = context.createDeviceProtectedStorageContext().getSharedPreferences(PROCESS_EXIT_PREFS, Context.MODE_PRIVATE)
-                .getLong(LEGACY_CRASH_TIMESTAMP, 0)
-            if (crash == 0L) emptyList() else listOf(ProcessExit(ApplicationExitInfo.REASON_CRASH, crash))
+            crashes.values.map { ProcessExit(ApplicationExitInfo.REASON_CRASH, it) }
         }
-        val previous = prefs.getLong("$KEY_WATERMARK:${scope.first}", 0L)
-        val next = recordProcessExits(LocalUploadDiagnosticsStore.of(context), exits, previous, floor)
-        if (next != previous) check(prefs.edit().putLong("$KEY_WATERMARK:${scope.first}", next).commit())
+        val previous = prefs.getLong("$KEY_WATERMARK:${scope.key}", 0L)
+        // Platform history is replayed on every read; a pre-R crash is consumed by its key instead, so a clock set back
+        // between two crashes cannot hide the second one behind the watermark.
+        val replayed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) previous else 0L
+        val next = maxOf(previous, recordProcessExits(LocalUploadDiagnosticsStore.of(context), exits, replayed, floor))
+        if (next != previous) check(prefs.edit().putLong("$KEY_WATERMARK:${scope.key}", next).commit())
+        // Each read crash is now recorded under its stable ID, or predates this owner and can never be; drop it only now.
+        if (crashes.isNotEmpty()) check(crashPrefs.edit().apply { crashes.keys.forEach(::remove) }.commit())
         true
         }
     } catch (e: Exception) {

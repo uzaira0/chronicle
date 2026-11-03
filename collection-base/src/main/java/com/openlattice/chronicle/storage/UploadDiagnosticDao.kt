@@ -1,72 +1,62 @@
 package com.openlattice.chronicle.storage
 
 import androidx.room.Dao
+import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Delete
+import androidx.room.Transaction
 import androidx.room.Update
 
 @Dao
-interface UploadDiagnosticDao {
+interface UploadDiagnosticDao : BoundedQueueWriter {
     @Query(
-        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND randomDeviceId = :randomDeviceId AND " +
         "enrollmentEpoch = :epoch ORDER BY firstOccurredAt, id")
-    fun forEnrollment(studyId: String, participantId: String, deviceId: String, epoch: String): List<UploadDiagnosticEntity>
+    fun forEnrollment(studyId: String, participantId: String, randomDeviceId: String, epoch: String): List<UploadDiagnosticEntity>
 
     @Query(
-        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
-        "enrollmentEpoch = :epoch AND day >= :cutoff AND day <= :today ORDER BY day DESC, moduleFamily, issueCode")
-    fun recent(studyId: String, participantId: String, deviceId: String, epoch: String, cutoff: String, today: String): List<UploadDiagnosticEntity>
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND randomDeviceId = :randomDeviceId AND " +
+        "enrollmentEpoch = :epoch AND day >= :cutoff AND day <= :today ORDER BY day DESC, moduleFamily, issueCode, firstOccurredAt")
+    fun recent(studyId: String, participantId: String, randomDeviceId: String, epoch: String,
+        cutoff: String, today: String): List<UploadDiagnosticEntity>
 
     @Query(
-        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
-        "enrollmentEpoch = :epoch AND day = :day AND moduleFamily = :family AND issueCode = :issue AND httpStatus IS :status AND errorType " +
-        "IS :errorType AND deliveryState = 'PENDING' AND sealedForUpload = 0 AND count < 2147483647 ORDER BY firstOccurredAt DESC LIMIT 1")
-    fun findOpen(studyId: String, participantId: String, deviceId: String, epoch: String, day: String, family: String, issue: String, status: Int?,
-        errorType: String?): UploadDiagnosticEntity?
-
-    @Query(
-        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
+        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND randomDeviceId = :randomDeviceId AND " +
         "enrollmentEpoch = :epoch AND deliveryState = 'PENDING' ORDER BY firstOccurredAt, id LIMIT 500")
-    fun pending(studyId: String, participantId: String, deviceId: String, epoch: String): List<UploadDiagnosticEntity>
-
-    @Query(
-        "SELECT COUNT(*) FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
-        "enrollmentEpoch = :epoch AND deliveryState = 'PARKED'")
-    fun parkedCount(studyId: String, participantId: String, deviceId: String, epoch: String): Int
-
-    @Query(
-        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
-        "enrollmentEpoch = :epoch AND deliveryState = 'PARKED' ORDER BY firstOccurredAt, id LIMIT 500 OFFSET :offset")
-    fun parked(studyId: String, participantId: String, deviceId: String, epoch: String, offset: Int): List<UploadDiagnosticEntity>
-
-    @Query(
-        "SELECT COUNT(*) FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
-        "enrollmentEpoch = :epoch AND deliveryState = 'DELIVERED'")
-    fun deliveredCount(studyId: String, participantId: String, deviceId: String, epoch: String): Int
-
-    @Query(
-        "SELECT * FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId AND deviceId = :deviceId AND " +
-        "enrollmentEpoch = :epoch AND deliveryState = 'DELIVERED' ORDER BY firstOccurredAt, id LIMIT 500 OFFSET :offset")
-    fun delivered(studyId: String, participantId: String, deviceId: String, epoch: String, offset: Int): List<UploadDiagnosticEntity>
+    fun pending(studyId: String, participantId: String, randomDeviceId: String, epoch: String): List<UploadDiagnosticEntity>
 
     @Query("SELECT * FROM upload_diagnostics WHERE id IN (:ids)")
     fun byIds(ids: Set<String>): List<UploadDiagnosticEntity>
 
+    /** Settles only this enrollment's PENDING rows; a late receipt never rewrites an earlier outcome. */
     @Query(
-        "UPDATE upload_diagnostics SET deliveryState = 'DELIVERED', sealedForUpload = 1 WHERE id IN (:ids) AND studyId = :studyId AND " +
-        "participantId = :participantId AND deviceId = :deviceId AND enrollmentEpoch = :epoch")
-    fun acknowledge(ids: Set<String>, studyId: String, participantId: String, deviceId: String, epoch: String): Int
+        "UPDATE upload_diagnostics SET deliveryState = :outcome WHERE id IN (:ids) AND studyId = :studyId AND " +
+        "participantId = :participantId AND randomDeviceId = :randomDeviceId AND enrollmentEpoch = :epoch AND deliveryState = 'PENDING'")
+    fun settle(ids: Set<String>, outcome: DiagnosticDeliveryState, studyId: String, participantId: String, randomDeviceId: String,
+        epoch: String): Int
 
     @Query("SELECT * FROM upload_diagnostics WHERE id = :id")
     fun get(id: String): UploadDiagnosticEntity?
 
+    /** Both writes store occurrence times in the one sortable form: pending rows upload oldest first. */
+    @Transaction
+    fun upsert(row: UploadDiagnosticEntity) {
+        boundedRows(UploadQueueTable.DIAGNOSTICS, listOf(row.stored()), UploadDiagnosticEntity::persistedPayloadBytes) { it.id }
+            .forEach(::upsertUnchecked)
+    }
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun upsert(row: UploadDiagnosticEntity)
+    fun upsertUnchecked(row: UploadDiagnosticEntity)
+
+    @Transaction
+    fun insertIfAbsent(row: UploadDiagnosticEntity): Long {
+        val bounded = boundedRows(UploadQueueTable.DIAGNOSTICS, listOf(row.stored()), UploadDiagnosticEntity::persistedPayloadBytes) { it.id }
+        return bounded.singleOrNull()?.let(::insertIfAbsentUnchecked) ?: -1L
+    }
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    fun insertIfAbsent(row: UploadDiagnosticEntity): Long
+    fun insertIfAbsentUnchecked(row: UploadDiagnosticEntity): Long
 
     @Query("DELETE FROM upload_diagnostics WHERE studyId = :studyId AND participantId = :participantId")
     fun eraseEnrollment(studyId: String, participantId: String): Int
@@ -74,12 +64,11 @@ interface UploadDiagnosticDao {
     @Query("DELETE FROM upload_diagnostics")
     fun eraseAll(): Int
 
-    @Query("SELECT * FROM diagnostic_import_checkpoints WHERE digest = :digest")
-    fun checkpoint(digest: String): DiagnosticImportCheckpointEntity?
 
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
-    fun insertCheckpoint(checkpoint: DiagnosticImportCheckpointEntity)
 }
+
+private fun UploadDiagnosticEntity.stored() =
+    copy(firstOccurredAt = storedInstant(firstOccurredAt), lastOccurredAt = storedInstant(lastOccurredAt))
 
 @Dao
 interface LocalDataQuarantineDao {
@@ -92,13 +81,18 @@ interface LocalDataQuarantineDao {
     @Query("SELECT * FROM local_data_quarantine WHERE sourceTable = :sourceTable")
     fun forSource(sourceTable: String): List<LocalDataQuarantineEntity>
 
-    @Query(
-        "SELECT * FROM local_data_quarantine WHERE sourceTable IN (:sources) AND studyId = :studyId AND participantId = :participantId AND " +
-        "deviceId = :deviceId AND substr(sourceId, 1, length(:epochPrefix)) = :epochPrefix AND substr(reason, 1, length(:reasonPrefix)) = " +
-        ":reasonPrefix AND (reason NOT IN (:currentReasons) OR julianday(createdAt) <= julianday(:retryBefore)) ORDER BY createdAt, id LIMIT :limit")
-    fun retryableRejections(sources: List<String>, studyId: String, participantId: String, deviceId: String,
-                            epochPrefix: String, reasonPrefix: String, currentReasons: List<String>,
-                            retryBefore: String, limit: Int): List<LocalDataQuarantineEntity>
+    @Query("SELECT id, sourceTable, sourceId, studyId, participantId, randomDeviceId, X'' AS rawData, reason, createdAt, " +
+        "settingsVersion, httpStatus, appVersion " +
+        "FROM local_data_quarantine WHERE sourceTable=:sourceTable")
+    fun archiveMetadata(sourceTable: String): List<LocalDataQuarantineEntity>
+
+    @Query("SELECT substr(rawData, :offset, :length) FROM local_data_quarantine WHERE id=:id")
+    fun archiveChunk(id: String, offset: Int, length: Int): ByteArray
+
+    @Query("SELECT q.id, q.sourceTable, q.createdAt FROM local_data_quarantine q WHERE q.studyId=:studyId AND " +
+        "q.participantId=:participantId AND q.randomDeviceId=:randomDeviceId AND q.reason=:reason AND " +
+        "NOT EXISTS (SELECT 1 FROM upload_diagnostics d WHERE d.id=q.id)")
+    fun unreportedOversizedRows(studyId: String, participantId: String, randomDeviceId: String, reason: String): List<QuarantinedQueueRow>
 
     @Update
     fun update(row: LocalDataQuarantineEntity)

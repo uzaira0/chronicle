@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.services.upload
 
+import java.io.UncheckedIOException
 import java.net.SocketTimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -26,5 +27,10 @@ class UploadFailurePolicyTest {
 
         assertEquals("TIMEOUT", persisted)
         assertFalse(persisted.contains(sensitiveMessage))
+    }
+
+    @Test
+    fun aTransportFailureRethrownUncheckedIsClassifiedByItsCause() {
+        assertEquals("TIMEOUT", persistedUploadFailureCode(UncheckedIOException(SocketTimeoutException())))
     }
 }

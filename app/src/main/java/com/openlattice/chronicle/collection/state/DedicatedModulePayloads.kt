@@ -1,18 +1,18 @@
 package com.openlattice.chronicle.collection.state
 
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.crypto.EncryptedPayloadType
+import com.openlattice.chronicle.storage.UploadQueueTable
 
-internal val dedicatedModulePayloads = mapOf(
-    CollectionModuleId.INTERACTION_EVENTS to EncryptedPayloadType.INTERACTION,
-    CollectionModuleId.AUDIO_ACTIVITY to EncryptedPayloadType.AUDIO_ACTIVITY,
-    CollectionModuleId.AUDIO_CONTENT to EncryptedPayloadType.AUDIO_CONTENT,
-    CollectionModuleId.NOTIFICATION_ACTIVITY to EncryptedPayloadType.NOTIFICATION_ACTIVITY,
-    CollectionModuleId.BATTERY_TELEMETRY to EncryptedPayloadType.BATTERY,
-    CollectionModuleId.SLEEP to EncryptedPayloadType.SLEEP,
-    CollectionModuleId.ACTIVITY_RECOGNITION to EncryptedPayloadType.ACTIVITY_RECOGNITION,
-    CollectionModuleId.HEALTH_CONNECT to EncryptedPayloadType.HEALTH_CONNECT,
-    CollectionModuleId.CONNECTIVITY_STATE to EncryptedPayloadType.CONNECTIVITY_STATE,
-    CollectionModuleId.APP_NETWORK_USAGE to EncryptedPayloadType.APP_NETWORK_USAGE,
-    CollectionModuleId.DEVICE_SETTINGS to EncryptedPayloadType.DEVICE_SETTINGS,
+internal val dedicatedModuleTables = mapOf(
+    CollectionModuleId.INTERACTION_EVENTS to UploadQueueTable.INTERACTION,
+    CollectionModuleId.AUDIO_ACTIVITY to UploadQueueTable.AUDIO_ACTIVITY,
+    CollectionModuleId.AUDIO_CONTENT to UploadQueueTable.AUDIO_CONTENT,
+    CollectionModuleId.NOTIFICATION_ACTIVITY to UploadQueueTable.NOTIFICATION_ACTIVITY,
+    CollectionModuleId.BATTERY_TELEMETRY to UploadQueueTable.BATTERY,
+    CollectionModuleId.SLEEP to UploadQueueTable.SLEEP,
+    CollectionModuleId.ACTIVITY_RECOGNITION to UploadQueueTable.ACTIVITY_RECOGNITION,
+    CollectionModuleId.HEALTH_CONNECT to UploadQueueTable.HEALTH_CONNECT,
+    CollectionModuleId.CONNECTIVITY_STATE to UploadQueueTable.CONNECTIVITY_STATE,
+    CollectionModuleId.APP_NETWORK_USAGE to UploadQueueTable.APP_NETWORK_USAGE,
+    CollectionModuleId.DEVICE_SETTINGS to UploadQueueTable.DEVICE_SETTINGS,
 )

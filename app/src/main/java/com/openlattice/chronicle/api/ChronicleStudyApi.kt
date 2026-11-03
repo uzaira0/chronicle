@@ -1,33 +1,31 @@
 package com.openlattice.chronicle.api
 
+import com.openlattice.chronicle.generated.ChronicleHeaders
 import com.openlattice.chronicle.android.AndroidDeviceSensorAvailability
-import com.openlattice.chronicle.android.AndroidSensorSetting
-import com.openlattice.chronicle.android.ChronicleData
+import com.openlattice.chronicle.android.ChronicleSample
+import com.openlattice.chronicle.android.UploadReceipt
 import com.openlattice.chronicle.base.OK
-import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
 import com.openlattice.chronicle.collection.AndroidConnectivityStateEvent
+import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
 import com.openlattice.chronicle.collection.AndroidDeviceSettingsEvent
 import com.openlattice.chronicle.collection.AndroidUploadDiagnosticEvent
 import com.openlattice.chronicle.collection.BatterySample
 import com.openlattice.chronicle.collection.CollectionAcknowledgment
-import com.openlattice.chronicle.collection.CollectionUploadEvidence
-import com.openlattice.chronicle.crypto.EncryptedEnvelope
-import com.openlattice.chronicle.data.ParticipationStatus
-import com.openlattice.chronicle.study.StudyEncryptionSetting
-import com.openlattice.chronicle.study.EnrollmentWithdrawalResponse
+import com.openlattice.chronicle.data.MobileParticipationStatus
 import com.openlattice.chronicle.participantaccess.CreateParticipantFormAccessCodeRequest
 import com.openlattice.chronicle.participantaccess.MobileReminderConfiguration
 import com.openlattice.chronicle.participantaccess.ParticipantFormAccessCodeResponse
+import com.openlattice.chronicle.services.upload.CollectedUploadBody
 import com.openlattice.chronicle.sources.SourceDevice
-import org.apache.olingo.commons.api.edm.FullQualifiedName
+import com.openlattice.chronicle.study.EnrollmentWithdrawalResponse
+import java.util.*
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
-import retrofit2.http.Headers
+import retrofit2.http.HeaderMap
 import retrofit2.http.POST
 import retrofit2.http.Path
-import java.util.*
 
 interface ChronicleStudyApi {
     companion object {
@@ -39,13 +37,11 @@ interface ChronicleStudyApi {
 
         const val STUDY_ID = "studyId"
         const val PARTICIPANT_ID = "participantId"
-        const val SOURCE_DEVICE_ID = "sourceDeviceId"
-        const val DEVICE_ID_HEADER = "X-Chronicle-Device-Id"
-        const val API_KEY_HEADER = "X-Api-Key"
+        const val RANDOM_DEVICE_ID_HEADER = ChronicleHeaders.RANDOM_DEVICE_ID_HEADER
+        const val API_KEY_HEADER = ChronicleHeaders.API_KEY_HEADER
 
         const val STUDY_ID_PATH = "/{$STUDY_ID}"
         const val PARTICIPANT_ID_PATH = "/{$PARTICIPANT_ID}"
-        const val SOURCE_DEVICE_ID_PATH = "/{$SOURCE_DEVICE_ID}"
         const val PARTICIPANT_PATH = "/participant"
         const val ENROLL_PATH = "/enroll"
         const val ENROLLMENT_PREVIEW_PATH = "/enrollment-preview"
@@ -55,7 +51,6 @@ interface ChronicleStudyApi {
         const val CONNECTIVITY_STATE_PATH = "/connectivity-state"
         const val DEVICE_SETTINGS_PATH = "/device-settings"
         const val UPLOAD_DIAGNOSTICS_PATH = "/upload-diagnostics"
-        const val ENCRYPTED_PATH = "/encrypted"
         const val SETTINGS_PATH = "/settings"
         const val COLLECTION_ACK_PATH = "/collection-ack"
         const val AVAILABILITY_PATH = "/availability"
@@ -64,57 +59,39 @@ interface ChronicleStudyApi {
         const val QUESTIONNAIRES_PATH = "/questionnaires"
         const val EDM_PATH = "/edm"
 
-        // Legacy v1 base path (used by older endpoints still needed by the app)
-        const val LEGACY_CONTROLLER = "/study"
-        const val LEGACY_BASE = SERVICE + LEGACY_CONTROLLER
-
-        // Legacy v2 base path
-        const val V2_CONTROLLER = "/v2"
-        const val V2_BASE = SERVICE + V2_CONTROLLER
     }
-
-    @GET("/health")
-    fun health(): retrofit2.Response<okhttp3.ResponseBody>
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ENROLL_PATH)
     fun enroll(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) deviceInstanceId: String,
+        @Header(RANDOM_DEVICE_ID_HEADER) randomDeviceId: String,
         @Body datasource: SourceDevice,
-        @Header("X-Chronicle-Enrollment-Code") enrollmentCode: String? = null,
-        @Header("X-Chronicle-Manifest-Digest") manifestDigest: String? = null,
-        @Header("X-Chronicle-Enrollment-Attempt-Id") enrollmentAttemptId: String? = null,
-        @Header("X-Chronicle-Proposed-Api-Key") proposedApiKey: String? = null,
+        @Header(ChronicleHeaders.ENROLLMENT_CODE_HEADER) enrollmentCode: String? = null,
+        @Header(ChronicleHeaders.MANIFEST_DIGEST_HEADER) manifestDigest: String? = null,
+        @Header(ChronicleHeaders.ENROLLMENT_ATTEMPT_ID_HEADER) enrollmentAttemptId: String? = null,
+        @Header(ChronicleHeaders.PROPOSED_API_KEY_HEADER) proposedApiKey: String? = null,
     ): EnrollmentResponse
 
     @GET(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ENROLLMENT_PREVIEW_PATH)
     fun getEnrollmentPreview(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header("X-Chronicle-Enrollment-Code") enrollmentCode: String,
+        @Header(ChronicleHeaders.ENROLLMENT_CODE_HEADER) enrollmentCode: String,
     ): EnrollmentPreviewResponse
 
     @DELETE("/chronicle/v4/mobile/enrollments/current")
     fun withdrawCurrentEnrollment(
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(RANDOM_DEVICE_ID_HEADER) sourceRandomDeviceId: String,
         @Header(API_KEY_HEADER) apiKey: String,
-        @Header("X-Chronicle-Withdrawal-Request-Id") withdrawalRequestId: String,
+        @Header(ChronicleHeaders.WITHDRAWAL_REQUEST_ID_HEADER) withdrawalRequestId: String,
     ): EnrollmentWithdrawalResponse
-
-    @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + "/reminders")
-    fun getMobileReminderConfiguration(
-        @Path(STUDY_ID) studyId: UUID,
-        @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String,
-    ): MobileReminderConfiguration
 
     @GET(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + "/reminders")
     fun getMobileReminderSchedule(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(RANDOM_DEVICE_ID_HEADER) sourceRandomDeviceId: String,
         @Header(API_KEY_HEADER) apiKey: String,
     ): MobileReminderConfiguration
 
@@ -123,95 +100,61 @@ interface ChronicleStudyApi {
     fun createParticipantFormAccessCode(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(RANDOM_DEVICE_ID_HEADER) sourceRandomDeviceId: String,
         @Header(API_KEY_HEADER) apiKey: String,
         @Body request: CreateParticipantFormAccessCodeRequest,
     ): ParticipantFormAccessCodeResponse
 
     @GET(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + STATUS_PATH)
-    @Headers(ParticipationStatus.ERASURE_STATUS_VERSION_HEADER + ": " + ParticipationStatus.ERASURE_STATUS_VERSION)
     fun getDeviceParticipationStatus(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(RANDOM_DEVICE_ID_HEADER) sourceRandomDeviceId: String,
         @Header(API_KEY_HEADER) apiKey: String,
-    ): ParticipationStatus
+    ): MobileParticipationStatus
 
-    // Upload methods accept BOTH X-Chronicle-Device-Id (used by upstream Chronicle) AND X-Api-Key
+    // Upload methods accept BOTH X-Chronicle-Random-Device-Id (used by upstream Chronicle) AND X-Api-Key
     // (used by current self-host servers). The client passes whichever matches the server auth mode;
     // Retrofit omits null headers, so each server only sees what it expects.
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH)
     fun uploadAndroidUsageEventData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String?,
-        @Body data: ChronicleData,
-        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
-    ): Int
+        @HeaderMap headers: Map<String, String>,
+        @Body data: CollectedUploadBody<ChronicleSample>,
+    ): UploadReceipt
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + BATTERY_PATH)
     fun uploadAndroidBatteryData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String?,
-        @Body data: List<BatterySample>,
-        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
-    ): Int
+        @HeaderMap headers: Map<String, String>,
+        @Body data: CollectedUploadBody<BatterySample>,
+    ): UploadReceipt
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + CONNECTIVITY_STATE_PATH)
     fun uploadAndroidConnectivityStateData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String?,
-        @Body data: List<AndroidConnectivityStateEvent>,
-        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
+        @HeaderMap headers: Map<String, String>,
+        @Body data: CollectedUploadBody<AndroidConnectivityStateEvent>,
     ): Int
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + DEVICE_SETTINGS_PATH)
     fun uploadAndroidDeviceSettingsData(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String?,
-        @Body data: List<AndroidDeviceSettingsEvent>,
-        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
+        @HeaderMap headers: Map<String, String>,
+        @Body data: CollectedUploadBody<AndroidDeviceSettingsEvent>,
     ): Int
 
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + UPLOAD_DIAGNOSTICS_PATH)
     fun uploadAndroidUploadDiagnostics(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String?,
-        @Body data: List<AndroidUploadDiagnosticEvent>,
-    ): List<String>
-
-    @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + ENCRYPTED_PATH)
-    fun uploadAndroidEncryptedData(
-        @Path(STUDY_ID) studyId: UUID,
-        @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String?,
-        @Body data: List<EncryptedEnvelope>,
-        @Header(CollectionUploadEvidence.SETTINGS_VERSION_HEADER) settingsVersion: Int? = null,
-    ): Int
-
-    @GET(V3_BASE + STUDY_ID_PATH + SETTINGS_PATH + "/type/AndroidSensor")
-    fun getAndroidSensorSettings(
-        @Path(STUDY_ID) studyId: UUID,
-    ): AndroidSensorSetting
-
-    // Per-study payload-encryption setting (HIPAA-2028 W2). Public GET, mirroring
-    // getAndroidSensorSettings / getDataCollectionSettings. The body carries the study's
-    // PUBLIC key only. A study without e2ee may have no Encryption setting at all, so the
-    // call site MUST tolerate a non-2xx (404/403)/absent response and treat it as disabled.
-    @GET(V3_BASE + STUDY_ID_PATH + SETTINGS_PATH + "/type/Encryption")
-    fun getStudyEncryptionSetting(
-        @Path(STUDY_ID) studyId: UUID,
-    ): StudyEncryptionSetting
+        @HeaderMap headers: Map<String, String>,
+        @Body data: CollectedUploadBody<AndroidUploadDiagnosticEvent>,
+    ): UploadReceipt
 
     // Generalized per-module data collection setting (collection loop closure). The
     // server always resolves a value (stored setting -> legacy bridge -> safe default),
@@ -222,13 +165,13 @@ interface ChronicleStudyApi {
     ): AndroidDataCollectionSetting
 
     // Reports a participant's on-device acknowledgment of newly-enabled collection
-    // modules. Auth mirrors the v4 uploads (X-Chronicle-Device-Id and/or X-Api-Key;
+    // modules. Auth mirrors the v4 uploads (X-Chronicle-Random-Device-Id and/or X-Api-Key;
     // Retrofit omits null headers).
     @POST(V4_BASE + STUDY_ID_PATH + PARTICIPANT_PATH + PARTICIPANT_ID_PATH + ANDROID_PATH + COLLECTION_ACK_PATH)
     fun reportCollectionAck(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
+        @Header(RANDOM_DEVICE_ID_HEADER) sourceRandomDeviceId: String,
         @Header(API_KEY_HEADER) apiKey: String?,
         @Body acknowledgment: CollectionAcknowledgment,
     ): OK
@@ -238,29 +181,8 @@ interface ChronicleStudyApi {
     fun reportAndroidSensorAvailability(
         @Path(STUDY_ID) studyId: UUID,
         @Path(PARTICIPANT_ID) participantId: String,
-        @Header(DEVICE_ID_HEADER) sourceDeviceId: String,
-        @Header(API_KEY_HEADER) apiKey: String?,
-        @Body availability: AndroidDeviceSensorAvailability,
+        @HeaderMap headers: Map<String, String>,
+        @Body availability: CollectedUploadBody<AndroidDeviceSensorAvailability>,
     ): Int
 
-    @GET(LEGACY_BASE + STUDY_ID_PATH + PARTICIPANT_ID_PATH + STATUS_PATH)
-    fun getParticipationStatus(
-        @Path(STUDY_ID) studyId: UUID,
-        @Path(PARTICIPANT_ID) participantId: String,
-    ): ParticipationStatus?
-
-    @GET(LEGACY_BASE + STUDY_ID_PATH + NOTIFICATIONS_PATH)
-    fun isNotificationsEnabled(
-        @Path(STUDY_ID) studyId: UUID,
-    ): Boolean?
-
-    @GET(LEGACY_BASE + STUDY_ID_PATH + QUESTIONNAIRES_PATH)
-    fun getStudyQuestionnaires(
-        @Path(STUDY_ID) studyId: UUID,
-    ): Map<UUID, Map<FullQualifiedName, Set<Any>>>?
-
-    @POST(V2_BASE + EDM_PATH)
-    fun getPropertyTypeIds(
-        @Body propertyTypeFqns: Set<FullQualifiedName>,
-    ): Map<FullQualifiedName, UUID>?
 }

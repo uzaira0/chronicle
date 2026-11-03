@@ -1,7 +1,6 @@
 package com.openlattice.chronicle.collection.upload
 
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
-import com.openlattice.chronicle.collection.core.RecordingCollectionLog
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,7 +12,7 @@ import org.junit.Test
  *
  * Covers every required combined-upload outcome with no Android `Context`, WorkManager,
  * or Room: both succeed, usage-fail/sensor-success, usage-success/sensor-fail,
- * both fail, repeated attempts, stats-cleanup failure, no eligible work, disabled modules,
+ * both fail, repeated attempts, no eligible work, disabled modules,
  * immediate upload, and — the load-bearing rule — the worker never reports SUCCESS when
  * a delegate failed.
  *
@@ -24,15 +23,11 @@ class CombinedUploadOrchestratorTest {
         usage: Int,
         sensor: Int,
         attempt: Int = 0,
-        cleanup: () -> Unit = {},
-        log: com.openlattice.chronicle.collection.core.CollectionLog = NoOpCollectionLog,
         onComplete: ((Int, Int) -> Unit)? = null,
     ): CombinedUploadOutcome = runCombinedUploadCore(
         runAttemptCount = attempt,
         runUsageUpload = { usage },
         runSensorUpload = { sensor },
-        cleanupStats = cleanup,
-        log = log,
         onComplete = onComplete,
     )
 
@@ -125,10 +120,8 @@ class CombinedUploadOrchestratorTest {
             runAttemptCount = 0,
             runUsageUpload = { order.add("usage"); 0 },
             runSensorUpload = { order.add("sensor"); 0 },
-            cleanupStats = { order.add("cleanup") },
-            log = NoOpCollectionLog,
         )
-        assertEquals(listOf("usage", "sensor", "cleanup"), order)
+        assertEquals(listOf("usage", "sensor"), order)
     }
 
     @Test
@@ -138,37 +131,11 @@ class CombinedUploadOrchestratorTest {
             runAttemptCount = 0,
             runUsageUpload = { UPLOAD_DELEGATE_THREW },
             runSensorUpload = { sensorRan = true; 0 },
-            cleanupStats = {},
-            log = NoOpCollectionLog,
         )
         assertTrue("sensor upload must run even after a usage failure", sensorRan)
     }
 
-    @Test
-    fun statsCleanupFailureDoesNotChangeASuccessfulOutcome() {
-        val log = RecordingCollectionLog()
-        val outcome = run(
-            usage = 0,
-            sensor = 0,
-            cleanup = { throw RuntimeException("simulated cleanup failure") },
-            log = log,
-        )
-        assertEquals(CombinedUploadOutcome.SUCCESS, outcome)
-        assertTrue(
-            "a cleanup failure must be logged, not silently swallowed",
-            log.problems.any { it.message.contains("cleanup", ignoreCase = true) },
-        )
-    }
 
-    @Test
-    fun statsCleanupFailureDoesNotChangeAFailedOutcome() {
-        val outcome = run(
-            usage = 1,
-            sensor = 0,
-            cleanup = { throw RuntimeException("simulated cleanup failure") },
-        )
-        assertEquals(CombinedUploadOutcome.RETRY, outcome)
-    }
 
     @Test
     fun onCompleteHookReceivesBothFailureCounts() {

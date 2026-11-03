@@ -9,14 +9,13 @@ import android.app.PendingIntent
 import android.app.job.JobScheduler
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import android.util.Log
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.constants.NotificationType
 import com.openlattice.chronicle.security.CallDeadline
-import com.openlattice.chronicle.security.MobileApiSigningInterceptor
+import com.openlattice.chronicle.security.InvitedServerCa
 import com.openlattice.chronicle.security.ResponseSizeLimitInterceptor
 import com.openlattice.chronicle.services.notifications.CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
@@ -25,22 +24,20 @@ import com.openlattice.chronicle.services.notifications.NotificationDetails
 import com.openlattice.chronicle.serialization.ChronicleCallAdapterFactory
 import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.services.upload.LAST_UPDATED_SETTING
-import com.openlattice.chronicle.services.upload.LAST_UPLOADED_PLACEHOLDER
+import com.openlattice.chronicle.services.upload.UploadTransport
 import com.openlattice.chronicle.services.upload.LATEST_TIMESTAMP_UPLOADED_SETTING
-import com.openlattice.chronicle.services.upload.UPLOAD_QUEUE_SIZE_SETTING
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.net.URI
 import java.time.Instant
-import java.time.LocalDate
 import java.time.OffsetDateTime
-import java.security.MessageDigest
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -58,7 +55,8 @@ object Utils {
         return OffsetDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneOffset.UTC)
     }
 
-    private fun formatAsMediumDateTime(isoDateTime: String): String {
+    /** A server or stored ISO timestamp as the phone shows times: localized medium date-time in the phone's zone. */
+    fun formatAsMediumDateTime(isoDateTime: String): String {
         val parsed = runCatching { OffsetDateTime.parse(isoDateTime) }.getOrElse { e ->
             // Backward/defensive: if parsing fails, return original string
             Log.w(TAG, "Unable to parse stored timestamp", e)
@@ -74,7 +72,8 @@ object Utils {
      * Canonicalizes and authorizes an upload server URL before it is used for enrollment,
      * health checks, Retrofit construction, or upload. Public distribution flavors accept any
      * hostname over standard HTTPS; controlled research builds retain the BCM host allowlist.
-     * No build pins certificates. Debug builds may additionally use local development servers.
+     * No build pins certificates; an invitation may add one CA root for a LAN server
+     * ([InvitedServerCa]). Debug builds may additionally use local development servers.
      */
     @JvmStatic
     fun normalizeTrustedServerUrl(url: String): String? {
@@ -128,7 +127,7 @@ object Utils {
         val hash = digest.digest(value.toByteArray())
         return buildString(16) {
             for (i in 0 until 8) {
-                append(String.format(java.util.Locale.ROOT, "%02x", hash[i]))
+                append(String.format(Locale.ROOT, "%02x", hash[i]))
             }
         }
     }
@@ -149,7 +148,7 @@ object Utils {
     // Delegates to the R/BuildConfig-free :collection-base helper so the label-lookup
     // logic has a single home; behaviour is unchanged.
     fun getAppFullName(context: Context, packageName: String): String =
-        com.openlattice.chronicle.utils.PackageLabels.getAppFullName(context, packageName)
+        PackageLabels.getAppFullName(context, packageName)
 
     // Return true if job service is running. In API 24 the solution would be: scheduler.getPendingJob(JOB_ID) != null
     fun isJobServiceScheduled(context: Context, jobId: Number): Boolean {
@@ -184,14 +183,6 @@ object Utils {
             uriBuilder
                 .appendQueryParameter("studyId", studyId)
                 .appendQueryParameter("participantId", participantId)
-                .appendQueryParameter(
-                    "date",
-                    notificationDetails.localDate
-                        ?: notificationDetails.scheduledAtMillis
-                        ?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() }
-                        ?.toString()
-                        ?: LocalDate.now().toString(),
-                )
         }
 
         uriBuilder.encodedFragment("accessCode=${Uri.encode(accessCode)}")
@@ -211,54 +202,29 @@ object Utils {
         }
     }
 
-    fun getLastUpload(context: Context): String {
+    /**
+     * A study policy's effective date as a localized long date, on the calendar day the researcher entered (its own
+     * offset), so `2026-10-01T00:00:00Z` reads 1 October on a phone in Santiago too.
+     */
+    fun formatPolicyDate(effectiveAt: OffsetDateTime): String =
+        effectiveAt.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG))
 
-        val settings = EncryptedPrefsHelper.getEncryptedPrefs(context)
-        val lastUpdated =
-            settings.getString(LAST_UPDATED_SETTING, LAST_UPLOADED_PLACEHOLDER)
-                ?: LAST_UPLOADED_PLACEHOLDER
+    fun getLastUpload(context: Context): String = uploadTime(context, LAST_UPDATED_SETTING)
 
-        if (lastUpdated != LAST_UPLOADED_PLACEHOLDER) {
-            return formatAsMediumDateTime(lastUpdated)
-        }
+    fun getLatestTimestampUploaded(context: Context): String = uploadTime(context, LATEST_TIMESTAMP_UPLOADED_SETTING)
 
-        return lastUpdated
-    }
-
-    fun getLatestTimestampUploaded(context: Context): String {
-        val settings = EncryptedPrefsHelper.getEncryptedPrefs(context)
-        val latestTimestampUploaded =
-            settings.getString(LATEST_TIMESTAMP_UPLOADED_SETTING, LAST_UPLOADED_PLACEHOLDER)
-                ?: LAST_UPLOADED_PLACEHOLDER
-
-        if (latestTimestampUploaded != LAST_UPLOADED_PLACEHOLDER) {
-            return formatAsMediumDateTime(latestTimestampUploaded)
-        }
-
-        return latestTimestampUploaded
-    }
-
-    fun updateUploadQueueSize(context: Context, queueSize: Int) {
-        val settings = EncryptedPrefsHelper.getEncryptedPrefs(context)
-        with(settings.edit()) {
-            putInt(UPLOAD_QUEUE_SIZE_SETTING, queueSize)
-            apply()
-        }
-    }
-
-    fun getUploadQueueSize(context: Context): Int {
-        val settings = EncryptedPrefsHelper.getEncryptedPrefs(context)
-        return settings.getInt(UPLOAD_QUEUE_SIZE_SETTING, 0)
-    }
+    private fun uploadTime(context: Context, key: String): String =
+        EncryptedPrefsHelper.getEncryptedPrefs(context).getString(key, null)?.let(::formatAsMediumDateTime)
+            ?: context.getString(R.string.upload_never)
 
     fun createRetrofitAdapter(
         baseUrl: String,
-        mobileSigningSecretOverride: String? = null
+
     ): Retrofit {
         val trustedBaseUrl = normalizeTrustedServerUrl(baseUrl)
             ?: throw IllegalArgumentException("Untrusted Chronicle server URL")
         val httpClientBuilder = OkHttpClient.Builder()
-            .callTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(CallDeadline.INTERACTIVE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
@@ -268,10 +234,8 @@ object Utils {
             // a different origin or downgrade it to cleartext HTTP.
             .followRedirects(false)
             .followSslRedirects(false)
-            // Lease and worker scopes can cancel these calls before their overall deadline.
             .addInterceptor(CallDeadline.interceptor)
-            // The server resolves its message table from Accept-Language; this header is not
-            // part of the mobile signature canonical string.
+            // Resolve server messages using the participant's language.
             .addInterceptor { chain ->
                 chain.proceed(
                     chain.request().newBuilder()
@@ -285,65 +249,36 @@ object Utils {
             // Application interceptors see the body after OkHttp's transparent gzip expansion.
             .addInterceptor(ResponseSizeLimitInterceptor())
             .addNetworkInterceptor(ResponseSizeLimitInterceptor())
-        // Every supported public endpoint uses Android's system trust store. Research builds
-        // may restrict the hostname above, but no tenant certificate or infrastructure name is
-        // embedded in the distributed client.
-        val mobileSigningSecret = effectiveMobileSigningSecret(mobileSigningSecretOverride)
-        if (mobileSigningSecret.isNotBlank()) {
-            httpClientBuilder.addInterceptor(
-                MobileApiSigningInterceptor(mobileSigningSecret)
-            )
-        }
         val httpClient = httpClientBuilder.build()
+        val transport = if (InvitedServerCa.acceptsOrigin(trustedBaseUrl)) {
+            InvitedServerCa.Transport(trustedBaseUrl, httpClient)
+        } else UploadTransport(httpClient)
         return Retrofit.Builder()
             .baseUrl("$trustedBaseUrl/")
-            .client(httpClient)
+            .callFactory(transport)
             .addConverterFactory(MoshiConverterFactory.create(ChronicleJson.moshi).withNullSerialization())
             .addCallAdapterFactory(ChronicleCallAdapterFactory())
             .build()
     }
 
-    @JvmStatic
-    fun effectiveMobileSigningSecret(mobileSigningSecretOverride: String?): String {
-        return mobileSigningSecretOverride?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.MOBILE_SIGNING_SECRET
-    }
-
-    @JvmStatic
-    fun mobileSigningSecretFingerprint(mobileSigningSecretOverride: String?): String {
-        val secret = effectiveMobileSigningSecret(mobileSigningSecretOverride)
-        if (secret.isBlank()) return "blank"
-        return MessageDigest
-            .getInstance("SHA-256")
-            .digest(secret.toByteArray(Charsets.UTF_8))
-            .joinToString(separator = "") { "%02x".format(it) }
-    }
-
-    // required by android 8.0 and higher.
     fun createNotificationChannel(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = context.resources.getString(R.string.channel_name)
-            val channelDescription =
-                context.resources.getString(R.string.channel_description)
-            val importance = NotificationManager.IMPORTANCE_HIGH
-            val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
-                description = channelDescription
-            }
-            val identifyUser = NotificationChannel(
-                IDENTIFY_USER_CHANNEL_ID,
-                context.getString(R.string.identify_user_channel_name),
-                NotificationManager.IMPORTANCE_HIGH,
-            ).apply { description = context.getString(R.string.identify_user_channel_description) }
-            val unlockMonitoring = NotificationChannel(
-                UNLOCK_MONITORING_CHANNEL_ID,
-                context.getString(R.string.unlock_monitoring_channel_name),
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply { description = context.getString(R.string.unlock_monitoring_channel_description) }
-            //register channels
-            val notificationManager: NotificationManager =
-                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannels(listOf(channel, identifyUser, unlockMonitoring))
-        }
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            context.getString(R.string.channel_name),
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply { description = context.getString(R.string.channel_description) }
+        val identifyUser = NotificationChannel(
+            IDENTIFY_USER_CHANNEL_ID,
+            context.getString(R.string.identify_user_channel_name),
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply { description = context.getString(R.string.identify_user_channel_description) }
+        val unlockMonitoring = NotificationChannel(
+            UNLOCK_MONITORING_CHANNEL_ID,
+            context.getString(R.string.unlock_monitoring_channel_name),
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply { description = context.getString(R.string.unlock_monitoring_channel_description) }
+        context.getSystemService(NotificationManager::class.java)
+            .createNotificationChannels(listOf(channel, identifyUser, unlockMonitoring))
     }
 
     fun isServiceRunning(context: Context, serviceClass: Class<*>): Boolean {
@@ -352,11 +287,5 @@ object Utils {
             .any { it.service.className == serviceClass.name }
     }
 
-    fun getPendingIntentMutabilityFlag(flags: Int): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            PendingIntent.FLAG_IMMUTABLE or flags
-        } else {
-            flags
-        }
-    }
+    fun getPendingIntentMutabilityFlag(flags: Int): Int = PendingIntent.FLAG_IMMUTABLE or flags
 }

@@ -1,18 +1,11 @@
 package com.openlattice.chronicle.security
 
+import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.audit.auditWorkerParameters
 import com.openlattice.chronicle.collection.state.ResearchPersistenceBarrier
 import com.openlattice.chronicle.utils.Utils
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
-import android.content.Context
-import androidx.work.Data
-import androidx.work.ListenableWorker
-import androidx.work.WorkerParameters
-import androidx.work.impl.utils.taskexecutor.WorkManagerTaskExecutor
-import java.util.UUID
-import java.util.concurrent.Executor
-import java.lang.reflect.Proxy
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -21,15 +14,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import androidx.work.ForegroundUpdater
-import androidx.work.ProgressUpdater
-import androidx.work.WorkerFactory
 
 @RunWith(RobolectricTestRunner::class)
 class LeaseHttpDeadlineTest {
     @Test fun tricklingTransportHasOverallDeadlineAndReleasesPrivacyLease() {
-        val production = Utils.createRetrofitAdapter("https://localhost").callFactory() as OkHttpClient
-        assertEquals(30_000, production.callTimeoutMillis)
+        val production = (Utils.createRetrofitAdapter("https://localhost").callFactory() as InvitedServerCa.Transport).current().interactiveClient
+        assertEquals(CallDeadline.INTERACTIVE_TIMEOUT_MS.toInt(), production.callTimeoutMillis)
         val entered = CountDownLatch(1)
         val barrier = ResearchPersistenceBarrier()
         val client = production.newBuilder().callTimeout(150, TimeUnit.MILLISECONDS).apply {
@@ -62,7 +52,7 @@ class LeaseHttpDeadlineTest {
                     throw IOException("cancelled stopped work")
                 }
             }.build()
-            val worker = object : LeaseBoundWorker(androidx.test.core.app.ApplicationProvider.getApplicationContext(), workerParameters()) {
+            val worker = object : LeaseBoundWorker(ApplicationProvider.getApplicationContext(), auditWorkerParameters()) {
                 override fun runWork(): Result {
                     barrier.withReadLease {
                         try { CallDeadline.within(20_000) {
@@ -78,19 +68,5 @@ class LeaseHttpDeadlineTest {
             pool.submit { barrier.stop {} }.get(2, TimeUnit.SECONDS)
             work.get(2, TimeUnit.SECONDS)
         } finally { pool.shutdownNow() }
-    }
-    private fun workerParameters(): WorkerParameters {
-        val executor = Executor { }
-        val progress = Proxy.newProxyInstance(ProgressUpdater::class.java.classLoader, arrayOf(ProgressUpdater::class.java)) { _, _, _ ->
-            error("no progress expected")
-        } as ProgressUpdater
-        val foreground = Proxy.newProxyInstance(ForegroundUpdater::class.java.classLoader, arrayOf(ForegroundUpdater::class.java)) { _, _, _ ->
-            error("no foreground expected")
-        } as ForegroundUpdater
-        val factory = object : WorkerFactory() {
-            override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker? = null
-        }
-        return WorkerParameters(UUID.randomUUID(), Data.EMPTY, emptyList(), WorkerParameters.RuntimeExtras(), 0, 0,
-            executor, kotlin.coroutines.EmptyCoroutineContext, WorkManagerTaskExecutor(executor), factory, progress, foreground)
     }
 }

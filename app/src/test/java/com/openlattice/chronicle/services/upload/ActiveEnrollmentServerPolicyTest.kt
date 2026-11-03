@@ -1,20 +1,37 @@
 package com.openlattice.chronicle.services.upload
 
 import com.openlattice.chronicle.TEST_SERVER_HOST
+import com.openlattice.chronicle.EnrollmentTestStores
 import com.openlattice.chronicle.assumeTestServerHostTrusted
-import com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
-import com.openlattice.chronicle.storage.AUTH_MODE_DEVICE_ID
 import com.openlattice.chronicle.storage.UploadServerEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.collection.battery.BatteryUploadWorkerDelegate
+import com.openlattice.chronicle.collection.device.ExpansionUploadWorkerDelegate
+import com.openlattice.chronicle.collection.state.onPersistenceWorker
+import com.openlattice.chronicle.storage.BatterySampleEntry
+import com.openlattice.chronicle.storage.ConnectivityStateSampleEntry
+import com.openlattice.chronicle.storage.QueueEntry
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.util.UUID
 
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class)
 class ActiveEnrollmentServerPolicyTest {
     private val studyId = UUID.fromString("11111111-1111-1111-1111-111111111111")
     private val participantId = "participant-a"
+
+    @Test fun identityOnlyEnrollmentCannotBeReauthorizedByResearch() {
+        val incomplete = server(apiKey = null)
+            .copy(url = EnrollmentTestStores.TEST_SERVER_URL)
+        assertNull(resolveServerForIdentity(incomplete, studyId, participantId).server)
+    }
 
     @Test
     fun `missing disabled incomplete and mismatched servers fail closed`() {
@@ -64,24 +81,24 @@ class ActiveEnrollmentServerPolicyTest {
     }
 
     @Test
-    fun `credential incomplete and unknown authentication modes fail closed`() {
+    fun `missing and blank credentials fail closed`() {
         assertNull(
             completeServerForIdentity(
-                server(authMode = AUTH_MODE_API_KEY, apiKey = null),
+                server(apiKey = null),
                 studyId,
                 participantId,
             ),
         )
         assertNull(
             completeServerForIdentity(
-                server(authMode = AUTH_MODE_DEVICE_ID, sourceDeviceId = ""),
+                server(sourceRandomDeviceId = ""),
                 studyId,
                 participantId,
             ),
         )
         assertNull(
             completeServerForIdentity(
-                server(authMode = "unsupported"),
+                server(apiKey = " "),
                 studyId,
                 participantId,
             ),
@@ -89,15 +106,14 @@ class ActiveEnrollmentServerPolicyTest {
     }
 
     @Test
-    fun `public store policy rejects legacy device identity authentication`() {
+    fun `all distributions reject identity-only authentication`() {
         assumeTestServerHostTrusted()
-        val legacyServer = server(authMode = AUTH_MODE_DEVICE_ID, apiKey = null)
+        val identityOnlyServer = server(apiKey = null)
 
         val resolution = resolveServerForIdentity(
-            legacyServer,
+            identityOnlyServer,
             studyId,
             participantId,
-            requireApiKey = true,
         )
 
         assertNull(resolution.server)
@@ -105,15 +121,7 @@ class ActiveEnrollmentServerPolicyTest {
             UploadDestinationIssue.DESTINATION_CREDENTIAL_INCOMPLETE,
             resolution.issue,
         )
-        assertEquals(
-            legacyServer,
-            resolveServerForIdentity(
-                legacyServer,
-                studyId,
-                participantId,
-                requireApiKey = false,
-            ).server,
-        )
+        assertNull(resolveServerForIdentity(identityOnlyServer, studyId, participantId).server)
     }
 
     @Test
@@ -123,7 +131,7 @@ class ActiveEnrollmentServerPolicyTest {
             null to UploadDestinationIssue.DESTINATION_MISSING,
             server(participantId = "participant-b") to
                 UploadDestinationIssue.DESTINATION_IDENTITY_MISMATCH,
-            server(sourceDeviceId = "") to
+            server(sourceRandomDeviceId = "") to
                 UploadDestinationIssue.DESTINATION_SOURCE_DEVICE_MISSING,
             server(enrollmentSetupComplete = false) to
                 UploadDestinationIssue.DESTINATION_SETUP_INCOMPLETE,
@@ -131,7 +139,7 @@ class ActiveEnrollmentServerPolicyTest {
                 UploadDestinationIssue.DESTINATION_DISABLED,
             server(url = "http://$TEST_SERVER_HOST") to
                 UploadDestinationIssue.DESTINATION_NONCANONICAL,
-            server(authMode = AUTH_MODE_API_KEY, apiKey = null) to
+            server(apiKey = null) to
                 UploadDestinationIssue.DESTINATION_CREDENTIAL_INCOMPLETE,
         )
 
@@ -154,7 +162,7 @@ class ActiveEnrollmentServerPolicyTest {
         ).forEach { url ->
             assertNull(
                 completeServerForIdentity(
-                    server(url = url, authMode = AUTH_MODE_API_KEY, apiKey = "test-api-key"),
+                    server(url = url, apiKey = "test-api-key"),
                     studyId,
                     participantId,
                 ),
@@ -163,73 +171,58 @@ class ActiveEnrollmentServerPolicyTest {
     }
 
     @Test
-    fun `every Play upload family rebinds its destination to the active identity`() {
-        val uploadFamilies = listOf(
-            "src/main/java/com/openlattice/chronicle/services/upload/UploadPolicy.kt",
-            "src/main/java/com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt",
-            "src/main/java/com/openlattice/chronicle/collection/device/ExpansionUploadWorker.kt",
-        )
-        uploadFamilies.forEach { relative ->
-            val source = File(relative).readText()
-            assertTrue(
-                "$relative bypasses the exact active-enrollment destination gate",
-                source.contains("exactActiveEnrollmentServerResolution("),
-            )
-        }
-        listOf(
-            "src/main/java/com/openlattice/chronicle/services/upload/UploadWorkerDelegate.kt",
-            "src/main/java/com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt",
-            "src/main/java/com/openlattice/chronicle/collection/device/ExpansionUploadWorker.kt",
-        ).forEach { relative ->
-            val source = File(relative).readText()
-            val missingDestinationGate = source.indexOf("if (server == null)")
-            val durableIssue = source.indexOf("LocalUploadDiagnosticsStore", missingDestinationGate)
-            val retrySignal = source.indexOf("return 1", startIndex = missingDestinationGate.coerceAtLeast(0))
-            assertTrue(
-                "$relative silently succeeds when the active enrollment has no destination",
-                missingDestinationGate >= 0 && durableIssue > missingDestinationGate &&
-                    retrySignal > durableIssue,
-            )
-        }
+    fun `every upload family retries and retains old rows without a complete active credential`() = onPersistenceWorker {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val db = EnrollmentTestStores.install(context, enrolled = true)
+        try {
+            val configured = checkNotNull(db.uploadServerDao().getConfiguredServer())
+            db.uploadServerDao().update(configured.copy(apiKey = null))
+            val battery = BatterySampleEntry("battery", "2000-01-01T00:00:00Z", "UTC", 50,
+                "DISCHARGING", "NONE", 200, 4000, "GOOD")
+            val connectivity = ConnectivityStateSampleEntry("connectivity", "2000-01-01T00:00:00Z", "UTC",
+                "changed", "WIFI", true, false, true)
+            db.batterySampleDao().insertAllUnchecked(listOf(battery))
+            db.connectivityStateSampleDao().insertAllUnchecked(listOf(connectivity))
+            db.queueEntryData().insertBoundedEntries(listOf(QueueEntry(1, 1, "[]".toByteArray())))
 
-        listOf(
-            "src/main/java/com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt",
-            "src/main/java/com/openlattice/chronicle/collection/device/ExpansionUploadWorker.kt",
-        ).forEach { relative ->
-            val source = File(relative).readText()
-            assertTrue(
-                "$relative purges undelivered samples by age",
-                !source.contains("deleteOlderThan(cutoff)") && !source.contains("purgeAll(anyFailClosed)"),
-            )
+            assertEquals(UploadDestinationIssue.DESTINATION_CREDENTIAL_INCOMPLETE,
+                UploadPolicy(context, db).resolveDestination().issue)
+            assertTrue(UploadPolicy(context, db).getEligibleServers().isEmpty())
+            assertEquals(1, UploadWorkerDelegate(context, db).execute())
+            assertEquals(1, BatteryUploadWorkerDelegate(context, db).execute())
+            assertEquals(1, ExpansionUploadWorkerDelegate(context, db).execute())
+            assertEquals(1, db.queueEntryData().getSize())
+            assertEquals(listOf(battery), db.batterySampleDao().getOldest(10))
+            assertEquals(listOf(connectivity), db.connectivityStateSampleDao().getOldest(10))
+            assertTrue(EnrollmentTestStores.apiRequests.isEmpty())
+            val issues = LocalUploadDiagnosticsStore.of(context).recent()
+            assertEquals(setOf(LocalUploadModuleFamily.USAGE_LIFECYCLE.name, LocalUploadModuleFamily.BATTERY.name,
+                LocalUploadModuleFamily.DEVICE_TELEMETRY.name), issues.map { it.moduleFamily }.toSet())
+            assertTrue(issues.all { it.issue == UploadDestinationIssue.DESTINATION_CREDENTIAL_INCOMPLETE.name && it.count == 1 })
+        } finally {
+            db.close()
+            EnrollmentTestStores.db = null
+            EnrollmentTestStores.prefs = null
         }
     }
 
     @Test
-    fun `complete API key and exact legacy servers retain their configured destination`() {
+    fun `only a complete API key retains its configured destination`() {
         assumeTestServerHostTrusted()
-        val apiKeyServer = server(authMode = AUTH_MODE_API_KEY, apiKey = "test-api-key")
-        val legacyServer = server(authMode = AUTH_MODE_DEVICE_ID)
+        val apiKeyServer = server(apiKey = "test-api-key")
+        val identityOnlyServer = server(apiKey = null)
 
         assertEquals(
             "https://$TEST_SERVER_HOST",
             completeServerForIdentity(apiKeyServer, studyId, participantId)?.url,
         )
-        assertEquals(
-            "https://$TEST_SERVER_HOST",
-            completeServerForIdentity(
-                legacyServer,
-                studyId,
-                participantId,
-                requireApiKey = false,
-            )?.url,
-        )
+        assertNull(completeServerForIdentity(identityOnlyServer, studyId, participantId))
     }
 
     @Test
     fun `provisional acknowledgment owner requires the exact immutable issued row`() {
         assumeTestServerHostTrusted()
         val expected = server(
-            authMode = AUTH_MODE_API_KEY,
             apiKey = "test-api-key",
             enrollmentSetupComplete = false,
         ).copy(
@@ -239,7 +232,7 @@ class ActiveEnrollmentServerPolicyTest {
         )
 
         assertTrue(isExpectedProvisionalEnrollmentServer(expected.copy(id = 99), expected))
-        assertTrue(!isExpectedProvisionalEnrollmentServer(expected.copy(sourceDeviceId = "other"), expected))
+        assertTrue(!isExpectedProvisionalEnrollmentServer(expected.copy(sourceRandomDeviceId = "other"), expected))
         assertTrue(!isExpectedProvisionalEnrollmentServer(expected.copy(apiKey = "other-key"), expected))
         assertTrue(!isExpectedProvisionalEnrollmentServer(expected.copy(reservationNonce = "other"), expected))
     }
@@ -248,8 +241,8 @@ class ActiveEnrollmentServerPolicyTest {
         url: String = "https://$TEST_SERVER_HOST",
         studyId: String = this.studyId.toString(),
         participantId: String = this.participantId,
-        sourceDeviceId: String = "device-a",
-        authMode: String = AUTH_MODE_API_KEY,
+        sourceRandomDeviceId: String = "device-a",
+
         apiKey: String? = "test-api-key",
         enabled: Boolean = true,
         enrollmentSetupComplete: Boolean = true,
@@ -258,8 +251,7 @@ class ActiveEnrollmentServerPolicyTest {
         url = url,
         studyId = studyId,
         participantId = participantId,
-        sourceDeviceId = sourceDeviceId,
-        authMode = authMode,
+        sourceRandomDeviceId = sourceRandomDeviceId,
         apiKey = apiKey,
         enabled = enabled,
         enrollmentSetupComplete = enrollmentSetupComplete,

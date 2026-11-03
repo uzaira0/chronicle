@@ -1,6 +1,5 @@
 package com.openlattice.chronicle.services.upload
 
-import java.io.File
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -10,38 +9,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UploadQueueSingleFlightTest {
-    @Test
-    fun `combined and standalone battery drains use the same owner`() {
-        val combined = appSource("com/openlattice/chronicle/services/upload/CombinedUploadWorker.kt")
-        val standalone = appSource("com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt")
-        assertTrue(standalone.contains("tryAcquire(BATTERY_UPLOAD_WORK_NAME)"))
-        assertTrue(combined.contains("tryAcquire(BATTERY_UPLOAD_WORK_NAME)"))
-        assertTrue(combined.contains("release(BATTERY_UPLOAD_WORK_NAME)"))
-    }
-
-    @Test
-    fun `every independently scheduled uploader fails closed outside active enrollment`() {
-        listOf(
-            "com/openlattice/chronicle/services/upload/UploadWorker.kt",
-            "com/openlattice/chronicle/services/upload/CombinedUploadWorker.kt",
-            "com/openlattice/chronicle/services/sensors/SensorUploadWorker.kt",
-            "com/openlattice/chronicle/collection/battery/BatteryUploadWorker.kt",
-            "com/openlattice/chronicle/collection/audio/AudioUploadWorker.kt",
-            "com/openlattice/chronicle/collection/device/ExpansionUploadWorker.kt",
-            "com/openlattice/chronicle/collection/interaction/InteractionUploadWorker.kt",
-        ).forEach { path ->
-            val source = appSource(path)
-            assertTrue(
-                "$path must join withdrawal send/clear exclusion",
-                source.contains("UploadQueueSingleFlight.tryAcquire("),
-            )
-            assertTrue(
-                "$path must reject stale/orphaned enrollment work",
-                source.contains("ResearchPersistenceGate.runIfEnrolled("),
-            )
-        }
-    }
-
     @Test
     fun `same queue cannot be acquired twice until released`() {
         val owner = "test-${UUID.randomUUID()}"
@@ -95,15 +62,4 @@ class UploadQueueSingleFlightTest {
         }
     }
 
-    private fun appSource(path: String): String {
-        val module = sequenceOf(File("."), File("app"))
-            .map(File::getAbsoluteFile)
-            .firstOrNull { File(it, "src/main/AndroidManifest.xml").isFile }
-            ?: error("Could not locate the app module")
-        return sequenceOf("src/main/java", "src/googleServices/java")
-            .map { sourceRoot -> File(module, "$sourceRoot/$path") }
-            .firstOrNull(File::isFile)
-            ?.readText()
-            ?: error("Could not locate app source: $path")
-    }
 }

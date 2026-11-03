@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.security
 
+import com.openlattice.chronicle.utils.Utils
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -8,11 +9,12 @@ import okhttp3.Response
 import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.asResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import okio.Buffer
 import okio.GzipSink
 import okio.GzipSource
 import okio.buffer
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -45,10 +47,21 @@ class ResponseSizeLimitInterceptorTest {
         val inflated = GzipSource(compressed).buffer().asResponseBody(null, -1)
         assertThrows(IOException::class.java) { call(inflated).body!!.string() }
 
-        val source = sequenceOf(File("app/src/main/java"), File("src/main/java"))
-            .map { File(it, "com/openlattice/chronicle/utils/Utils.kt") }
-            .first(File::isFile).readText()
-        assertEquals(1, Regex("\\.addInterceptor\\(ResponseSizeLimitInterceptor\\(\\)\\)").findAll(source).count())
+    }
+
+    @Test
+    fun theProductionClientCapsTheInflatedBodyOfARealGzipResponse() {
+        val compressed = Buffer()
+        GzipSink(compressed).buffer().use { it.writeUtf8("x".repeat(8_388_609)) }
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Encoding", "gzip").setBody(compressed))
+            server.start()
+            val url = server.url("/")
+            val factory = Utils.createRetrofitAdapter(url.toString()).callFactory()
+            factory.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                assertThrows(IOException::class.java) { response.body!!.string() }
+            }
+        }
     }
 
     private fun call(body: ResponseBody): Response = OkHttpClient.Builder()

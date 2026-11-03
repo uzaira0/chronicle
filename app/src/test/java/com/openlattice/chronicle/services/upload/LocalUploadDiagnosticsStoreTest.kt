@@ -1,35 +1,51 @@
 package com.openlattice.chronicle.services.upload
 
-import com.openlattice.chronicle.collection.directboot.InMemorySharedPreferences
+import com.openlattice.chronicle.android.UploadReceipt
+import com.openlattice.chronicle.storage.DiagnosticDeliveryState
 import com.openlattice.chronicle.serialization.ChronicleCallAdapterFactory
 import com.openlattice.chronicle.serialization.ChronicleCallException
+import java.lang.reflect.UndeclaredThrowableException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import javax.net.ssl.SSLException
+import kotlin.concurrent.thread
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
-import retrofit2.Retrofit
-import retrofit2.http.GET
-import java.time.LocalDate
-import java.net.SocketTimeoutException
-import java.util.concurrent.CountDownLatch
-import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import retrofit2.Retrofit
+import retrofit2.http.GET
 
 @RunWith(RobolectricTestRunner::class)
 class LocalUploadDiagnosticsStoreTest {
+    @Test
+    fun errorTypeLabelsKeepWholeUnicodeCharactersWithinTheWireLimit() {
+        val supplementary = "\uD83D\uDE00"
+        val prefix = "A".repeat(127)
+        assertEquals(prefix + supplementary, LocalUploadDiagnosticsStore.errorTypeLabel(prefix + supplementary + "Z"))
+        assertEquals(supplementary.repeat(128), LocalUploadDiagnosticsStore.errorTypeLabel(supplementary.repeat(129)))
+        assertEquals("A".repeat(128), LocalUploadDiagnosticsStore.errorTypeLabel("A".repeat(129)))
+    }
+
     private interface RejectingApi {
         @GET("rejected")
         fun rejected(): ResponseBody
     }
 
     @Test
-    fun realCallAdapterHttp400IsClassifiedAndParkable() {
+    fun realCallAdapterHttp400IsClassified() {
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(400).message("Bad Request").body("unsupported diagnostic".toResponseBody()).build()
@@ -43,34 +59,12 @@ class LocalUploadDiagnosticsStoreTest {
 
         store.recordFailure(LocalUploadModuleFamily.LOCAL_STORE, error)
 
-        val bucket = store.pending(LocalDate.now()).single()
+        val bucket = store.pending().single()
         assertEquals(400, bucket.httpStatus)
         assertEquals("HTTP_CLIENT_ERROR", bucket.issue)
     }
 
-    @Test
-    fun deliveredReplayCursorWaitsForCompleteServerAcknowledgment() {
-        val prefs = InMemorySharedPreferences()
-        val selection = DeliveredReplaySelection("2026-09-28", 500, setOf("a", "b"))
-        val offset = "local_upload_delivered_replay_offset"
-        val day = "local_upload_delivered_replay_day"
 
-        assertFalse(acknowledgeDeliveredReplaySelection(prefs, selection, selection.ids, setOf("a")))
-        assertEquals(0, prefs.getInt(offset, 0))
-        assertEquals(null, prefs.getString(day, null))
-        assertTrue(acknowledgeDeliveredReplaySelection(prefs, selection, selection.ids, selection.ids))
-        assertEquals(500, prefs.getInt(offset, 0))
-        assertEquals("2026-09-28", prefs.getString(day, null))
-    }
-
-    @Test
-    fun parkedTiersAreSubmittedOldestFirstInSeparateBatches() {
-        val v106 = LocalUploadIssueBucket("2026-09-27", "SENSOR", "SENSOR_AGE_EXPIRED", 1)
-        val v104 = LocalUploadIssueBucket("2026-09-27", "APP_RUNTIME", "APP_CRASH", 1)
-        val v107 = LocalUploadIssueBucket("2026-09-27", "LOCAL_STORE", "LOCAL_WRITE_FAILED", 1)
-        val batches = diagnosticsUploadBatches(emptyList(), listOf(v107, v106, v104), emptyList())
-        assertEquals(listOf(listOf(v104), listOf(v106), listOf(v107)), batches)
-    }
 
     @Test
     fun closedDestinationIssuePersistsAcrossLaterSuccessfulRuns() {
@@ -94,45 +88,10 @@ class LocalUploadDiagnosticsStoreTest {
         assertEquals("USAGE_LIFECYCLE", bucket.moduleFamily)
         assertEquals("DESTINATION_MISSING", bucket.issue)
         assertEquals(2, bucket.count)
-        assertTrue(runCatching { java.util.UUID.fromString(bucket.id) }.isSuccess)
+        assertTrue(runCatching { UUID.fromString(bucket.id) }.isSuccess)
     }
 
-    @Test
-    fun legacyServerRejectionParksAndRetriesTheNewerCodes() {
-        val persistence = FakePersistence()
-        val store = LocalUploadDiagnosticsStore(persistence)
-        val day = LocalDate.now()
-        store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
-        store.recordOperational(LocalUploadModuleFamily.APP_RUNTIME, LocalOperationalIssue.APP_CRASH)
 
-        store.parkUnsupportedByLegacyServer(store.pending(day).mapTo(mutableSetOf()) { it.id })
-
-        assertEquals(listOf("DESTINATION_MISSING"), store.pending(day).map { it.issue })
-        assertEquals(listOf("APP_CRASH"), store.parked().map { it.issue })
-        store.acknowledge(store.parked().mapTo(hashSetOf()) { it.id })
-        assertTrue(store.parked().isEmpty())
-        assertEquals(listOf("APP_CRASH"), store.deliveredReplay().map { it.issue })
-        assertEquals(2, store.recent(today = day).size)
-    }
-
-    @Test
-    fun v104ServerRejectionParksBothUnsupportedTiersWithoutErasure() {
-        val persistence = FakePersistence()
-        val store = LocalUploadDiagnosticsStore(persistence)
-        val day = LocalDate.now()
-        store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
-        store.recordOperational(LocalUploadModuleFamily.APP_RUNTIME, LocalOperationalIssue.APP_CRASH)
-        store.recordOperational(LocalUploadModuleFamily.SENSOR, LocalOperationalIssue.SENSOR_AGE_EXPIRED, 40)
-
-        // A 2026.9.25 (V104) server rejects the batch: only the post-V104 code goes.
-        store.parkUnsupportedByLegacyServer(store.pending(day).mapTo(mutableSetOf()) { it.id })
-        assertEquals(setOf("DESTINATION_MISSING", "APP_CRASH"), store.pending(day).mapTo(hashSetOf()) { it.issue })
-
-        // A pre-V104 server rejects again: then the V104 tier goes too.
-        store.parkUnsupportedByLegacyServer(store.pending(day).mapTo(mutableSetOf()) { it.id })
-        assertEquals(listOf("DESTINATION_MISSING"), store.pending(day).map { it.issue })
-        assertEquals(setOf("APP_CRASH", "SENSOR_AGE_EXPIRED"), store.parked().mapTo(hashSetOf()) { it.issue })
-    }
 
     @Test
     fun historyIsNeverPrunedByReadingARecentWindow() {
@@ -140,7 +99,7 @@ class LocalUploadDiagnosticsStoreTest {
             buckets = listOf(
                 LocalUploadIssueBucket("2026-08-22", "BATTERY", "DESTINATION_DISABLED", 1),
                 LocalUploadIssueBucket("2026-07-01", "BATTERY", "DESTINATION_DISABLED", 4),
-                LocalUploadIssueBucket("2026-08-22", "UNKNOWN", "DESTINATION_DISABLED", 3),
+                LocalUploadIssueBucket("2026-08-22", "unsupported-test-family", "DESTINATION_DISABLED", 3),
                 LocalUploadIssueBucket("2026-08-22", "BATTERY", "raw-error-text", 5),
                 LocalUploadIssueBucket("2026-08-23", "BATTERY", "DESTINATION_DISABLED", 6),
             )
@@ -172,60 +131,60 @@ class LocalUploadDiagnosticsStoreTest {
         store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
 
         assertEquals(601, persistence.buckets.size)
-        assertEquals(500, store.pending(day).size)
+        assertEquals(500, store.pending().size)
     }
 
     @Test
-    fun acknowledgmentMarksOnlySubmittedAggregatesDelivered() {
+    fun receiptSettlesStoredRowsDeliveredAndRefusedRowsDiscarded() {
         val persistence = FakePersistence()
         val store = LocalUploadDiagnosticsStore(persistence)
         val day = LocalDate.parse("2026-08-22")
         store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
         store.record(LocalUploadModuleFamily.DEVICE_TELEMETRY, UploadDestinationIssue.DESTINATION_MISSING, day)
+        store.record(LocalUploadModuleFamily.SENSOR, UploadDestinationIssue.DESTINATION_MISSING, day)
+        val (stored, refused, unsent) = store.pending().map { it.id }
 
-        val pending = store.pending(today = day)
-        store.acknowledge(setOf(pending.first().id))
+        store.settle(UploadReceipt(setOf(UUID.fromString(stored)), setOf(UUID.fromString(refused)), 0))
 
-        val remaining = store.pending(today = day)
-        assertEquals(1, remaining.size)
-        assertFalse(remaining.single().id == pending.first().id)
-        assertEquals(2, persistence.buckets.size)
-        assertEquals("DELIVERED", persistence.buckets.first { it.id == pending.first().id }.deliveryState)
-        assertEquals(listOf(pending.first().id), store.deliveredReplay().map { it.id })
+        assertEquals(listOf(unsent), store.pending().map { it.id })
+        val states = persistence.buckets.associate { it.id to it.deliveryState }
+        assertEquals(DiagnosticDeliveryState.DELIVERED, states[stored])
+        assertEquals(DiagnosticDeliveryState.DISCARDED, states[refused])
+    }
+
+    /** Rows are immutable, so a failed upload changes nothing and the retry resends exactly what was offered. */
+    @Test
+    fun aFailedUploadLeavesEveryOccurrenceForTheRetryAndTheDailySummaryCountsBoth() {
+        val store = LocalUploadDiagnosticsStore(FakePersistence())
+        val t0 = OffsetDateTime.parse("2026-08-22T15:00:00Z")
+        store.recordFailure(LocalUploadModuleFamily.BATTERY, ConnectException(), LocalDate.parse("2026-08-22"), t0)
+        val offered = store.pending()
+        store.recordFailure(LocalUploadModuleFamily.BATTERY, ConnectException(), LocalDate.parse("2026-08-22"), t0.plusMinutes(15))
+
+        val retry = store.pending()
+        assertEquals(offered.single(), retry.first())
+        assertEquals(listOf(1, 1), retry.map { it.count })
+        assertEquals(2, store.recent(today = LocalDate.parse("2026-08-22")).single().count)
     }
 
     @Test
-    fun incrementAfterSealingSurvivesAcknowledgment() {
-        val store = LocalUploadDiagnosticsStore(FakePersistence())
+    fun simultaneousOccurrenceAndSettlementPreserveBoth() {
+        val persistence = FakePersistence()
+        val store = LocalUploadDiagnosticsStore(persistence)
         val day = LocalDate.parse("2026-08-22")
         store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
-        val submitted = store.pending(day).single()
-        store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
-        store.acknowledge(setOf(submitted.id))
-
-        val next = store.pending(day).single()
-        assertFalse(submitted.id == next.id)
-        assertEquals(1, next.count)
-        assertEquals(2, store.recent(today = day).sumOf { it.count })
-    }
-
-    @Test
-    fun simultaneousIncrementAndAcknowledgmentPreserveBothOccurrences() {
-        val store = LocalUploadDiagnosticsStore(FakePersistence())
-        val day = LocalDate.parse("2026-08-22")
-        store.record(LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day)
-        val submitted = store.pending(day).single()
+        val submitted = store.pending().single()
         val start = CountDownLatch(1)
-        val increment = thread { start.await(); store.record(
+        val occurrence = thread { start.await(); store.record(
             LocalUploadModuleFamily.BATTERY, UploadDestinationIssue.DESTINATION_MISSING, day,
         ) }
-        val acknowledge = thread { start.await(); store.acknowledge(setOf(submitted.id)) }
+        val settle = thread { start.await(); store.settle(UploadReceipt(setOf(UUID.fromString(submitted.id)), emptySet(), 0)) }
         start.countDown()
-        increment.join()
-        acknowledge.join()
+        occurrence.join()
+        settle.join()
 
-        assertEquals("DELIVERED", store.recent(today = day).first { it.id == submitted.id }.deliveryState)
-        assertEquals(1, store.pending(day).single().count)
+        assertEquals(DiagnosticDeliveryState.DELIVERED, persistence.buckets.single { it.id == submitted.id }.deliveryState)
+        assertEquals(1, store.pending().single().count)
         assertEquals(2, store.recent(today = day).sumOf { it.count })
     }
 
@@ -238,15 +197,50 @@ class LocalUploadDiagnosticsStoreTest {
         store.quarantineMalformed(setOf(bucket.id))
 
         assertTrue(store.pending().isEmpty())
-        assertEquals("QUARANTINED", persistence.buckets.single().deliveryState)
+        assertEquals(DiagnosticDeliveryState.QUARANTINED, persistence.buckets.single().deliveryState)
     }
 
     @Test
     fun failureDetailsAreClassifiedWithoutPersistingFreeFormText() {
-        assertEquals("TIMEOUT", classifyUploadFailure(SocketTimeoutException("late")))
+        assertEquals(UploadFailureIssue.TIMEOUT, classifyUploadFailure(SocketTimeoutException("late")))
         val fields = LocalUploadIssueBucket::class.java.declaredFields.mapTo(mutableSetOf()) { it.name }
         assertFalse("errorMessage" in fields)
         assertFalse("serverOrigin" in fields)
+    }
+
+    @Test
+    fun wrappedUnknownHostFailureIsClassifiedAndRecorded() {
+        val persistence = FakePersistence()
+        val store = LocalUploadDiagnosticsStore(persistence)
+        val error = UndeclaredThrowableException(UnknownHostException("offline"))
+
+        store.recordFailure(LocalUploadModuleFamily.LOCAL_STORE, error)
+
+        val issue = classifyUploadFailure(error)
+        assertEquals(UploadFailureIssue.DNS_FAILURE, issue)
+        val bucket = persistence.buckets.single()
+        assertEquals(issue.name, bucket.issue)
+        assertEquals("UnknownHostException", bucket.errorType)
+    }
+
+    @Test fun failureCatalogClassifiesEveryCurrentFailure() {
+        val failures = mapOf(
+            UploadFailureIssue.HTTP_SERVER_ERROR to ChronicleCallException("unavailable", "https://example.invalid", "", 503),
+            UploadFailureIssue.HTTP_CLIENT_ERROR to ChronicleCallException("unauthorized", "https://example.invalid", "", 401),
+            UploadFailureIssue.TIMEOUT to SocketTimeoutException(),
+            UploadFailureIssue.DNS_FAILURE to UnknownHostException(),
+            UploadFailureIssue.TLS_FAILURE to SSLException("handshake"),
+            UploadFailureIssue.CONNECTION_FAILURE to ConnectException(),
+            UploadFailureIssue.UPLOAD_FAILURE to IllegalStateException(),
+        )
+        assertEquals(UploadFailureIssue.entries.toSet(), failures.keys)
+        for ((issue, error) in failures) {
+            assertEquals(issue, classifyUploadFailure(error, uploadHttpStatus(error)))
+            val store = LocalUploadDiagnosticsStore(FakePersistence())
+            store.recordFailure(LocalUploadModuleFamily.USAGE_LIFECYCLE, error)
+            val bucket = store.pending().single()
+            assertEquals(issue.name, bucket.issue)
+        }
     }
 
     private class FakePersistence : LocalUploadDiagnosticsPersistence {

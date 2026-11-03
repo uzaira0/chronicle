@@ -68,17 +68,17 @@ class ChronicleUploadTests {
     @Test
     fun testChronicleEnrollRequestUsesBcmPath() {
         // Use a fixed test UUID instead of Android ID to avoid leaking hardware identifiers
-        val deviceId = "test-device-00000000-0000-0000-0000-000000000000"
+        val randomDeviceId = "test-device-00000000-0000-0000-0000-000000000000"
 
-        val device = AndroidDevice(deviceId, Build.MODEL, Build.VERSION.CODENAME, Build.BRAND, Build.DISPLAY, Build.VERSION.SDK_INT.toString(),
-            Build.PRODUCT, deviceId, mapOf())
+        val device = AndroidDevice(randomDeviceId, Build.MODEL, Build.VERSION.CODENAME, Build.BRAND, Build.DISPLAY, Build.VERSION.SDK_INT.toString(),
+            Build.PRODUCT, randomDeviceId, mapOf())
         val studyId = UUID.fromString("28d661b8-a45a-41b6-aec4-ed9988fa28dc")
         val participantId = "participant1"
 
         val deviceJson = JsonSerializer.toJson<com.openlattice.chronicle.sources.SourceDevice>(device)
 
-        val response = chronicleStudyApi.enroll(studyId, participantId, deviceId, device)
-        assertTrue(deviceJson.contains(deviceId))
+        val response = chronicleStudyApi.enroll(studyId, participantId, randomDeviceId, device)
+        assertTrue(deviceJson.contains(randomDeviceId))
         assertEquals(UUID.fromString("11111111-1111-1111-1111-111111111111"), response.chronicleId)
         assertEquals("ck_test", response.apiKey)
     }

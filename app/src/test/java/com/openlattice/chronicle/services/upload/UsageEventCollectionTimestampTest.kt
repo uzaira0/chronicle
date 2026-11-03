@@ -5,15 +5,13 @@ import com.openlattice.chronicle.models.ExtractedUsageEvent
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.time.OffsetDateTime
-import java.time.ZoneOffset
 import java.util.UUID
 
 class UsageEventCollectionTimestampTest {
 
     @Test
-    fun queueWriteTimeIsPreservedSeparatelyFromFrameworkEventTime() {
+    fun uploadCarriesOnlyTheFrameworkEventTime() {
         val eventTime = OffsetDateTime.parse("2026-07-15T08:00:00Z")
-        val queueWriteTime = OffsetDateTime.parse("2026-07-15T08:03:14.321Z")
         val extracted = ExtractedUsageEvent(
             appPackageName = "com.example.app",
             interactionType = "Move to Foreground",
@@ -29,11 +27,14 @@ class UsageEventCollectionTimestampTest {
             data = listOf(extracted),
             studyId = UUID.randomUUID(),
             participantId = "P001",
-            queueWriteTimestamp = queueWriteTime.toInstant().toEpochMilli(),
         ).single() as ChronicleUsageEvent
 
         assertEquals(eventTime, uploaded.timestamp)
-        assertEquals(queueWriteTime.withOffsetSameInstant(ZoneOffset.UTC), uploaded.collectedAt)
+        // One clock: no phone queue-write time travels beside the event time.
+        assertEquals(setOf("studyId", "participantId", "appPackageName", "interactionType", "eventType", "timestamp",
+            "timezone", "user", "applicationLabel", "activityClass", "clientEventId"),
+            ChronicleUsageEvent::class.java.declaredFields.map { it.name }.filterNot { it.startsWith("$") }.toSet())
         assertEquals(extracted.eventType, uploaded.eventType)
+        assertEquals(extracted.activityClass, uploaded.activityClass)
     }
 }

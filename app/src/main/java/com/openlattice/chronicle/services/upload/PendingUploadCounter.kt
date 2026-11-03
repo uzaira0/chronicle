@@ -56,15 +56,9 @@ data class UploadFailureCounts(
     val usageAttempts: Int,
     val sensorAttempts: Int,
     val batteryAttempts: Int,
-) {
-    val total: Int
-        get() = usageAttempts + sensorAttempts + batteryAttempts
-}
+)
 
 object PendingUploadCounter {
-    fun snapshot(context: Context): PendingUploadCounts =
-        snapshot(ChronicleDb.getInstance(context.applicationContext))
-
     fun snapshot(db: ChronicleDb): PendingUploadCounts =
         PendingUploadCounts(
             usageAndLifecycle = db.queueEntryData().getSize(),
@@ -87,9 +81,6 @@ object PendingUploadCounter {
         ChronicleDb.getInstance(context.applicationContext).let { db ->
             dashboardSnapshot(db, exactActiveEnrollmentServer(context, db), date)
         }
-
-    fun dashboardSnapshot(db: ChronicleDb, date: LocalDate = LocalDate.now()): UploadDashboardSnapshot =
-        dashboardSnapshot(db, db.uploadServerDao().getConfiguredServer(), date)
 
     private fun dashboardSnapshot(db: ChronicleDb, server: UploadServerEntity?, date: LocalDate): UploadDashboardSnapshot {
         val serverId = server?.id ?: -1L
