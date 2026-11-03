@@ -1,8 +1,6 @@
 package com.openlattice.chronicle.collection.sink
 
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
-import com.openlattice.chronicle.collection.core.RecordingCollectionLog
 import com.openlattice.chronicle.storage.QueueEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -16,7 +14,7 @@ class UsageEventSinkTest {
     @Test
     fun successfulWriteReturnsOkWithCount() {
         val dao = FakeStorageQueue()
-        val sink = UsageEventSink(dao, NoOpCollectionLog)
+        val sink = UsageEventSink(dao)
 
         val result = sink.write(listOf(entry(100, 1), entry(101, 2)))
 
@@ -27,7 +25,7 @@ class UsageEventSinkTest {
     @Test
     fun emptyWriteIsIdempotentOkZeroAndTouchesNothing() {
         val dao = FakeStorageQueue()
-        val sink = UsageEventSink(dao, NoOpCollectionLog)
+        val sink = UsageEventSink(dao)
 
         val result = sink.write(emptyList())
 
@@ -36,16 +34,13 @@ class UsageEventSinkTest {
     }
 
     @Test
-    fun persistenceFailureReturnsFailedAndIsLoggedNotSwallowed() {
+    fun persistenceFailureReturnsFailedNotSwallowed() {
         val dao = FakeStorageQueue().apply { failNextInsert = true }
-        val log = RecordingCollectionLog()
-        val sink = UsageEventSink(dao, log)
+        val sink = UsageEventSink(dao)
 
         val result = sink.write(listOf(entry(100, 1)))
 
         assertTrue("expected Failed, got $result", result is ModuleResult.Failed)
-        assertTrue(log.problems.isNotEmpty())
-        assertTrue(log.problems.any { it.level == RecordingCollectionLog.Level.ERROR })
     }
 
     @Test
@@ -53,7 +48,7 @@ class UsageEventSinkTest {
         // dataQueue has a composite PK (writeTimestamp, id) and no OnConflict strategy:
         // a duplicate insert throws — the sink must surface that as Failed, not swallow it.
         val dao = FakeStorageQueue()
-        val sink = UsageEventSink(dao, NoOpCollectionLog)
+        val sink = UsageEventSink(dao)
 
         assertEquals(ModuleResult.Ok(1), sink.write(listOf(entry(100, 1))))
         val duplicate = sink.write(listOf(entry(100, 1)))
@@ -65,7 +60,7 @@ class UsageEventSinkTest {
     @Test
     fun queueDepthReflectsRowCount() {
         val dao = FakeStorageQueue()
-        val sink = UsageEventSink(dao, NoOpCollectionLog)
+        val sink = UsageEventSink(dao)
         assertEquals(0, sink.queueDepth())
         sink.write(listOf(entry(100, 1), entry(101, 2), entry(102, 3)))
         assertEquals(3, sink.queueDepth())
@@ -74,7 +69,7 @@ class UsageEventSinkTest {
     @Test
     fun queueEntrySerializationIsPreservedByteForByte() {
         val dao = FakeStorageQueue()
-        val sink = UsageEventSink(dao, NoOpCollectionLog)
+        val sink = UsageEventSink(dao)
         val payload = byteArrayOf(9, 8, 7, 6)
         sink.write(listOf(QueueEntry(writeTimestamp = 500, id = 42, data = payload)))
 

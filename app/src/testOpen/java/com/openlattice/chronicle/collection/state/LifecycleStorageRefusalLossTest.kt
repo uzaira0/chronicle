@@ -1,17 +1,17 @@
 package com.openlattice.chronicle.collection.state
 
 import android.content.Context
-import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
-import com.openlattice.chronicle.layout.TestStores
+import com.openlattice.chronicle.audit.AuditStores
+import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.lifecycle.ANDROID_SYSTEM_PACKAGE
 import com.openlattice.chronicle.services.lifecycle.DeviceLifecycleEventRecorder
-import com.openlattice.chronicle.services.lifecycle.INTERACTION_BATTERY_LOW
-import com.openlattice.chronicle.storage.ChronicleDb
-import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
-import com.openlattice.chronicle.storage.QueueEntry
+import com.openlattice.chronicle.services.lifecycle.INTERACTION_BATTERY_LOW
 import com.openlattice.chronicle.services.lifecycle.persistLifecycleEntries
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.QUEUE_CAPTURE_VERSION_KEY
+import com.openlattice.chronicle.storage.QueueEntry
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -25,20 +25,13 @@ class LifecycleStorageRefusalLossTest {
     @get:org.junit.Rule val backgroundPersistence = BackgroundPersistenceRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
 
-    private fun cacheStorageDecision(allowed: Boolean, checkedAt: Long) {
-        StorageAdmission::class.java.getDeclaredField("lastAllowed").apply { isAccessible = true }
-            .setBoolean(StorageAdmission, allowed)
-        StorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
-            .setLong(StorageAdmission, checkedAt)
-    }
-
     @Before fun setUp() {
-        TestStores.install(context, enrolled = true)
+        AuditStores.install(context, enrolled = true)
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
         ResearchPersistenceGate.initialize(context)
     }
 
-    @After fun tearDown() = cacheStorageDecision(allowed = false, checkedAt = Long.MIN_VALUE)
+    @After fun tearDown() = StorageAdmission.clear(context)
 
     private fun lifecycleLoss(issue: String = "COLLECTION_GATE_DROPPED"): Int = ChronicleDb.getInstance(context).openHelper.readableDatabase
         .query("SELECT coalesce(sum(count), 0) FROM upload_diagnostics WHERE moduleFamily = 'USAGE_LIFECYCLE' " +
@@ -46,7 +39,7 @@ class LifecycleStorageRefusalLossTest {
         .use { it.moveToFirst(); it.getInt(0) }
 
     @Test fun storageRefusedLifecycleEventsAreCountedForDeviceLifecycle() {
-        cacheStorageDecision(allowed = false, checkedAt = SystemClock.elapsedRealtime())
+        org.junit.Assert.assertFalse(StorageAdmission.allowed(context, 0))
         val now = System.currentTimeMillis()
         DeviceLifecycleEventRecorder.recordAsync(context, listOf(
             DeviceLifecycleEventRecorder.buildEvent(ANDROID_SYSTEM_PACKAGE, INTERACTION_BATTERY_LOW, now),
@@ -60,9 +53,9 @@ class LifecycleStorageRefusalLossTest {
     }
 
     @Test fun storageRefusedObservedLifecycleEventsAreCounted() {
-        cacheStorageDecision(allowed = false, checkedAt = SystemClock.elapsedRealtime())
+        org.junit.Assert.assertFalse(StorageAdmission.allowed(context, 0))
         DeviceLifecycleEventRecorder.recordObserved(context) {
-            listOf(DeviceLifecycleEventRecorder.lowMemoryEvent(10))
+            listOfNotNull(DeviceLifecycleEventRecorder.lowMemoryEvent(10))
         }
         val deadline = System.currentTimeMillis() + 5_000
         while (lifecycleLoss() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(25)
@@ -72,7 +65,7 @@ class LifecycleStorageRefusalLossTest {
     }
 
     @Test fun observationExceptionIsCountedAndLoggedWithoutItsMessage() {
-        cacheStorageDecision(allowed = true, checkedAt = SystemClock.elapsedRealtime())
+        org.junit.Assert.assertTrue(StorageAdmission.allowed(context, Long.MAX_VALUE))
         org.robolectric.shadows.ShadowLog.clear()
         DeviceLifecycleEventRecorder.recordObserved(context) { error("private-observation-sentinel") }
         val deadline = System.currentTimeMillis() + 5_000
@@ -84,7 +77,7 @@ class LifecycleStorageRefusalLossTest {
     }
 
     @Test fun failedLifecycleTransactionLeavesUnchangedStateEligibleForTheNextPoll() {
-        cacheStorageDecision(allowed = true, checkedAt = SystemClock.elapsedRealtime())
+        org.junit.Assert.assertTrue(StorageAdmission.allowed(context, Long.MAX_VALUE))
         val db = ChronicleDb.getInstance(context)
         val sampler = DeviceStateSampler(context)
         val events = sampler.poll()
@@ -93,7 +86,7 @@ class LifecycleStorageRefusalLossTest {
             JsonSerializer.serializeQueueEntry(events)))
         db.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER refuse_state BEFORE INSERT ON lifecycle_state " +
-                "WHEN NEW.key <> '${com.openlattice.chronicle.storage.QUEUE_CAPTURE_VERSION_KEY}' " +
+                "WHEN NEW.key <> '$QUEUE_CAPTURE_VERSION_KEY' " +
                 "BEGIN SELECT RAISE(ABORT, 'synthetic'); END",
         )
         org.junit.Assert.assertThrows(Exception::class.java) {

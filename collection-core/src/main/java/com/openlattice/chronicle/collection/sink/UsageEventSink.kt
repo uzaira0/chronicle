@@ -1,6 +1,6 @@
 package com.openlattice.chronicle.collection.sink
 
-import com.openlattice.chronicle.collection.core.CollectionLog
+import android.util.Log
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
@@ -26,19 +26,13 @@ private const val TAG = "UsageEventSink"
  *    strategy so SQLite throws) → [ModuleResult.Failed]. The failure is logged and
  *    returned, never swallowed.
  *
- * **Queue-size / cursor note:** the legacy writers call `Utils.updateUploadQueueSize`
- * *after* a successful insert. That call needs an Android `Context`; per design §1C a
- * sink must not hold a `Context` in a singleton. Phase 3 therefore does not update the
- * upload-queue size from inside the sink — the orchestration code that wires the sink
- * in (Phases 4–5) owns that side effect, exactly as the existing workers do today.
  * The `dataQueue` cursor (`writeTimestamp, id`) is untouched: this sink only inserts.
  *
- * This is a plain class holding only the DAO and a logger — no `Context`.
+ * This is a plain class holding only the DAO — no `Context`.
  *
  */
 public open class UsageEventSink(
     private val storageQueue: StorageQueue,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
     private val prepareEntries: (List<QueueEntry>) -> List<QueueEntry> = { it },
     private val writeEntries: (List<QueueEntry>) -> Unit = storageQueue::insertEntries,
@@ -69,7 +63,7 @@ public open class UsageEventSink(
                     ModuleResult.Retry("local storage temporarily unavailable")
             }
         } catch (e: Exception) {
-            log.error(TAG, "Failed to persist ${entries.size} usage queue entr(ies) to dataQueue", e)
+            Log.e(TAG, "Failed to persist ${entries.size} usage queue entr(ies) to dataQueue", e)
             ModuleResult.Failed(e, redactedMessage = "dataQueue insert failed: ${e.javaClass.simpleName}")
         }
     }
@@ -79,7 +73,7 @@ public open class UsageEventSink(
         if (entries.isNotEmpty()) writeEntries(prepareEntries(entries))
         ModuleResult.Ok(items = entries.size)
     } catch (error: Exception) {
-        log.error(TAG, "Failed to persist ${entries.size} usage queue entr(ies) to dataQueue", error)
+        Log.e(TAG, "Failed to persist ${entries.size} usage queue entr(ies) to dataQueue", error)
         ModuleResult.Failed(error, redactedMessage = "dataQueue insert failed: ${error.javaClass.simpleName}")
     }
 

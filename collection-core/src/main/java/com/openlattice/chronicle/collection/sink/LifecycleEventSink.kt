@@ -1,6 +1,5 @@
 package com.openlattice.chronicle.collection.sink
 
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.storage.QueueEntry
@@ -20,9 +19,8 @@ import com.openlattice.chronicle.storage.StorageQueue
  * success → [ModuleResult.Ok]`(size)`, persistence failure → [ModuleResult.Failed].
  *
  * The non-enrolled-skip and dedupe-window behaviours of the current
- * `DeviceLifecycleEventRecorder` are *module* concerns (Phase 5), not sink concerns —
- * the sink only persists whatever rows it is handed. Phase 3 introduces this class
- * additively with no callsite switched.
+ * `DeviceLifecycleEventRecorder` are *module* concerns, not sink concerns —
+ * the sink only persists whatever rows it is handed.
  *
  */
 public class LifecycleEventSink private constructor(
@@ -32,10 +30,9 @@ public class LifecycleEventSink private constructor(
     /** Builds a lifecycle sink over [storageQueue], composing a private [UsageEventSink]. */
     public constructor(
         storageQueue: StorageQueue,
-        log: CollectionLog = CollectionLog.LOGCAT,
         persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
         writeEntries: (List<QueueEntry>) -> Unit = storageQueue::insertEntries,
-    ) : this(UsageEventSink(storageQueue, log, persistenceGuard, writeEntries = writeEntries))
+    ) : this(UsageEventSink(storageQueue, persistenceGuard, writeEntries = writeEntries))
 
     public fun captureAdmission(): CollectionPersistenceGuard = delegate.captureAdmission()
 

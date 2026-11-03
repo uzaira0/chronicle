@@ -1,14 +1,11 @@
 package com.openlattice.chronicle.collection.sink
 
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.collection.state.SINK_PERSISTENCE_REFUSAL
 import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.storage.BatterySampleDao
 import com.openlattice.chronicle.storage.BatterySampleEntry
-
-private const val TAG = "BatterySampleSink"
 
 /**
  * The sanctioned writer for battery-telemetry samples into the `battery_samples` table
@@ -35,7 +32,6 @@ private const val TAG = "BatterySampleSink"
  */
 public open class BatterySampleSink(
     private val batterySampleDao: BatterySampleDao,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
 ) : CollectionSink {
 
@@ -53,14 +49,8 @@ public open class BatterySampleSink(
         if (samples.isEmpty()) {
             return ModuleResult.Ok(items = 0)
         }
-        return try {
-            persistenceGuard.writeObservation(SINK_PERSISTENCE_REFUSAL) {
-                batterySampleDao.insertAll(samples)
-                ModuleResult.Ok(items = samples.size)
-            }
-        } catch (e: Exception) {
-            log.error(TAG, "Failed to persist ${samples.size} battery sample(s) to battery_samples", e)
-            ModuleResult.Failed(e, redactedMessage = "battery_samples insert failed: ${e.javaClass.simpleName}")
+        return persistenceGuard.writeObservation(SINK_PERSISTENCE_REFUSAL) {
+            persistenceGuard.insertOutsideCaptureWindows(samples, { it.timestamp }, batterySampleDao::insertAll)
         }
     }
 

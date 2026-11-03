@@ -1,17 +1,21 @@
 package com.openlattice.chronicle.collection.state
 
+import com.openlattice.chronicle.WorkManagerRule
+import com.openlattice.chronicle.collection.SensorCollectionModules
+import com.openlattice.chronicle.storage.activityRecognitionSampleDao
+import com.openlattice.chronicle.storage.healthMetricSampleDao
+import com.openlattice.chronicle.storage.sleepSampleDao
+import org.junit.Rule
+
 import android.content.Context
 import android.content.SharedPreferences
-import android.os.SystemClock
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.Configuration
-import androidx.work.WorkManager
+import com.openlattice.chronicle.EnrollmentTestStores
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
+import com.openlattice.chronicle.collection.directboot.KeystoreDirectBootRecordCipher
 import com.openlattice.chronicle.collection.sensors.FakeSensorGateway
 import com.openlattice.chronicle.collection.sensors.FakeSensorRuntimeSettings
 import com.openlattice.chronicle.collection.sensors.ManualSensorRuntimeScheduler
@@ -28,7 +32,6 @@ import com.openlattice.chronicle.collection.sink.SleepSampleSink
 import com.openlattice.chronicle.collection.sink.UsageEventSink
 import com.openlattice.chronicle.collection.usage.UsageModulePersistence
 import com.openlattice.chronicle.data.ParticipationStatus
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
 import com.openlattice.chronicle.preferences.STUDY_ID
@@ -45,13 +48,12 @@ import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import com.openlattice.chronicle.storage.ConnectivityStateSampleEntry
 import com.openlattice.chronicle.storage.DeviceSettingsSampleEntry
 import com.openlattice.chronicle.storage.HealthMetricSampleEntry
-import com.openlattice.chronicle.storage.MIGRATION_17_18
 import com.openlattice.chronicle.storage.QueueEntry
 import com.openlattice.chronicle.storage.SleepSampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
-import com.openlattice.chronicle.storage.activityRecognitionSampleDao
-import com.openlattice.chronicle.storage.healthMetricSampleDao
-import com.openlattice.chronicle.storage.sleepSampleDao
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -62,16 +64,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
-import com.openlattice.chronicle.collection.directboot.KeystoreDirectBootRecordCipher
-import java.util.concurrent.Executor
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(shadows = [StorageRefusalPersistenceTest.TestDirectBootCipher::class])
 class StorageRefusalPersistenceTest {
-    @get:org.junit.Rule val backgroundPersistence = com.openlattice.chronicle.collection.state.BackgroundPersistenceRule()
+    @get:Rule val workManagerRule = WorkManagerRule()
+    @get:Rule val backgroundPersistence = BackgroundPersistenceRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var db: ChronicleDb
     private lateinit var prefs: SharedPreferences
@@ -90,18 +88,13 @@ class StorageRefusalPersistenceTest {
         prefs.edit().clear().putString(STUDY_ID, "11111111-1111-1111-1111-111111111111")
             .putString(PARTICIPANT_ID, "participant")
             .putString(PARTICIPATION_STATUS, ParticipationStatus.ENROLLED.name).commit()
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, prefs)
+        EnrollmentTestStores.prefs = prefs
         db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
+        EnrollmentTestStores.db = db
         db.uploadServerDao().insert(UploadServerEntity(
-            name = "study", url = "https://localhost", studyId = prefs.getString(STUDY_ID, "")!!,
-            participantId = "participant", sourceDeviceId = "device",
+            name = "study", url = "https://localhost", apiKey = "test-device-key", studyId = prefs.getString(STUDY_ID, "")!!,
+            participantId = "participant", sourceRandomDeviceId = "device",
         ))
-        MIGRATION_17_18.migrate(db.openHelper.writableDatabase)
-        if (!WorkManager.isInitialized()) {
-            WorkManager.initialize(context, Configuration.Builder().setExecutor(Executor { }).build())
-        }
         consent(ParticipantDecision.ACCEPTED)
         consent(ParticipantDecision.ACCEPTED, CollectionModuleId.SENSOR_GYROSCOPE)
         ResearchPersistenceGate.initialize(context)
@@ -111,11 +104,9 @@ class StorageRefusalPersistenceTest {
 
     @After fun tearDown() {
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
-        StorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
-            .setLong(StorageAdmission, Long.MIN_VALUE)
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, null)
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, null)
+        StorageAdmission.clear(context)
+        EnrollmentTestStores.db = null
+        EnrollmentTestStores.prefs = null
         db.close()
     }
 
@@ -125,28 +116,22 @@ class StorageRefusalPersistenceTest {
         db.collectionModuleStateDao().upsertAll(listOf(CollectionModuleStateEntity(
             moduleId = module.id, serverEnabled = true, decision = decision.name,
             decidedAtEpochMillis = 0, requiredApplied = false, appliedVersion = 1,
-            appliedPolicySnapshot = null, lastDisposition = null,
         )))
         }
     }
 
     private fun storage(bytes: Long) {
-        val allowed = StorageAdmission.allowed(context, bytes)
-        // Prime the production cache with the real admission decision for deterministic free space.
-        StorageAdmission::class.java.getDeclaredField("lastAllowed").apply { isAccessible = true }
-            .setBoolean(StorageAdmission, allowed)
-        StorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
-            .setLong(StorageAdmission, SystemClock.elapsedRealtime())
+        StorageAdmission.allowed(context, bytes)
     }
 
     private fun runtime(): SensorRuntimeController = SensorRuntimeController(
         gateway = FakeSensorGateway(), settings = FakeSensorRuntimeSettings(),
-        sink = SensorSampleSink(db.sensorSampleDao(), NoOpCollectionLog,
+        sink = SensorSampleSink(db.sensorSampleDao(),
             ResearchPersistenceGate.guard(context, CollectionModuleId.SENSOR_ACCELEROMETER)),
         scheduler = ManualSensorRuntimeScheduler(executeImmediately = false),
-        collectionGate = { true }, log = NoOpCollectionLog,
+        collectionGate = { true },
         observationAdmission = { ResearchPersistenceGate.captureObservation(context,
-            com.openlattice.chronicle.collection.SensorCollectionModules.moduleFor(it)) },
+            SensorCollectionModules.moduleFor(it)) },
         reportLoss = { code, count -> losses += code to count },
     ).also { controller ->
         repeat(3) { controller.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f, 2f, 3f), 3) }
@@ -168,10 +153,9 @@ class StorageRefusalPersistenceTest {
     }
 
     private fun discardAccelerometer() = ResearchPersistenceGate.stop {
-        CollectionLoopCoordinator::class.java.getDeclaredMethod("applyDisposition",
-            CollectionModuleId::class.java, CollectionDataDisposition::class.java).apply { isAccessible = true }
-            .invoke(CollectionLoopCoordinator(context), CollectionModuleId.SENSOR_ACCELEROMETER,
-                CollectionDataDisposition.DISCARD_AND_STOP)
+        ResearchErasureFence(context).erase(setOf(CollectionModuleId.SENSOR_ACCELEROMETER), ownerKey =
+            ResearchErasureFence.enrollmentKey(db.uploadServerDao().getConfiguredServer()!!))
+        CollectionLoopCoordinator(context).replayPendingErasures()
     }
 
     @Test fun discardScrubsStorageRetryBufferWhileAnotherSensorRemains() {
@@ -199,7 +183,7 @@ class StorageRefusalPersistenceTest {
         val writeNow = CountDownLatch(1)
         val controller = SensorRuntimeController(
             gateway = FakeSensorGateway(), settings = FakeSensorRuntimeSettings(),
-            sink = SensorSampleSink(db.sensorSampleDao(), NoOpCollectionLog,
+            sink = SensorSampleSink(db.sensorSampleDao(),
                 object : CollectionPersistenceGuard {
                     override fun persist(persist: () -> Unit): Boolean = persistResult(persist) == CollectionPersistenceResult.PERSISTED
                     override fun persistResult(persist: () -> Unit): CollectionPersistenceResult {
@@ -209,7 +193,7 @@ class StorageRefusalPersistenceTest {
                             else ResearchPersistenceGate.guard(context).persistResult(persist)
                     }
                 }),
-            scheduler = ManualSensorRuntimeScheduler(executeImmediately = false), log = NoOpCollectionLog,
+            scheduler = ManualSensorRuntimeScheduler(executeImmediately = false),
         )
         controller.recordSample(AndroidSensorType.accelerometer, floatArrayOf(1f, 2f, 3f), 3)
         val executor = Executors.newSingleThreadExecutor()
@@ -235,7 +219,7 @@ class StorageRefusalPersistenceTest {
             recordAbandonedGateBatch(context, owner, family, ModuleResult.Retry("local storage temporarily unavailable"), 1)
         }
         val losses = db.uploadDiagnosticDao().forEnrollment(owner.studyId, owner.participantId,
-            owner.sourceDeviceId, "${owner.id}:${owner.createdAt}")
+            owner.sourceRandomDeviceId, "${owner.id}:${owner.createdAt}")
         assertEquals(3, losses.size)
         assertTrue(losses.all { it.issueCode == "COLLECTION_GATE_DROPPED" && it.count == 1 })
     }
@@ -270,23 +254,23 @@ class StorageRefusalPersistenceTest {
     @Test fun allOtherGuardedSinksReturnRetryThenPersistTheSameBatchOnRecovery() {
         val guard = ResearchPersistenceGate.guard(context)
         val writes = listOf<Pair<String, () -> ModuleResult>>(
-            "battery" to { BatterySampleSink(db.batterySampleDao(), NoOpCollectionLog, guard).write(listOf(
+            "battery" to { BatterySampleSink(db.batterySampleDao(), guard).write(listOf(
                 BatterySampleEntry("battery", timestamp, "UTC", 80, "DISCHARGING", "NONE", 250, 4000, "GOOD"))) },
-            "connectivity" to { ConnectivityStateSampleSink(db.connectivityStateSampleDao(), NoOpCollectionLog, guard).write(listOf(
+            "connectivity" to { ConnectivityStateSampleSink(db.connectivityStateSampleDao(), guard).write(listOf(
                 ConnectivityStateSampleEntry("connectivity", timestamp, "UTC", "SNAPSHOT", "WIFI", true, false, true))) },
-            "device settings" to { DeviceSettingsSampleSink(db.deviceSettingsSampleDao(), NoOpCollectionLog, guard).write(listOf(
+            "device settings" to { DeviceSettingsSampleSink(db.deviceSettingsSampleDao(), guard).write(listOf(
                 DeviceSettingsSampleEntry("settings", timestamp, "UTC", false, 1f, false, false, false, null, true, true, 1000, 2000))) },
-            "app network" to { AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao(), NoOpCollectionLog, guard).write(listOf(
+            "app network" to { AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao(), guard).write(listOf(
                 AppNetworkUsageSampleEntry("network", timestamp, "UTC", "test.app", "WIFI", 100, 200, 0, 1000))) },
-            CollectionModuleId.SLEEP.id to { SleepSampleSink(db.sleepSampleDao(), NoOpCollectionLog, guard).write(listOf(
+            CollectionModuleId.SLEEP.id to { SleepSampleSink(db.sleepSampleDao(), guard).write(listOf(
                 SleepSampleEntry("sleep-sample", timestamp, "UTC", "CLASSIFY", null, null, null, 90, 1, 1))) },
-            "activity" to { ActivityRecognitionSampleSink(db.activityRecognitionSampleDao(), NoOpCollectionLog, guard).write(listOf(
+            "activity" to { ActivityRecognitionSampleSink(db.activityRecognitionSampleDao(), guard).write(listOf(
                 ActivityRecognitionSampleEntry("activity", timestamp, "UTC", "WALKING", 100, "ENTER"))) },
-            "health" to { HealthMetricSampleSink(db.healthMetricSampleDao(), NoOpCollectionLog, guard).write(listOf(
+            "health" to { HealthMetricSampleSink(db.healthMetricSampleDao(), guard).write(listOf(
                 HealthMetricSampleEntry("health", timestamp, "UTC", "STEPS", 100.0, "count", 0, 1000, null))) },
-            "usage" to { UsageEventSink(db.queueEntryData(), NoOpCollectionLog, guard).write(listOf(
+            "usage" to { UsageEventSink(db.queueEntryData(), guard).write(listOf(
                 QueueEntry(1, 1, byteArrayOf(1)))) },
-            "lifecycle" to { LifecycleEventSink(db.queueEntryData(), NoOpCollectionLog, guard).write(listOf(
+            "lifecycle" to { LifecycleEventSink(db.queueEntryData(), guard).write(listOf(
                 QueueEntry(2, 2, byteArrayOf(2)))) },
         )
         storage(LOCAL_STORAGE_RESERVE_BYTES - 1)
@@ -307,18 +291,18 @@ class StorageRefusalPersistenceTest {
     @Test fun storageRetryDoesNotAdvanceUsageCheckpoint() {
         var checkpoint = 100L
         val batch = listOf(QueueEntry(1, 1, byteArrayOf(1)))
-        val sink = UsageEventSink(db.queueEntryData(), NoOpCollectionLog, ResearchPersistenceGate.guard(context))
+        val sink = UsageEventSink(db.queueEntryData(), ResearchPersistenceGate.guard(context))
         storage(LOCAL_STORAGE_RESERVE_BYTES - 1)
         val attempt = runCatching {
             UsageModulePersistence.persist(batch, 200, sink, { checkpoint = it },
-                { block -> block() }, NoOpCollectionLog)
+                { block -> block() })
         }
         assertTrue(attempt.isFailure)
         assertEquals(100L, checkpoint)
         assertEquals(0, db.queueEntryData().getSize())
         storage(LOCAL_STORAGE_RESERVE_BYTES)
         UsageModulePersistence.persist(batch, 200, sink, { checkpoint = it },
-            { block -> block() }, NoOpCollectionLog)
+            { block -> block() })
         assertEquals(200L, checkpoint)
         assertEquals(1, db.queueEntryData().getSize())
     }

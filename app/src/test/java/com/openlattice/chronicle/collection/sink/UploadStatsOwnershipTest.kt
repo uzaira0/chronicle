@@ -7,6 +7,7 @@ import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadStatsEntity
 import com.openlattice.chronicle.storage.insertOwnedDay
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,16 +23,16 @@ class UploadStatsOwnershipTest {
     @After fun tearDown() = db.close()
 
     private fun owned(server: Long, date: String, epoch: String) = UploadStatsEntity(serverId = server, date = date,
-        studyId = "study", participantId = "participant", deviceId = "device", enrollmentEpoch = epoch)
+        studyId = "study", participantId = "participant", randomDeviceId = "device", enrollmentEpoch = epoch)
 
-    @Test fun legacyOwnerlessDayIsClaimedByTheWritingEnrollment() {
+    @Test fun ownerlessDayCannotBeClaimedByAnotherEnrollment() {
         dao.insertDay(UploadStatsEntity(serverId = 7, date = "2026-09-20"))
 
         dao.insertOwnedDay(owned(7, "2026-09-20", "7:created"))
         dao.incrementSensorCount(7, "2026-09-20", 4)
 
-        assertEquals(4, dao.sensorUploadedOn("2026-09-20", 7, "7:created"))
-        assertEquals(listOf("7:created"), dao.getRecentStats(7, "7:created", 7).map { it.enrollmentEpoch })
+        assertEquals(0, dao.sensorUploadedOn("2026-09-20", 7, "7:created"))
+        assertTrue(dao.getRecentStats(7, "7:created", 7).isEmpty())
     }
 
     @Test fun historyExcludesDaysOwnedByAnotherEpoch() {

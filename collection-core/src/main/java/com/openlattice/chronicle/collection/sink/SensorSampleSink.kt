@@ -1,13 +1,12 @@
 package com.openlattice.chronicle.collection.sink
 
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.storage.SensorSampleDao
 import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.storage.capturedMillis
 
-private const val TAG = "SensorSampleSink"
 private const val SENSOR_PERSISTENCE_REFUSAL = "active enrollment or sensor persistence gate closed"
 
 /**
@@ -34,7 +33,6 @@ private const val SENSOR_PERSISTENCE_REFUSAL = "active enrollment or sensor pers
  */
 public open class SensorSampleSink(
     private val sensorSampleDao: SensorSampleDao,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
     private val sampleAllowedAtPersistence: (SensorSampleEntry) -> Boolean = { true },
 ) : CollectionSink, SensorSampleWriter {
@@ -55,18 +53,16 @@ public open class SensorSampleSink(
         if (samples.isEmpty()) {
             return ModuleResult.Ok(items = 0)
         }
-        return try {
-            persistenceGuard.writeObservation(SENSOR_PERSISTENCE_REFUSAL) {
-                val allowed = samples.filter { isCurrent(it) && sampleAllowedAtPersistence(it) }
-                if (allowed.isEmpty()) ModuleResult.Skipped(SENSOR_PERSISTENCE_REFUSAL)
-                else {
-                    sensorSampleDao.insertAll(allowed)
-                    ModuleResult.Ok(items = allowed.size)
-                }
+        return persistenceGuard.writeObservation(SENSOR_PERSISTENCE_REFUSAL) {
+            // A sample inside a capture window is dropped by rule, not refused: Skipped would requeue it forever.
+            val outside = persistenceGuard.outsideCaptureWindows(samples) { capturedMillis(it.timestamp) }
+            val allowed = outside.filter { isCurrent(it) && sampleAllowedAtPersistence(it) }
+            if (outside.isEmpty()) ModuleResult.Ok(items = 0)
+            else if (allowed.isEmpty()) ModuleResult.Skipped(SENSOR_PERSISTENCE_REFUSAL)
+            else {
+                sensorSampleDao.insertAll(allowed)
+                ModuleResult.Ok(items = allowed.size)
             }
-        } catch (e: Exception) {
-            log.error(TAG, "Failed to persist ${samples.size} sensor sample(s) to sensor_samples", e)
-            ModuleResult.Failed(e, redactedMessage = "sensor_samples insert failed: ${e.javaClass.simpleName}")
         }
     }
 

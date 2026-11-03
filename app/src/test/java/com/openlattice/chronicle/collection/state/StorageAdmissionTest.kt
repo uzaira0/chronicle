@@ -4,12 +4,20 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.EnrollmentTestStores
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.storedInstant
+import java.lang.reflect.Proxy
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantReadWriteLock
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,16 +28,12 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import java.lang.reflect.Proxy
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.ReentrantReadWriteLock
+import org.robolectric.shadows.ShadowSystemClock
 
 @RunWith(RobolectricTestRunner::class)
 class StorageAdmissionTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
+    private val lock = ReentrantReadWriteLock(true)
     private lateinit var db: ChronicleDb
     private lateinit var prefs: SharedPreferences
     private lateinit var server: UploadServerEntity
@@ -38,23 +42,23 @@ class StorageAdmissionTest {
         prefs = context.getSharedPreferences("storage-admission-test", Context.MODE_PRIVATE)
         prefs.edit().clear().putString(STUDY_ID, "11111111-1111-1111-1111-111111111111")
             .putString(PARTICIPANT_ID, "participant").commit()
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, prefs)
+        EnrollmentTestStores.prefs = prefs
         db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
+        EnrollmentTestStores.db = db
         val id = db.uploadServerDao().insert(UploadServerEntity(
             name = "test", url = "https://localhost", studyId = prefs.getString(STUDY_ID, "")!!,
-            participantId = "participant", sourceDeviceId = "device", createdAt = "2026-09-01T00:00:00Z",
+            participantId = "participant", sourceRandomDeviceId = "device", createdAt = "2026-09-01T00:00:00Z",
         ))
         server = db.uploadServerDao().getById(id)!!
+        StorageAdmission.clear(context)
+        onPersistenceWorker { ResearchPersistenceGate.initialize(context, ResearchPersistenceBarrier(lock)) }
     }
 
     @After fun tearDown() {
-        StorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
-            .setLong(StorageAdmission, Long.MIN_VALUE)
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, null)
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, null)
+        EnrollmentTestStores.prefs = prefs
+        StorageAdmission.clear(context)
+        EnrollmentTestStores.db = null
+        EnrollmentTestStores.prefs = null
         db.close()
     }
 
@@ -70,12 +74,11 @@ class StorageAdmissionTest {
     }
 
     @Test fun callbackAdmissionRefusesWhenPreferenceReadThrows() {
-        StorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
-            .setLong(StorageAdmission, Long.MIN_VALUE)
+        EnrollmentTestStores.prefs = prefs
+        StorageAdmission.clear(context)
         val failing = Proxy.newProxyInstance(SharedPreferences::class.java.classLoader,
             arrayOf(SharedPreferences::class.java)) { _, _, _ -> error("preferences unavailable") } as SharedPreferences
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, failing)
+        EnrollmentTestStores.prefs = failing
         assertFalse(StorageAdmission.allowed(context))
     }
 
@@ -88,19 +91,14 @@ class StorageAdmissionTest {
             arrayOf(SharedPreferences::class.java)) { _, method, args ->
             if (method.name == "edit") editor else method.invoke(prefs, *(args ?: emptyArray()))
         } as SharedPreferences
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, failing)
+        EnrollmentTestStores.prefs = failing
     }
 
     private fun diagnostics() = db.uploadDiagnosticDao().forEnrollment(
-        server.studyId, server.participantId, server.sourceDeviceId, "${server.id}:${server.createdAt}",
+        server.studyId, server.participantId, server.sourceRandomDeviceId, "${server.id}:${server.createdAt}",
     )
 
     @Test fun pauseRecordingDoesNotHoldAdmissionMonitorWhileWaitingBehindStop() {
-        val barrier = ResearchPersistenceGate::class.java.getDeclaredField("barrier")
-            .apply { isAccessible = true }.get(ResearchPersistenceGate)
-        val lock = barrier.javaClass.getDeclaredField("lock").apply { isAccessible = true }
-            .get(barrier) as ReentrantReadWriteLock
         val paused = CountDownLatch(1)
         val recordNow = CountDownLatch(1)
         val readerLeased = CountDownLatch(1)
@@ -115,8 +113,7 @@ class StorageAdmissionTest {
             }
             method.invoke(prefs, *(args ?: emptyArray()))
         } as SharedPreferences
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, hookedPrefs)
+        EnrollmentTestStores.prefs = hookedPrefs
         val executor = Executors.newFixedThreadPool(3)
         val reader = executor.submit {
             ResearchPersistenceGate.withReadLease {
@@ -178,7 +175,7 @@ class StorageAdmissionTest {
         val diagnostic = diagnostics().single()
         assertEquals(episode, diagnostic.id)
         assertEquals("COLLECTION_PAUSED_STORAGE", diagnostic.issueCode)
-        assertEquals(occurredAt, diagnostic.firstOccurredAt)
+        assertEquals(storedInstant(requireNotNull(occurredAt)), diagnostic.firstOccurredAt)
         assertEquals(1, diagnostic.count)
         assertNull(prefs.getString("collection_storage_pause_episode_id", null))
     }
@@ -193,6 +190,35 @@ class StorageAdmissionTest {
         assertEquals(episode, diagnostics().single().id)
         assertEquals(1, diagnostics().single().count)
         assertNull(prefs.getString("collection_storage_pause_episode_id", null))
+    }
+
+    @Test fun expiredAdmissionKeepsCollectingWhileItsRefreshRuns() {
+        assertTrue(StorageAdmission.allowed(context, LOCAL_STORAGE_RESERVE_BYTES))
+        val testThread = Thread.currentThread()
+        val refreshStarted = CountDownLatch(1)
+        val finishRefresh = CountDownLatch(1)
+        EnrollmentTestStores.prefs = Proxy.newProxyInstance(SharedPreferences::class.java.classLoader,
+            arrayOf(SharedPreferences::class.java)) { _, method, args ->
+            if (Thread.currentThread() !== testThread) {
+                refreshStarted.countDown()
+                check(finishRefresh.await(5, TimeUnit.SECONDS))
+            }
+            method.invoke(prefs, *(args ?: emptyArray()))
+        } as SharedPreferences
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(31))
+        try {
+            assertTrue("free space was admitted; an expired cache must not drop samples",
+                StorageAdmission.cachedAllowed(context))
+            assertTrue(refreshStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(StorageAdmission.cachedAllowed(context))
+        } finally {
+            finishRefresh.countDown()
+        }
+    }
+
+    @Test fun clearedAdmissionFailsClosedUntilARefreshDecides() {
+        StorageAdmission.clear(context)
+        assertFalse(StorageAdmission.cachedAllowed(context))
     }
 
     @Test fun pauseIsOneEpisodeUntilStorageRecovers() {

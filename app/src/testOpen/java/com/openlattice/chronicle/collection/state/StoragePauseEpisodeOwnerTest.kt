@@ -2,7 +2,7 @@ package com.openlattice.chronicle.collection.state
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.openlattice.chronicle.layout.TestStores
+import com.openlattice.chronicle.audit.AuditStores
 import com.openlattice.chronicle.services.upload.LocalOperationalIssue
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
@@ -25,7 +25,7 @@ class StoragePauseEpisodeOwnerTest {
         .use { it.moveToFirst(); it.getInt(0) }
 
     @Test fun episodeFromAReplacedEnrollmentIsDropped() {
-        TestStores.install(context, enrolled = true)
+        AuditStores.install(context, enrolled = true)
         val current = ChronicleDb.getInstance(context).uploadServerDao().getConfiguredServer()!!
         val store = LocalUploadDiagnosticsStore.of(context)
 

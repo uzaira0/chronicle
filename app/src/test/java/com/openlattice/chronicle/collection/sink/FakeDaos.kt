@@ -1,10 +1,11 @@
 package com.openlattice.chronicle.collection.sink
 
+import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
 import com.openlattice.chronicle.storage.QueueEntry
-import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.storage.QueueRowOwner
 import com.openlattice.chronicle.storage.SensorSampleDao
-import com.openlattice.chronicle.storage.SensorSampleDeliveryEntity
 import com.openlattice.chronicle.storage.SensorSampleDeadLetterEntity
+import com.openlattice.chronicle.storage.SensorSampleEntry
 import com.openlattice.chronicle.storage.SensorSampleTypeCount
 import com.openlattice.chronicle.storage.StorageQueue
 import com.openlattice.chronicle.storage.UploadStatsDao
@@ -26,6 +27,10 @@ import com.openlattice.chronicle.storage.UploadStatsEntity
  * exercise the sink's failure path.
  */
 class FakeStorageQueue : StorageQueue {
+    override fun queueRowOwner(): QueueRowOwner? = null
+    override fun insertOversizedQuarantine(row: LocalDataQuarantineEntity): Long = error("unexpected oversized test row")
+    override fun insertBoundedEntries(entries: List<QueueEntry>) = insertEntries(entries)
+
     val rows = LinkedHashMap<Pair<Long, Long>, QueueEntry>()
     var failNextInsert = false
 
@@ -50,13 +55,15 @@ class FakeStorageQueue : StorageQueue {
     override fun getNextEntries(size: Int): List<QueueEntry> =
         rows.values.sortedBy { it.writeTimestamp }.take(size)
 
+    override fun keysFrom(writeTimestamp: Long): List<String> =
+        rows.values.filter { it.writeTimestamp >= writeTimestamp }.map { "${it.writeTimestamp}:${it.id}" }
+
     override fun getSize(): Int = rows.size
 
     override fun maxWriteTimestamp(): Long? = rows.values.maxOfOrNull { it.writeTimestamp }
-    override fun maxUploadedTimestamp(): Long? = null
     override fun insertAllocatedEntries(entries: List<QueueEntry>) = insertEntries(entries)
 
-    override fun updateData(writeTimestamp: Long, id: Long, data: ByteArray) {
+    override fun updateBoundedData(writeTimestamp: Long, id: Long, data: ByteArray) {
         rows[writeTimestamp to id]?.let { rows[writeTimestamp to id] = QueueEntry(writeTimestamp, id, data) }
     }
 
@@ -68,31 +75,11 @@ class FakeStorageQueue : StorageQueue {
         entries.forEach { deleteEntry(it) }
     }
 
-    override fun deleteOldest(count: Int): Int {
-        val oldest = rows.keys.sortedWith(compareBy({ it.first }, { it.second })).take(count)
-        oldest.forEach { rows.remove(it) }
-        return oldest.size
-    }
-
-    override fun getEntriesAfter(cursor: Long, limit: Int): List<QueueEntry> =
-        rows.values.filter { it.writeTimestamp > cursor }.sortedBy { it.writeTimestamp }.take(limit)
-
     override fun getEntriesAfter(cursorTimestamp: Long, cursorId: Long, limit: Int): List<QueueEntry> =
         rows.values
             .filter { it.writeTimestamp > cursorTimestamp || (it.writeTimestamp == cursorTimestamp && it.id > cursorId) }
             .sortedWith(compareBy({ it.writeTimestamp }, { it.id }))
             .take(limit)
-
-    override fun deleteEntriesBefore(maxTimestamp: Long) {
-        rows.entries.removeIf { it.value.writeTimestamp <= maxTimestamp }
-    }
-
-    override fun deleteEntriesBeforeOrAt(maxTimestamp: Long, maxId: Long) {
-        rows.entries.removeIf {
-            it.value.writeTimestamp < maxTimestamp ||
-                (it.value.writeTimestamp == maxTimestamp && it.value.id <= maxId)
-        }
-    }
 
     override fun deleteAll() {
         rows.clear()
@@ -105,10 +92,12 @@ class FakeStorageQueue : StorageQueue {
  * [failNextInsert] forces the next insert to throw, to exercise the sink's failure path.
  */
 class FakeSensorSampleDao : SensorSampleDao {
+    override fun queueRowOwner(): QueueRowOwner? = null
+    override fun insertOversizedQuarantine(row: LocalDataQuarantineEntity): Long = error("unexpected oversized test row")
+    override fun insertAllUnchecked(samples: List<SensorSampleEntry>) = insertAll(samples)
+
     val rows = LinkedHashMap<String, SensorSampleEntry>()
-    val deliveries = LinkedHashSet<SensorSampleDeliveryEntity>()
     val deadLetters = LinkedHashMap<String, SensorSampleDeadLetterEntity>()
-    val configuredServerGenerations = LinkedHashSet<Pair<Long, Long>>()
     var failNextInsert = false
 
     override fun insertAll(samples: List<SensorSampleEntry>) {
@@ -132,10 +121,11 @@ class FakeSensorSampleDao : SensorSampleDao {
 
     override fun deleteByIds(ids: List<String>) {
         ids.forEach { rows.remove(it) }
-        deliveries.removeIf { it.sampleId in ids }
     }
 
     override fun count(): Int = rows.size
+
+    override fun deleteAll(): Int = rows.size.also { deleteByIds(rows.keys.toList()) }
 
     override fun countBySensorType(): List<SensorSampleTypeCount> =
         rows.values
@@ -143,39 +133,6 @@ class FakeSensorSampleDao : SensorSampleDao {
             .eachCount()
             .map { (sensorType, count) -> SensorSampleTypeCount(sensorType, count) }
             .sortedWith(compareByDescending<SensorSampleTypeCount> { it.count }.thenBy { it.sensorType })
-
-    override fun countDeliveriesForServer(
-        serverId: Long,
-        serverGeneration: Long,
-        sampleIds: List<String>,
-    ): Int = deliveries.count {
-        it.serverId == serverId &&
-            it.serverGeneration == serverGeneration &&
-            it.sampleId in sampleIds
-    }
-
-    override fun insertDeliveries(deliveries: List<SensorSampleDeliveryEntity>) {
-        deliveries.forEach { delivery ->
-            this.deliveries.removeIf {
-                it.sampleId == delivery.sampleId && it.serverId == delivery.serverId
-            }
-            this.deliveries += delivery
-        }
-    }
-
-    override fun deleteFullyDeliveredByIds(sampleIds: List<String>): Int {
-        val deletable = sampleIds.filter { sampleId ->
-            configuredServerGenerations.all { (serverId, generation) ->
-                deliveries.any {
-                    it.sampleId == sampleId &&
-                        it.serverId == serverId &&
-                        it.serverGeneration == generation
-                }
-            }
-        }
-        deleteByIds(deletable)
-        return deletable.size
-    }
 
     override fun insertDeadLetters(deadLetters: List<SensorSampleDeadLetterEntity>) {
         deadLetters.forEach { this.deadLetters[it.sampleId] = it }
@@ -213,17 +170,6 @@ class FakeUploadStatsDao : UploadStatsDao {
     override fun insertDay(stats: UploadStatsEntity) {
         checkFailure()
         rows.putIfAbsent(stats.serverId to stats.date, stats)
-    }
-
-    override fun backfillOwner(serverId: Long, date: String, studyId: String, participantId: String,
-                               deviceId: String, epoch: String): Int {
-        checkFailure()
-        val key = serverId to date
-        val old = rows[key] ?: return 0
-        if (old.studyId != null || old.participantId != null || old.deviceId != null || old.enrollmentEpoch != null) return 0
-        rows[key] = old.copy(studyId = studyId, participantId = participantId,
-            deviceId = deviceId, enrollmentEpoch = epoch)
-        return 1
     }
 
     override fun incrementUsageCount(serverId: Long, date: String, count: Int) {
@@ -291,10 +237,4 @@ class FakeUploadStatsDao : UploadStatsDao {
 
     private fun scoped(date: String, serverId: Long, epoch: String) =
         rows.values.filter { it.date == date && it.serverId == serverId && it.enrollmentEpoch == epoch }
-
-    override fun deleteOlderThan(cutoffDate: String): Int {
-        val before = rows.size
-        rows.entries.removeIf { it.value.date < cutoffDate }
-        return before - rows.size
-    }
 }

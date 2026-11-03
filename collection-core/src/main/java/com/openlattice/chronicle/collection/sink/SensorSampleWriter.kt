@@ -3,6 +3,7 @@ package com.openlattice.chronicle.collection.sink
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.storage.SensorSampleEntry
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import java.util.WeakHashMap
 
 /**
  * The write seam the sensor runtime persists through. [SensorSampleSink] is the production
@@ -16,10 +17,14 @@ import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
  */
 public fun interface SensorSampleWriter {
     public data class RetainedSample(val entry: SensorSampleEntry, val origin: CollectionPersistenceGuard)
-    public fun interface Discardable { public fun discardSensorSamples(sensorType: String): Int }
+    /** A live sensor runtime whose RAM buffer erasure and the upload schedule reach. */
+    public interface Discardable {
+        public fun discardSensorSamples(sensorType: String): Int
+        public fun flushBuffer(): ModuleResult
+    }
 
     public companion object {
-        private val runtimes = java.util.WeakHashMap<Discardable, Unit>()
+        private val runtimes = WeakHashMap<Discardable, Unit>()
         private val retained = mutableListOf<RetainedSample>()
         public fun retainSamples(samples: List<RetainedSample>): Int = synchronized(retained) {
             val accepted = samples.take((5_000 - retained.size).coerceAtLeast(0))
@@ -30,6 +35,11 @@ public fun interface SensorSampleWriter {
             retained.toList().also { retained.clear() }
         }
         public fun registerRuntime(runtime: Discardable) { synchronized(runtimes) { runtimes[runtime] = Unit } }
+
+        /** Persists every live runtime's buffer, so samples below the flush threshold still reach an upload run. */
+        public fun flushRuntimes() {
+            synchronized(runtimes) { runtimes.keys.toList() }.forEach { it.flushBuffer() }
+        }
         public fun discardSensorSamples(sensorType: String): Int {
             val live = synchronized(runtimes) { runtimes.keys.toList() }
             val pooled = synchronized(retained) {

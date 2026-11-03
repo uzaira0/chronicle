@@ -3,11 +3,9 @@ package com.openlattice.chronicle.collection.sink
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.openlattice.chronicle.IsolatedChronicleTestDb
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.QueueEntry
 import com.openlattice.chronicle.storage.SensorSampleEntry
-import com.openlattice.chronicle.storage.UploadServerEntity
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -47,7 +45,7 @@ class CollectionSinkInstrumentedTest {
 
     @Test
     fun usageEventSinkWritesThroughSqlCipherDataQueue() {
-        val sink = UsageEventSink(db.queueEntryData(), NoOpCollectionLog)
+        val sink = UsageEventSink(db.queueEntryData())
         val now = System.currentTimeMillis()
         val entries = listOf(
             QueueEntry(writeTimestamp = now, id = 1L, data = byteArrayOf(1, 2, 3)),
@@ -62,7 +60,7 @@ class CollectionSinkInstrumentedTest {
 
     @Test
     fun usageEventSinkDuplicateCompositeKeySurfacesAsFailed() {
-        val sink = UsageEventSink(db.queueEntryData(), NoOpCollectionLog)
+        val sink = UsageEventSink(db.queueEntryData())
         val entry = QueueEntry(writeTimestamp = 123L, id = 9L, data = byteArrayOf(7))
 
         assertEquals(ModuleResult.Ok(1), sink.write(listOf(entry)))
@@ -72,7 +70,7 @@ class CollectionSinkInstrumentedTest {
 
     @Test
     fun sensorSampleSinkWritesThroughSqlCipherAndIgnoresDuplicateIds() {
-        val sink = SensorSampleSink(db.sensorSampleDao(), NoOpCollectionLog)
+        val sink = SensorSampleSink(db.sensorSampleDao())
         val sample = SensorSampleEntry(
             id = "sample-1",
             sensorType = "ACCELEROMETER",
@@ -90,36 +88,9 @@ class CollectionSinkInstrumentedTest {
     }
 
     @Test
-    fun uploadStatsSinkWritesThroughSqlCipherUploadStats() {
-        // upload_stats has a foreign key to upload_servers, so a server row must exist.
-        val serverId = db.uploadServerDao().insert(
-            UploadServerEntity(
-                name = "test-server",
-                url = "https://chronicle-screentime-app.research.bcm.edu",
-                studyId = "study-1",
-                participantId = "participant-1",
-                sourceDeviceId = "device-1",
-            )
-        )
-        val sink = UploadStatsSink(db.uploadStatsDao(), NoOpCollectionLog)
-        val date = "2026-05-20"
-
-        val ownedDay = com.openlattice.chronicle.storage.UploadStatsEntity(
-            serverId = serverId, date = date, studyId = "11111111-1111-1111-1111-111111111111",
-            participantId = "participant-1", deviceId = "device-1", enrollmentEpoch = "$serverId:created",
-        )
-        assertEquals(ModuleResult.Ok(11), sink.recordUsageUploaded(ownedDay, 11))
-        assertEquals(ModuleResult.Ok(4), sink.recordSensorUploaded(ownedDay, 4))
-
-        val stats = db.uploadStatsDao().getRecentStats(serverId, 1).single()
-        assertEquals(11, stats.usageEventsUploaded)
-        assertEquals(4, stats.sensorSamplesUploaded)
-    }
-
-    @Test
     fun emptyWritesAreIdempotentNoOpsAgainstRealDb() {
-        val usageSink = UsageEventSink(db.queueEntryData(), NoOpCollectionLog)
-        val sensorSink = SensorSampleSink(db.sensorSampleDao(), NoOpCollectionLog)
+        val usageSink = UsageEventSink(db.queueEntryData())
+        val sensorSink = SensorSampleSink(db.sensorSampleDao())
 
         assertEquals(ModuleResult.Ok(0), usageSink.write(emptyList()))
         assertEquals(ModuleResult.Ok(0), sensorSink.write(emptyList()))

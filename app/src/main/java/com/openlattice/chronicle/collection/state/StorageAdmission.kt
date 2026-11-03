@@ -1,21 +1,22 @@
 package com.openlattice.chronicle.collection.state
 
-import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
 import android.os.SystemClock
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
+import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.preferences.PARTICIPANT_ID
+import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
 import com.openlattice.chronicle.services.upload.LocalOperationalIssue
 import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
-import com.openlattice.chronicle.preferences.STUDY_ID
-import com.openlattice.chronicle.preferences.PARTICIPANT_ID
-import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import java.time.OffsetDateTime
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Persistent pause episode state; existing rows are never evicted to make room. */
 internal object StorageAdmission {
@@ -71,9 +72,9 @@ internal object StorageAdmission {
         val now = SystemClock.elapsedRealtime()
         if (lastCheckedAt != Long.MIN_VALUE && now - lastCheckedAt < RECHECK_MS) return@safeDecision lastAllowed
 
-        // Expired admission fails closed while a worker refreshes space, preferences and diagnostics.
+        // An expired decision stands while a worker refreshes space, preferences and diagnostics;
+        // only a decision that was never made (or was cleared) fails closed.
         if (refreshPending.compareAndSet(false, true)) {
-            lastAllowed = false
             refreshExecutor.execute {
                 try {
                     safeDecision { refresh(context.applicationContext) }
@@ -82,14 +83,10 @@ internal object StorageAdmission {
                 }
             }
         }
-        false
+        lastAllowed
     }
 
-    private fun refresh(context: Context): Boolean =
-        allowed(context, context.filesDir.usableSpace).also {
-            lastAllowed = it
-            lastCheckedAt = SystemClock.elapsedRealtime()
-        }
+    private fun refresh(context: Context): Boolean = allowed(context, context.filesDir.usableSpace)
 
     fun allowed(context: Context, usableBytes: Long): Boolean = safeDecision {
         val prefs = EncryptedPrefsHelper.getEncryptedPrefs(context)
@@ -153,9 +150,15 @@ internal object StorageAdmission {
             } else false
         }
         if (resumed) {
-            androidx.core.app.NotificationManagerCompat.from(context).cancel(STORAGE_PAUSE_NOTIFICATION_ID)
+            NotificationManagerCompat.from(context).cancel(STORAGE_PAUSE_NOTIFICATION_ID)
             runCatching { DistributionRestrictedRuntime.drainDirectBootSamples(context) }
                 .onFailure { Log.e("StorageAdmission", "Unable to enqueue resumed direct-boot drain", it) }
+        }
+        synchronized(this) {
+            if (decisionGeneration == generation) {
+                lastAllowed = !paused
+                lastCheckedAt = SystemClock.elapsedRealtime()
+            }
         }
         !paused
     }

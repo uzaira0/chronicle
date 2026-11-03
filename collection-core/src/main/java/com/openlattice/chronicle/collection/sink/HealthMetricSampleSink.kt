@@ -1,14 +1,11 @@
 package com.openlattice.chronicle.collection.sink
 
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.collection.state.SINK_PERSISTENCE_REFUSAL
 import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.storage.HealthMetricSampleDao
 import com.openlattice.chronicle.storage.HealthMetricSampleEntry
-
-private const val TAG = "HealthMetricSampleSink"
 
 /**
  * The sanctioned writer for `health_connect` records into the `health_metric_samples`
@@ -17,7 +14,6 @@ private const val TAG = "HealthMetricSampleSink"
  */
 public open class HealthMetricSampleSink(
     private val dao: HealthMetricSampleDao,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
     private val persistenceGuard: CollectionPersistenceGuard = CollectionPersistenceGuard.ALLOW,
 ) : CollectionSink {
 
@@ -27,14 +23,8 @@ public open class HealthMetricSampleSink(
         if (samples.isEmpty()) {
             return ModuleResult.Ok(items = 0)
         }
-        return try {
-            persistenceGuard.writeObservation(SINK_PERSISTENCE_REFUSAL) {
-                dao.insertAll(samples)
-                ModuleResult.Ok(items = samples.size)
-            }
-        } catch (e: Exception) {
-            log.error(TAG, "Failed to persist ${samples.size} health metric(s)", e)
-            ModuleResult.Failed(e, redactedMessage = "health_metric_samples insert failed: ${e.javaClass.simpleName}")
+        return persistenceGuard.writeObservation(SINK_PERSISTENCE_REFUSAL) {
+            persistenceGuard.insertOutsideCaptureWindows(samples, { it.timestamp }, dao::insertAll)
         }
     }
 

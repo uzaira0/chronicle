@@ -5,7 +5,7 @@ import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.openlattice.chronicle.layout.TestStores
+import com.openlattice.chronicle.audit.AuditStores
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.STUDY_ID
@@ -32,7 +32,7 @@ class StoragePauseEpisodeTest {
     private val enough = LOCAL_STORAGE_RESERVE_BYTES
 
     @Before fun setUp() {
-        TestStores.install(context, enrolled = true)
+        AuditStores.install(context, enrolled = true)
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
         onPersistenceWorker { ResearchPersistenceGate.initialize(context) }
     }
