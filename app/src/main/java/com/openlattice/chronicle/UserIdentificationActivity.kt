@@ -1,82 +1,100 @@
 package com.openlattice.chronicle
 
 import android.os.Bundle
+import android.content.Context
 import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.viewModels
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewModelScope
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.identification.DeviceUser
 import com.openlattice.chronicle.collection.identification.TargetUserRouter
 import com.openlattice.chronicle.preferences.EnrollmentSettings
-import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
-import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
+import com.openlattice.chronicle.ui.storageFailureHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class UserIdentificationActivity : AppCompatActivity() {
-    private lateinit var childUserBtn: Button
-    private lateinit var otherUserBtn: Button
+    private lateinit var participantUserBtn: Button
+    private lateinit var someoneElseUserBtn: Button
 
-    private lateinit var settings: EnrollmentSettings
+    private val saveState: SaveState by viewModels()
+
+    internal class SaveState : ViewModel() {
+        var saving = false
+            private set
+        lateinit var targetUser: DeviceUser
+            private set
+        val outcome = MutableLiveData<Result<ModuleResult>?>()
+
+        fun save(context: Context, user: DeviceUser) {
+            if (saving) return
+            saving = true
+            targetUser = user
+            val appContext = context.applicationContext
+            viewModelScope.launch {
+                val result = withContext(Dispatchers.IO) { runCatching {
+                    TargetUserRouter.setTargetUser(appContext, user).also {
+                        if (it is ModuleResult.Ok) EnrolledWork.rescheduleSync(appContext)
+                    }
+                } }
+                saving = false
+                outcome.value = result
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_user_identification)
 
-        try {
-            settings = EnrollmentSettings(this)
-        } catch (error: LocalStoreRecoveryRequiredException) {
-            startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
-            finish()
-            return
+        participantUserBtn = findViewById(R.id.participant_user_btn)
+        someoneElseUserBtn = findViewById(R.id.someone_else_user_btn)
+        participantUserBtn.isEnabled = false
+        someoneElseUserBtn.isEnabled = false
+        lifecycleScope.launch(storageFailureHandler()) {
+            withContext(Dispatchers.IO) { EnrollmentSettings(applicationContext) }
+            participantUserBtn.isEnabled = !saveState.saving
+            someoneElseUserBtn.isEnabled = !saveState.saving
         }
-        childUserBtn = findViewById(R.id.child_user_btn)
-        otherUserBtn = findViewById(R.id.other_user_btn)
+        saveState.outcome.observe(this) { outcome ->
+            if (outcome == null) return@observe
+            saveState.outcome.value = null
+            participantUserBtn.isEnabled = true
+            someoneElseUserBtn.isEnabled = true
+            lifecycleScope.launch(storageFailureHandler()) {
+                val result = outcome.getOrThrow()
+                if (result is ModuleResult.Ok) {
+                    Toast.makeText(this@UserIdentificationActivity,
+                        getString(R.string.user_set_toast, getString(TargetUserRouter.label(saveState.targetUser))), Toast.LENGTH_SHORT).show()
+                    finish()
+                } else {
+                    Toast.makeText(this@UserIdentificationActivity,
+                        getString(TargetUserRouter.failureMessage(result)), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
 
         // listeners
-        otherUserBtn.setOnClickListener {
+        someoneElseUserBtn.setOnClickListener {
             handleOnSave(it.id)
         }
 
-        childUserBtn.setOnClickListener {
+        participantUserBtn.setOnClickListener {
             handleOnSave(it.id)
         }
     }
 
     private fun handleOnSave(buttonId: Int) {
-        val targetUser = if (buttonId == R.id.other_user_btn) getString(R.string.user_other) else getString(R.string.user_target_child)
-        childUserBtn.isEnabled = false
-        otherUserBtn.isEnabled = false
+        val targetUser = if (buttonId == R.id.someone_else_user_btn) DeviceUser.SOMEONE_ELSE else DeviceUser.STUDY_PARTICIPANT
+        participantUserBtn.isEnabled = false
+        someoneElseUserBtn.isEnabled = false
 
-        lifecycleScope.launch {
-            val result = try {
-                withContext(Dispatchers.IO) {
-                    TargetUserRouter.setTargetUser(this@UserIdentificationActivity, targetUser, settings)
-                }
-            } catch (error: LocalStoreRecoveryRequiredException) {
-                startActivity(LocalStoreRecoveryActivity.intent(this@UserIdentificationActivity, error.recoveryReason))
-                finish()
-                return@launch
-            }
-
-            if (result is ModuleResult.Ok) {
-                scheduleChronicleSyncWork(this@UserIdentificationActivity)
-                Toast.makeText(
-                    this@UserIdentificationActivity,
-                    getString(R.string.user_set_toast, targetUser),
-                    Toast.LENGTH_SHORT,
-                ).show()
-                finish()
-            } else {
-                childUserBtn.isEnabled = true
-                otherUserBtn.isEnabled = true
-                Toast.makeText(
-                    this@UserIdentificationActivity,
-                    getString(R.string.user_save_failed),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        }
+        saveState.save(applicationContext, targetUser)
     }
 }

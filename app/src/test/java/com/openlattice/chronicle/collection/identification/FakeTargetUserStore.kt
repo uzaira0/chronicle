@@ -1,8 +1,6 @@
 package com.openlattice.chronicle.collection.identification
 
 import com.openlattice.chronicle.storage.UserQueueEntry
-import java.util.NavigableMap
-import java.util.TreeMap
 
 /**
  * In-memory [TargetUserStore] for JVM unit tests of [UserIdentificationCollectionModule].
@@ -44,10 +42,7 @@ class FakeTargetUserStore : TargetUserStore {
     }
 
     override fun readCurrentUserPref(unassignedDefault: String): String =
-        userTimestamps().lastEntry()?.value ?: unassignedDefault
+        queueRows.lastOrNull()?.user ?: unassignedDefault
 
     override fun userQueueDepth(): Int = queueRows.size
-
-    override fun userTimestamps(): NavigableMap<Long, String> =
-        queueRows.associateTo(TreeMap<Long, String>()) { it.writeTimestamp to it.user }
 }

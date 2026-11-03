@@ -34,12 +34,12 @@
             android:layout_height="wrap_content"
             android:accessibilityHeading="true"
             android:gravity="center"
-            android:maxWidth="560dp"
+            android:maxWidth="@dimen/chronicle_title_max_width"
             android:text="@string/select_current_user_prompt"
-            android:textAppearance="@style/TextAppearance.MaterialComponents.Headline6" />
+            android:textAppearance="@style/Chronicle.Title" />
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/child_user_btn"
+            android:id="@+id/participant_user_btn"
             style="@style/Chronicle.Button.Secondary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -47,15 +47,15 @@
             android:gravity="center"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:maxWidth="480dp"
-            android:minHeight="56dp"
-            android:text="@string/user_target_child"
+            android:maxWidth="@dimen/chronicle_text_max_width"
+            android:minHeight="@dimen/chronicle_touch_target_large"
+            android:text="@string/user_study_participant_label"
             app:icon="@drawable/star"
-            app:iconSize="28dp"
+            app:iconSize="@dimen/chronicle_identification_icon_size"
             app:iconTint="@null" />
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/other_user_btn"
+            android:id="@+id/someone_else_user_btn"
             style="@style/Chronicle.Button.Secondary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -63,9 +63,9 @@
             android:gravity="center"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:maxWidth="480dp"
-            android:minHeight="56dp"
-            android:text="@string/user_other" />
+            android:maxWidth="@dimen/chronicle_text_max_width"
+            android:minHeight="@dimen/chronicle_touch_target_large"
+            android:text="@string/user_someone_else_label" />
 
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

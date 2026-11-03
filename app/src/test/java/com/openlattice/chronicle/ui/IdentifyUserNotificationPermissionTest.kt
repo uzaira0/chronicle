@@ -62,8 +62,8 @@ class IdentifyUserNotificationPermissionTest {
             notificationPermissionGranted = false,
         )
 
+        assertEquals(UserIdentificationRuntimeState.NEEDS_NOTIFICATION_RECOVERY, state)
         assertFalse(state.effective)
-        assertTrue(state.needsNotificationRecovery)
     }
 
     @Test
@@ -74,8 +74,7 @@ class IdentifyUserNotificationPermissionTest {
             notificationPermissionGranted = true,
         )
 
-        assertTrue(state.effective)
-        assertFalse(state.needsNotificationRecovery)
+        assertEquals(UserIdentificationRuntimeState.RUNNING, state)
     }
 
     @Test
@@ -87,8 +86,8 @@ class IdentifyUserNotificationPermissionTest {
             runtimeStartDeferred = true,
         )
 
+        assertEquals(UserIdentificationRuntimeState.START_DEFERRED, state)
         assertFalse(state.effective)
-        assertTrue(state.startDeferred)
     }
 
     @Test
@@ -97,8 +96,7 @@ class IdentifyUserNotificationPermissionTest {
             userIdentificationRuntimeState(false, true, true),
             userIdentificationRuntimeState(true, false, true),
         ).forEach { state ->
-            assertFalse(state.effective)
-            assertFalse(state.needsNotificationRecovery)
+            assertEquals(UserIdentificationRuntimeState.OFF, state)
         }
     }
 
@@ -111,9 +109,8 @@ class IdentifyUserNotificationPermissionTest {
             promptPopsUp = false,
         )
 
+        assertEquals(UserIdentificationRuntimeState.RUNNING_SILENT, state)
         assertTrue(state.effective)
-        assertTrue(state.promptSilent)
-        assertFalse(state.needsNotificationRecovery)
     }
 
     @Test
@@ -125,6 +122,6 @@ class IdentifyUserNotificationPermissionTest {
             promptPopsUp = false,
         )
 
-        assertFalse(state.promptSilent)
+        assertEquals(UserIdentificationRuntimeState.OFF, state)
     }
 }

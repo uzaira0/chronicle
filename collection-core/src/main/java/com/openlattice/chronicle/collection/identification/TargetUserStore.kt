@@ -1,7 +1,6 @@
 package com.openlattice.chronicle.collection.identification
 
 import com.openlattice.chronicle.storage.UserQueueEntry
-import java.util.NavigableMap
 
 /**
  * Context-free persistence seam for the user-identification module (design §1C, refactor
@@ -22,7 +21,7 @@ import java.util.NavigableMap
  * [UserIdentificationModuleHolder].
  *
  * **No identity collection.** This store touches only the participant *label* the device
- * operator selects locally (`Target child` / `Other` / `Not set`). It never reads Android
+ * operator selects locally (`Study participant` / `Someone else` / `Not set`). It never reads Android
  * account, contact, or device-owner identity (refactor plan §10.1 guardrail 3).
  *
  */
@@ -46,11 +45,4 @@ public interface TargetUserStore {
 
     /** Current number of rows in the `userQueue` table. */
     public fun userQueueDepth(): Int
-
-    /**
-     * Returns the `userQueue` rows as a timestamp → user map, newest-first ordering
-     * preserved by the DAO. Mirrors the `UserStorageQueue.getUserTimestamps()` read that
-     * usage collection associates into a `TreeMap` for the nearest-lower-timestamp lookup.
-     */
-    public fun userTimestamps(): NavigableMap<Long, String>
 }

@@ -3,12 +3,10 @@ package com.openlattice.chronicle.collection.identification
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.openlattice.chronicle.IsolatedChronicleTestDb
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UserQueueEntry
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -65,17 +63,12 @@ class UserIdentificationModuleInstrumentedTest {
         override fun writeCurrentUserPref(user: String) { pref = user }
         override fun readCurrentUserPref(unassignedDefault: String): String = pref ?: unassignedDefault
         override fun userQueueDepth(): Int = db.userQueueEntryData().getUserTimestamps().size
-        override fun userTimestamps() =
-            db.userQueueEntryData().getUserTimestamps()
-                .associateTo(java.util.TreeMap<Long, String>()) { it.writeTimestamp to it.user }
     }
 
     private fun module(store: TargetUserStore, enabled: Boolean) =
         UserIdentificationCollectionModule(
             store = store,
             userIdentificationEnabled = { enabled },
-            unassignedUserLabel = "Not set",
-            log = NoOpCollectionLog,
         )
 
     @Test
@@ -83,29 +76,25 @@ class UserIdentificationModuleInstrumentedTest {
         val store = RoomBackedTargetUserStore()
         val m = module(store, enabled = true)
 
-        val result = m.setTargetUser("Target child")
+        val result = m.setTargetUser("Study participant")
 
         assertEquals(ModuleResult.Ok(1), result)
         val rows = db.userQueueEntryData().getUserTimestamps()
         assertEquals(1, rows.size)
-        assertEquals("Target child", rows.single().user)
-        assertEquals("Target child", store.pref)
+        assertEquals("Study participant", rows.single().user)
+        assertEquals("Study participant", store.pref)
     }
 
     @Test
-    fun repeatedSelectionsAppendRowsAndTheTimestampLookupResolvesTheLatest() {
+    fun repeatedSelectionsAppendRowsAndTheLatestDecisionIsCurrent() {
         val store = RoomBackedTargetUserStore()
         val m = module(store, enabled = true)
 
-        m.setTargetUser("Target child")
-        Thread.sleep(2) // ensure a strictly greater writeTimestamp for the second row
-        m.setTargetUser("Other")
+        m.setTargetUser("Study participant")
+        Thread.sleep(2) // the writeTimestamp primary key needs a distinct millisecond per row
+        m.setTargetUser("Someone else")
 
-        assertEquals(2, db.userQueueEntryData().getUserTimestamps().size)
-        val users = m.loadUserTimestampMap()
-        // The lookup intentionally uses lowerEntry, so prove the event is strictly after the
-        // persisted millisecond instead of relying on the test thread crossing a clock tick.
-        assertEquals("Other", m.resolveUserForEvent(users.lastKey() + 1L, users))
+        assertEquals(listOf("Someone else", "Study participant"), db.userQueueEntryData().getUserTimestamps().map { it.user })
     }
 
     @Test
@@ -113,35 +102,10 @@ class UserIdentificationModuleInstrumentedTest {
         val store = RoomBackedTargetUserStore()
         val m = module(store, enabled = false)
 
-        val result = m.setTargetUser("Target child")
+        val result = m.setTargetUser("Study participant")
 
         assertTrue("expected Skipped, got $result", result is ModuleResult.Skipped)
         assertEquals(0, db.userQueueEntryData().getUserTimestamps().size)
     }
 
-    @Test
-    fun notSetSelectionResolvesToEmptyUserOverTheRealTable() {
-        val store = RoomBackedTargetUserStore()
-        val m = module(store, enabled = true)
-
-        m.setTargetUser("Not set")
-
-        val users = m.loadUserTimestampMap()
-        assertEquals(1, users.size)
-        // The "Not set" label maps to the empty user, never the literal label.
-        assertEquals("", m.resolveUserForEvent(System.currentTimeMillis(), users))
-    }
-
-    @Test
-    fun diagnosticsOverTheRealTableCarryNoRawParticipantLabel() {
-        val store = RoomBackedTargetUserStore()
-        val m = module(store, enabled = true)
-        m.setTargetUser("Target child")
-
-        val d = m.diagnostics()
-        val rendered = d.lastResult.orEmpty() + d.lastError.orEmpty() +
-            d.redactedParticipantRef.orEmpty() + d.notTracked.joinToString()
-        assertFalse(rendered.contains("Target child"))
-        assertEquals(1, d.queueDepth)
-    }
 }

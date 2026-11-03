@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.collection.identification
 
 import android.content.Context
+import androidx.annotation.StringRes
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
@@ -26,47 +27,28 @@ internal fun targetUserWriteRoute(
     else -> TargetUserWriteRoute.REJECT
 }
 
-/**
- * Routes a target-user write to either the Phase 7 module-manager path or the legacy
- * inline `EnrollmentSettings.setTargetUser` path.
- *
- * This is the single owner of the Phase 7A migration-switch decision. It lives in `:app`
- * (in the `collection.identification` package) precisely so that `preferences` does not
- * depend on `collection.*` — the previous back-edge. `EnrollmentSettings.setTargetUser`
- * is now the plain legacy write with no knowledge of the module path; callers route
- * through this object instead of calling `EnrollmentSettings.setTargetUser` directly
- * when the migration switch may apply.
- *
- * Behaviour is byte-for-byte identical to the pre-refactor `EnrollmentSettings.setTargetUser`:
- *
- *  - When [UserIdentificationMigration.USE_MODULE_MANAGER_USER_IDENTIFICATION_PATH] is
- *    `true` **and** user identification is enabled, the write routes through
- *    [UserIdentificationCollectionModule].
- *  - Otherwise (switch off, or the disable transition writing the `user_unassigned`
- *    "Not set" label while user identification is off) the write falls through to the
- *    legacy [EnrollmentSettings.setTargetUser] inline body. A disabled module is a no-op
- *    by contract and must not suppress the "Not set" write.
- *
- * The switch is now `true` (activated after parity), so the *enabled* write routes through
- * [UserIdentificationCollectionModule]; the disable→`user_unassigned` write still falls
- * through to the legacy path because the router gates the module path on the enabled flag.
- */
+/** Routes authorized user writes through the module; disabling can reset the label. */
 object TargetUserRouter {
 
-    /**
-     * Sets the device target user, choosing the module path or the legacy path per the
-     * Phase 7A migration switch. [enrollmentSettings] is reused when the caller already
-     * holds one; otherwise a fresh instance is constructed (identical to the historical
-     * call sites that did `EnrollmentSettings(context).setTargetUser(...)`).
-     */
+    fun failureMessage(result: ModuleResult): Int =
+        if (result is ModuleResult.Skipped) R.string.user_identification_unavailable else R.string.user_save_failed
+
+    /** What a screen shows for [user]; only [DeviceUser.stored] is ever written. */
+    @StringRes
+    fun label(user: DeviceUser): Int = when (user) {
+        DeviceUser.STUDY_PARTICIPANT -> R.string.user_study_participant_label
+        DeviceUser.SOMEONE_ELSE -> R.string.user_someone_else_label
+        DeviceUser.NOT_SET -> R.string.user_unassigned_label
+    }
+
     fun setTargetUser(
         context: Context,
-        user: String,
+        user: DeviceUser,
         enrollmentSettings: EnrollmentSettings? = null,
     ): ModuleResult = try {
         // Construct inside the guarded block. Default-argument expressions are evaluated by the
-        // caller before this method starts, which previously let local-store recovery failures
-        // escape the router's error contract.
+        // caller before this method starts, so local-store recovery failures would escape the
+        // router's error contract.
         val settings = enrollmentSettings ?: EnrollmentSettings(context)
         var result: ModuleResult = ModuleResult.Skipped("no active study enrollment")
         val persisted = ResearchPersistenceGate.persistIfActive(context) {
@@ -79,19 +61,12 @@ object TargetUserRouter {
                         studyAuthorized = settings.isUserIdentificationStudyAuthorized(),
                         participantEnabled = settings.isUserIdentificationEnabled() &&
                             CollectionGate.collects(context, CollectionModuleId.USER_IDENTIFICATION),
-                        resettingToUnassigned = user == context.getString(R.string.user_unassigned),
+                        resettingToUnassigned = user == DeviceUser.NOT_SET,
                     )
                 ) {
-                    TargetUserWriteRoute.MODULE -> {
-                        if (UserIdentificationMigration.USE_MODULE_MANAGER_USER_IDENTIFICATION_PATH) {
-                            UserIdentificationModuleHolder.get(context).setTargetUser(user)
-                        } else {
-                            settings.setTargetUser(user)
-                            ModuleResult.Ok(1)
-                        }
-                    }
+                    TargetUserWriteRoute.MODULE -> UserIdentificationModuleHolder.get(context).setTargetUser(user.stored)
                     TargetUserWriteRoute.RESET_TO_UNASSIGNED -> {
-                        settings.setTargetUser(user)
+                        settings.setTargetUser(user.stored)
                         ModuleResult.Ok(1)
                     }
                     TargetUserWriteRoute.REJECT ->

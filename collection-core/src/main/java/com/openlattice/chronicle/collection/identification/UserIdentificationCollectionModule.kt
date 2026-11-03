@@ -1,26 +1,15 @@
 package com.openlattice.chronicle.collection.identification
 
-import android.content.Context
-import com.openlattice.chronicle.collection.CollectionModuleDiagnostics
-import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.CollectionPrivacyClass
-import com.openlattice.chronicle.collection.core.CollectionClock
-import com.openlattice.chronicle.collection.core.CollectionLog
-import com.openlattice.chronicle.collection.core.CollectionModuleStatus
-import com.openlattice.chronicle.collection.core.CollectionWindow
-import com.openlattice.chronicle.collection.core.DataCollectionModule
+import android.util.Log
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.storage.UserQueueEntry
-import java.util.NavigableMap
 
 private const val TAG = "UserIdentificationCollectionModule"
 
 /**
- * The user-identification data collection module (design §1A.2 `user_identification`,
- * refactor plan §10, subphase 7A).
+ * The user-identification data collection module (design §1A.2 `user_identification`).
  *
- * Phase 7A wraps the pre-existing current-user-queue behaviour behind the
- * [DataCollectionModule] boundary **without changing any observed behaviour**:
+ * Wraps the current-user-queue behaviour **without changing any observed behaviour**:
  *
  *  - **Privacy class `LOCAL_PARTICIPANT_LABEL`** (design §1A.4) — a participant label the
  *    device operator selects locally. It is pref-controlled and **never enabled
@@ -31,15 +20,8 @@ private const val TAG = "UserIdentificationCollectionModule"
  *    `userQueue` Room table **and** the `current_user` EncryptedSharedPreferences key is
  *    mirrored after the Room insert commits. Display and attribution both read committed
  *    history, so a failed insert cannot change the displayed selection.
- *  - **"Not set" → empty user** — [resolveUserForEvent] is the exact `getTargetUser`
- *    logic from `UsageEventsChronicleSensor`: the nearest-lower-timestamp lookup, with a
- *    missing entry **or** the `Not set` label both resolving to the empty string. Usage
- *    collection keeps calling its own inline copy this phase; this method exists so the
- *    rule has a tested home and so a later phase can route the sensor through it.
- *  - **Timestamp lookup preserved** — [loadUserTimestampMap] exposes the
- *    `UserStorageQueue.getUserTimestamps()` → `TreeMap` read that usage collection uses
- *    for the per-event nearest-lower-timestamp lookup. Phase 7 does not migrate
- *    `UsageModuleCollectionDelegate`'s call site; the method is additive.
+ *  - **Labels** — which selection labels a usage event is `UsageEventsChronicleSensor`'s rule
+ *    alone (session-bounded, over `UserStorageQueue.labelTimeline`).
  *  - **`DeviceUnlockMonitoringService` behaviour unchanged** — the unlock-prompt flow
  *    (`DeviceUnlockMonitoringService` → `UnlockDeviceReceiver` → `UserIdentificationActivity`
  *    → `setTargetUser`) is untouched; only the `setTargetUser` write is encapsulated, and
@@ -48,16 +30,15 @@ private const val TAG = "UserIdentificationCollectionModule"
  * **Diagnostics (refactor plan §10.1 steps 8–9) — redacted.** Diagnostics expose the
  * enabled flag, the epoch-millis of the last target-user update, and the `userQueue`
  * depth (a row count). They **never** expose the raw participant label — not the string,
- * not a hash, not a length. The configurable labels (`Target child`, `Other`) are
+ * not a hash, not a length. The configurable labels (`Study participant`, `Someone else`) are
  * study-defined participant identifiers; the only safe telemetry is "did an update
  * happen and when" (refactor plan §10.1 guardrails 1 & 3, design §1B.3).
  *
- * This is a plain class holding only its seams ([store], [userIdentificationEnabled],
- * [unassignedUserLabel], clock, log) — no Android [Context]. Each seam resolves whatever
+ * This is a plain class holding only its seams ([store], [userIdentificationEnabled]) — no
+ * Android `Context`. Each seam resolves whatever
  * `Context` it needs at construction (via [UserIdentificationModuleHolder]) and keeps only
  * a `Context`-free handle, so the module never stores a `Context` (design §1C / refactor
- * plan §6.1 guardrail 2). A single app-scoped instance is shared so the last-update
- * diagnostic accumulates across target-user selections — see [UserIdentificationModuleHolder].
+ * plan §6.1 guardrail 2); see [UserIdentificationModuleHolder].
  *
  */
 public class UserIdentificationCollectionModule(
@@ -68,135 +49,29 @@ public class UserIdentificationCollectionModule(
      * tests pass a fixed boolean. A disabled module is a no-op (design §1C.1).
      */
     private val userIdentificationEnabled: () -> Boolean,
-    /**
-     * The `user_unassigned` label ("Not set"). Resolved from `R.string.user_unassigned`
-     * at construction so the module never touches a `Context`. Used as the
-     * `getCurrentUser` default and as the sentinel that [resolveUserForEvent] maps to "".
-     */
-    private val unassignedUserLabel: String,
-    private val clock: CollectionClock = CollectionClock.SYSTEM,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
-) : DataCollectionModule {
-
-    override val id: CollectionModuleId = CollectionModuleId.USER_IDENTIFICATION
-
-    override val privacyClass: CollectionPrivacyClass = id.privacyClass
-
-    init {
-        require(privacyClass == id.privacyClass) {
-            "UserIdentificationCollectionModule.privacyClass must equal id.privacyClass"
-        }
-    }
-
-    // ----- module diagnostics state (design §1B.3 — redaction-safe operational telemetry).
-    // NOTE: no raw / hashed / length-derived participant label is ever stored here.
-    @Volatile private var lastResult: ModuleResult = ModuleResult.Skipped("not yet run")
-    @Volatile private var lastTargetUserUpdateEpochMs: Long? = null
-    @Volatile private var lastError: String? = null
+) {
 
     /** Room history is authoritative; update the preference only after its insert commits. */
     public fun setTargetUser(user: String): ModuleResult {
         if (!userIdentificationEnabled()) {
-            log.info(TAG, "user_identification disabled; setTargetUser is a no-op")
-            lastResult = ModuleResult.Skipped("user identification disabled")
-            return lastResult
+            Log.i(TAG, "user_identification disabled; setTargetUser is a no-op")
+            return ModuleResult.Skipped("user identification disabled")
         }
         return try {
             store.insertUserQueueEntry(UserQueueEntry(user = user))
             store.writeCurrentUserPref(user)
-            lastTargetUserUpdateEpochMs = clock.nowEpochMs()
-            lastError = null
             // itemsCollected is the one queue row written; the label itself is never logged.
-            lastResult = ModuleResult.Ok(1)
-            log.info(TAG, "Target user updated (label redacted)")
-            lastResult
+            Log.i(TAG, "Target user updated (label redacted)")
+            ModuleResult.Ok(1)
         } catch (e: Exception) {
-            lastError = "target-user write failed: ${e.javaClass.simpleName}"
-            lastResult = ModuleResult.Failed(e, redactedMessage = lastError!!)
-            log.error(TAG, "Failed to persist target user (label redacted)", e)
-            lastResult
+            Log.e(TAG, "Failed to persist target user (label redacted)", e)
+            ModuleResult.Failed(e, redactedMessage = "target-user write failed: ${e.javaClass.simpleName}")
         }
     }
 
     /** Display the last committed attribution even when updating the preference failed. */
-    public fun currentUser(): String = store.readCurrentUserPref(unassignedUserLabel)
+    public fun currentUser(): String = DeviceUser.current(store.readCurrentUserPref(DeviceUser.NOT_SET.stored))
 
     /** Whether user identification is currently enabled by the `identify_user` preference. */
     public fun isEnabled(): Boolean = userIdentificationEnabled()
-
-    /**
-     * Loads the `userQueue` rows as a timestamp → user [NavigableMap], for the per-event
-     * nearest-lower-timestamp lookup. Equivalent to the
-     * `UserStorageQueue.getUserTimestamps()` read + `TreeMap` association in
-     * `UsageModuleCollectionDelegate`. Additive — Phase 7 does not switch that call site.
-     */
-    public fun loadUserTimestampMap(): NavigableMap<Long, String> = store.userTimestamps()
-
-    /**
-     * Resolves the participant label for an event at [eventTimestamp] against [users] —
-     * the exact `UsageEventsChronicleSensor.getTargetUser` logic, kept byte-for-byte:
-     *
-     *  - the nearest entry with a strictly lower timestamp (`users.lowerEntry`);
-     *  - a missing entry **or** the `user_unassigned` ("Not set") label both resolve to
-     *    the empty string `""`.
-     *
-     * This is the canonical "Not set → empty user" mapping. Usage collection keeps its
-     * own inline copy this phase; this method gives the rule a single tested home.
-     */
-    public fun resolveUserForEvent(
-        eventTimestamp: Long,
-        users: NavigableMap<Long, String>,
-    ): String {
-        val user = users.lowerEntry(eventTimestamp)?.value
-        return if (user == null || user == unassignedUserLabel) "" else user
-    }
-
-    override fun status(): CollectionModuleStatus = when {
-        !userIdentificationEnabled() -> CollectionModuleStatus.DISABLED
-        lastResult is ModuleResult.Failed -> CollectionModuleStatus.FAILED
-        else -> CollectionModuleStatus.IDLE
-    }
-
-    /**
-     * Operational telemetry — **redaction-safe** (design §1B.3, refactor plan §10.1).
-     *
-     * Exposes only: the enabled flag, the epoch-millis of the last target-user update,
-     * the `userQueue` depth, the last-result label, and a redacted error message. The
-     * raw participant label is never present in any form — not the string, not a hash,
-     * not a length. `redactedParticipantRef` is left `null`: the module deliberately
-     * derives no participant reference at all.
-     */
-    override fun diagnostics(): CollectionModuleDiagnostics = CollectionModuleDiagnostics(
-        moduleId = id,
-        privacyClass = privacyClass,
-        lastRunEpochMs = lastTargetUserUpdateEpochMs,
-        lastResult = lastResult.label,
-        itemsCollected = if (lastResult is ModuleResult.Ok) (lastResult as ModuleResult.Ok).items else 0,
-        queueDepth = runCatching { store.userQueueDepth() }.getOrDefault(0),
-        lastError = lastError,
-        redactedParticipantRef = null,
-        // Module-specific telemetry with no first-class DTO field. Only the enabled flag
-        // and the last-update timestamp are surfaced — never the participant label.
-        notTracked = buildSet {
-            add("userIdentificationEnabled=${userIdentificationEnabled()}")
-            val ts = lastTargetUserUpdateEpochMs
-            if (ts != null) add("lastTargetUserUpdate=$ts") else add("lastTargetUserUpdate")
-        },
-    )
-
-    /** No-op: user identification is preference/broadcast driven, not a push service. */
-    override fun start(context: Context): ModuleResult =
-        ModuleResult.Skipped("user_identification is preference-driven; use setTargetUser()")
-
-    /** No-op: user identification is preference/broadcast driven, not a push service. */
-    override fun stop(context: Context): ModuleResult =
-        ModuleResult.Skipped("user_identification is preference-driven")
-
-    /** No-op: user identification has no pull-style poll window. */
-    override fun poll(context: Context, window: CollectionWindow): ModuleResult =
-        ModuleResult.Skipped("user_identification is preference-driven; no poll window")
-
-    /** No-op: this module buffers nothing in memory; the write is per-selection. */
-    override fun flush(context: Context): ModuleResult =
-        ModuleResult.Skipped("user_identification buffers nothing")
 }

@@ -5,6 +5,7 @@ import android.widget.Button
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.identification.DeviceUser
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -30,11 +31,11 @@ class UserIdentificationDecisionTest {
         ActivityScenario.launch<UserIdentificationActivity>(
             Intent(AppTestState.context, UserIdentificationActivity::class.java)
         ).use { scenario ->
-            scenario.onActivity { it.findViewById<Button>(R.id.child_user_btn).performClick() }
-            waitForCurrentUser(AppTestState.context.getString(R.string.user_target_child))
+            scenario.onActivity { it.findViewById<Button>(R.id.participant_user_btn).performClick() }
+            waitForCurrentUser(DeviceUser.STUDY_PARTICIPANT.stored)
         }
 
-        assertEquals(AppTestState.context.getString(R.string.user_target_child), EnrollmentSettings(AppTestState.context).getCurrentUser())
+        assertEquals(DeviceUser.STUDY_PARTICIPANT.stored, EnrollmentSettings(AppTestState.context).getCurrentUser())
         assertTrue(AppTestState.db().userQueueEntryData().getUserTimestamps().isNotEmpty())
     }
 
@@ -43,11 +44,11 @@ class UserIdentificationDecisionTest {
         ActivityScenario.launch<UserIdentificationActivity>(
             Intent(AppTestState.context, UserIdentificationActivity::class.java)
         ).use { scenario ->
-            scenario.onActivity { it.findViewById<Button>(R.id.other_user_btn).performClick() }
-            waitForCurrentUser(AppTestState.context.getString(R.string.user_other))
+            scenario.onActivity { it.findViewById<Button>(R.id.someone_else_user_btn).performClick() }
+            waitForCurrentUser(DeviceUser.SOMEONE_ELSE.stored)
         }
 
-        assertEquals(AppTestState.context.getString(R.string.user_other), EnrollmentSettings(AppTestState.context).getCurrentUser())
+        assertEquals(DeviceUser.SOMEONE_ELSE.stored, EnrollmentSettings(AppTestState.context).getCurrentUser())
         assertTrue(AppTestState.db().userQueueEntryData().getUserTimestamps().isNotEmpty())
     }
 
@@ -56,18 +57,18 @@ class UserIdentificationDecisionTest {
         ActivityScenario.launch<UserIdentificationActivity>(
             Intent(AppTestState.context, UserIdentificationActivity::class.java)
         ).use { scenario ->
-            scenario.onActivity { it.findViewById<Button>(R.id.child_user_btn).performClick() }
-            waitForCurrentUser(AppTestState.context.getString(R.string.user_target_child))
+            scenario.onActivity { it.findViewById<Button>(R.id.participant_user_btn).performClick() }
+            waitForCurrentUser(DeviceUser.STUDY_PARTICIPANT.stored)
         }
         ActivityScenario.launch<UserIdentificationActivity>(
             Intent(AppTestState.context, UserIdentificationActivity::class.java)
         ).use { scenario ->
-            scenario.onActivity { it.findViewById<Button>(R.id.other_user_btn).performClick() }
-            waitForCurrentUser(AppTestState.context.getString(R.string.user_other))
+            scenario.onActivity { it.findViewById<Button>(R.id.someone_else_user_btn).performClick() }
+            waitForCurrentUser(DeviceUser.SOMEONE_ELSE.stored)
         }
 
         val rows = AppTestState.db().userQueueEntryData().getUserTimestamps()
-        assertEquals(AppTestState.context.getString(R.string.user_other), EnrollmentSettings(AppTestState.context).getCurrentUser())
+        assertEquals(DeviceUser.SOMEONE_ELSE.stored, EnrollmentSettings(AppTestState.context).getCurrentUser())
         assertTrue("each tap appends a persisted identification row", rows.size >= 2)
     }
 
