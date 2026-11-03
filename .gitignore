@@ -21,3 +21,8 @@ app/keystore
 app/libs/**/*.jar
 .kotlin/
 .codex/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example

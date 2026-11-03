@@ -27,10 +27,10 @@ Full notes per release are in the monorepo `CHANGELOG.md`.
   accepted module still needs Android access (Usage Access), and Overview says so; questionnaire reminders are delivered
   again, including when the alarm starts the app; no false enrollment screen after the app is killed; rotating the phone
   keeps the invitation and consent progress; lifecycle events refused for low storage are counted as lost.
-- versionCode 64, `2026.09.29-internal.open.1` (release 2026.9.29): fixes from the 2026.9.28 review: persistence lock-order hangs fixed; low-storage batches retried or counted as lost, never dropped silently;
+- versionCode 64, `2026.09.29-internal.open.1` (release 2026.9.29): persistence lock-order hangs fixed; low-storage batches retried or counted as lost, never dropped silently;
   discarded sensors erased from retry buffers and direct-boot files, including interrupted erasures; direct-boot
   files readable across release builds (R8 keep rules); app-network usage never read across enrollments.
-  Codebase sweep: no callback waits on the database or persistence lock (ANR); start-up storage/crypto/WorkManager
+  No callback waits on the database or persistence lock (ANR); start-up storage/crypto/WorkManager
   failures contained and retried; observations captured before a switch-off, withdrawal or enrollment change never
   stored or uploaded; switch-off clears cursors, queues, survey alarms and sealed files; build-63 checkpoints kept.
 - versionCode 63, `2026.09.28-internal.open.1` (release 2026.9.28): diagnostics kept until the
