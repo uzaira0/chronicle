@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 21,
-    "identityHash": "88d71df2b4421845770f41148f87b3c7",
+    "version": 4,
+    "identityHash": "892ffb5061c469fb8d41614ee6471b1c",
     "entities": [
       {
         "tableName": "dataQueue",
@@ -58,7 +58,7 @@
       },
       {
         "tableName": "userQueue",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `user` TEXT NOT NULL, PRIMARY KEY(`writeTimestamp`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`writeTimestamp` INTEGER NOT NULL, `user` TEXT NOT NULL, `seq` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`writeTimestamp`))",
         "fields": [
           {
             "fieldPath": "writeTimestamp",
@@ -71,6 +71,13 @@
             "columnName": "user",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "seq",
+            "columnName": "seq",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -171,7 +178,7 @@
       },
       {
         "tableName": "battery_samples",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `levelPercent` INTEGER NOT NULL, `chargingState` TEXT NOT NULL, `plugType` TEXT NOT NULL, `temperatureDeciC` INTEGER NOT NULL, `voltageMillivolts` INTEGER NOT NULL, `health` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `levelPercent` INTEGER NOT NULL, `chargingState` TEXT NOT NULL, `plugType` TEXT NOT NULL, `temperatureDeciC` INTEGER NOT NULL, `voltageMillivolts` INTEGER NOT NULL, `health` TEXT NOT NULL, `producerVersion` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -226,6 +233,11 @@
             "columnName": "health",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "producerVersion",
+            "columnName": "producerVersion",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -237,7 +249,7 @@
       },
       {
         "tableName": "interaction_samples",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `eventType` TEXT NOT NULL, `gridRows` INTEGER NOT NULL, `gridCols` INTEGER NOT NULL, `gridRow` INTEGER NOT NULL, `gridCol` INTEGER NOT NULL, `elementRole` TEXT NOT NULL, `foregroundPackage` TEXT NOT NULL, `rawX` INTEGER, `rawY` INTEGER, `screenWidth` INTEGER, `screenHeight` INTEGER, `normalizedX` REAL, `normalizedY` REAL, `scrollDeltaX` INTEGER, `scrollDeltaY` INTEGER, `eventTimeMillis` INTEGER, `episodeId` TEXT, `dwellMillisSincePrev` INTEGER, `orientation` INTEGER, `screenDensityDpi` INTEGER, `scrollVelocityX` REAL, `scrollVelocityY` REAL, `scrollReversed` INTEGER, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `timezone` TEXT NOT NULL, `eventType` TEXT NOT NULL, `gridRows` INTEGER NOT NULL, `gridCols` INTEGER NOT NULL, `gridRow` INTEGER NOT NULL, `gridCol` INTEGER NOT NULL, `elementRole` TEXT NOT NULL, `foregroundPackage` TEXT NOT NULL, `positionSource` TEXT, `nodeBoundsLeft` INTEGER, `nodeBoundsTop` INTEGER, `nodeBoundsRight` INTEGER, `nodeBoundsBottom` INTEGER, `displayId` INTEGER, `rawX` INTEGER, `rawY` INTEGER, `screenWidth` INTEGER, `screenHeight` INTEGER, `normalizedX` REAL, `normalizedY` REAL, `scrollDeltaX` INTEGER, `scrollDeltaY` INTEGER, `eventTimeMillis` INTEGER, `episodeId` TEXT, `dwellMillisSincePrev` INTEGER, `orientation` INTEGER, `screenDensityDpi` INTEGER, `scrollVelocityX` REAL, `scrollVelocityY` REAL, `scrollReversed` INTEGER, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -298,6 +310,36 @@
             "columnName": "foregroundPackage",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "positionSource",
+            "columnName": "positionSource",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nodeBoundsLeft",
+            "columnName": "nodeBoundsLeft",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nodeBoundsTop",
+            "columnName": "nodeBoundsTop",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nodeBoundsRight",
+            "columnName": "nodeBoundsRight",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nodeBoundsBottom",
+            "columnName": "nodeBoundsBottom",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "displayId",
+            "columnName": "displayId",
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "rawX",
@@ -1036,13 +1078,20 @@
       },
       {
         "tableName": "upload_servers",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `url` TEXT NOT NULL, `studyId` TEXT NOT NULL, `participantId` TEXT NOT NULL, `sourceDeviceId` TEXT NOT NULL, `authMode` TEXT NOT NULL, `apiKey` TEXT, `mobileSigningSecretOverride` TEXT, `enabled` INTEGER NOT NULL, `lastUploadTime` TEXT, `lastUploadError` TEXT, `consecutiveFailures` INTEGER NOT NULL, `lastSensorUploadTime` TEXT, `lastSensorUploadError` TEXT, `sensorConsecutiveFailures` INTEGER NOT NULL, `lastBatteryUploadTime` TEXT, `lastBatteryUploadError` TEXT, `batteryConsecutiveFailures` INTEGER NOT NULL, `lastUsageUploadAttemptTime` TEXT, `lastUsageUploadSuccessTime` TEXT, `usageUploadSuccessCount` INTEGER NOT NULL, `usageUploadFailureCount` INTEGER NOT NULL, `lastSensorUploadAttemptTime` TEXT, `lastSensorUploadSuccessTime` TEXT, `sensorUploadSuccessCount` INTEGER NOT NULL, `sensorUploadFailureCount` INTEGER NOT NULL, `lastBatteryUploadAttemptTime` TEXT, `lastBatteryUploadSuccessTime` TEXT, `batteryUploadSuccessCount` INTEGER NOT NULL, `batteryUploadFailureCount` INTEGER NOT NULL, `lastUploadedTimestamp` INTEGER NOT NULL, `lastUploadedQueueId` INTEGER NOT NULL, `lastUploadedSensorId` TEXT, `sensorDeliveryGeneration` INTEGER NOT NULL DEFAULT 0, `createdAt` TEXT NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `singletonKey` INTEGER NOT NULL DEFAULT 1, `name` TEXT NOT NULL, `url` TEXT NOT NULL, `studyId` TEXT NOT NULL, `participantId` TEXT NOT NULL, `sourceRandomDeviceId` TEXT NOT NULL, `apiKey` TEXT, `studyDisclosureJson` TEXT, `disclosureVersion` TEXT, `manifestDigest` TEXT, `reservationNonce` TEXT, `reservationExpiresAtEpochMillis` INTEGER, `enrollmentIssuedAtEpochMillis` INTEGER, `enrollmentSetupComplete` INTEGER NOT NULL DEFAULT 1, `pendingAcceptedModuleIds` TEXT, `pendingDeclinedModuleIds` TEXT, `pendingUnavailableModuleIds` TEXT, `pendingEnrollmentAttemptId` TEXT, `pendingEnrollmentAccessCode` TEXT, `pendingProposedApiKey` TEXT, `pendingEnrollmentSourceDeviceJson` TEXT, `pendingEnrollmentFirstRequestAtEpochMillis` INTEGER, `enabled` INTEGER NOT NULL, `lastUploadTime` TEXT, `lastUploadError` TEXT, `consecutiveFailures` INTEGER NOT NULL, `lastSensorUploadTime` TEXT, `lastSensorUploadError` TEXT, `sensorConsecutiveFailures` INTEGER NOT NULL, `lastBatteryUploadTime` TEXT, `batteryConsecutiveFailures` INTEGER NOT NULL, `lastUsageUploadSuccessTime` TEXT, `usageUploadSuccessCount` INTEGER NOT NULL, `usageUploadFailureCount` INTEGER NOT NULL, `lastSensorUploadSuccessTime` TEXT, `sensorUploadSuccessCount` INTEGER NOT NULL, `sensorUploadFailureCount` INTEGER NOT NULL, `lastBatteryUploadSuccessTime` TEXT, `batteryUploadSuccessCount` INTEGER NOT NULL, `batteryUploadFailureCount` INTEGER NOT NULL, `lastUploadedTimestamp` INTEGER NOT NULL, `lastUploadedQueueId` INTEGER NOT NULL, `lastUploadedSensorId` TEXT, `createdAt` TEXT NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
             "columnName": "id",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "singletonKey",
+            "columnName": "singletonKey",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
           },
           {
             "fieldPath": "name",
@@ -1069,14 +1118,8 @@
             "notNull": true
           },
           {
-            "fieldPath": "sourceDeviceId",
-            "columnName": "sourceDeviceId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "authMode",
-            "columnName": "authMode",
+            "fieldPath": "sourceRandomDeviceId",
+            "columnName": "sourceRandomDeviceId",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -1086,9 +1129,81 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "mobileSigningSecretOverride",
-            "columnName": "mobileSigningSecretOverride",
+            "fieldPath": "studyDisclosureJson",
+            "columnName": "studyDisclosureJson",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "disclosureVersion",
+            "columnName": "disclosureVersion",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "manifestDigest",
+            "columnName": "manifestDigest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reservationNonce",
+            "columnName": "reservationNonce",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reservationExpiresAtEpochMillis",
+            "columnName": "reservationExpiresAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "enrollmentIssuedAtEpochMillis",
+            "columnName": "enrollmentIssuedAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "enrollmentSetupComplete",
+            "columnName": "enrollmentSetupComplete",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "pendingAcceptedModuleIds",
+            "columnName": "pendingAcceptedModuleIds",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingDeclinedModuleIds",
+            "columnName": "pendingDeclinedModuleIds",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingUnavailableModuleIds",
+            "columnName": "pendingUnavailableModuleIds",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentAttemptId",
+            "columnName": "pendingEnrollmentAttemptId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentAccessCode",
+            "columnName": "pendingEnrollmentAccessCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingProposedApiKey",
+            "columnName": "pendingProposedApiKey",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentSourceDeviceJson",
+            "columnName": "pendingEnrollmentSourceDeviceJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingEnrollmentFirstRequestAtEpochMillis",
+            "columnName": "pendingEnrollmentFirstRequestAtEpochMillis",
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "enabled",
@@ -1134,20 +1249,10 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "lastBatteryUploadError",
-            "columnName": "lastBatteryUploadError",
-            "affinity": "TEXT"
-          },
-          {
             "fieldPath": "batteryConsecutiveFailures",
             "columnName": "batteryConsecutiveFailures",
             "affinity": "INTEGER",
             "notNull": true
-          },
-          {
-            "fieldPath": "lastUsageUploadAttemptTime",
-            "columnName": "lastUsageUploadAttemptTime",
-            "affinity": "TEXT"
           },
           {
             "fieldPath": "lastUsageUploadSuccessTime",
@@ -1167,11 +1272,6 @@
             "notNull": true
           },
           {
-            "fieldPath": "lastSensorUploadAttemptTime",
-            "columnName": "lastSensorUploadAttemptTime",
-            "affinity": "TEXT"
-          },
-          {
             "fieldPath": "lastSensorUploadSuccessTime",
             "columnName": "lastSensorUploadSuccessTime",
             "affinity": "TEXT"
@@ -1187,11 +1287,6 @@
             "columnName": "sensorUploadFailureCount",
             "affinity": "INTEGER",
             "notNull": true
-          },
-          {
-            "fieldPath": "lastBatteryUploadAttemptTime",
-            "columnName": "lastBatteryUploadAttemptTime",
-            "affinity": "TEXT"
           },
           {
             "fieldPath": "lastBatteryUploadSuccessTime",
@@ -1228,13 +1323,6 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "sensorDeliveryGeneration",
-            "columnName": "sensorDeliveryGeneration",
-            "affinity": "INTEGER",
-            "notNull": true,
-            "defaultValue": "0"
-          },
-          {
             "fieldPath": "createdAt",
             "columnName": "createdAt",
             "affinity": "TEXT",
@@ -1246,77 +1334,16 @@
           "columnNames": [
             "id"
           ]
-        }
-      },
-      {
-        "tableName": "sensor_sample_deliveries",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sampleId` TEXT NOT NULL, `serverId` INTEGER NOT NULL, `serverGeneration` INTEGER NOT NULL, `deliveredAt` TEXT NOT NULL, PRIMARY KEY(`sampleId`, `serverId`), FOREIGN KEY(`sampleId`) REFERENCES `sensor_samples`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`serverId`) REFERENCES `upload_servers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
-        "fields": [
-          {
-            "fieldPath": "sampleId",
-            "columnName": "sampleId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "serverId",
-            "columnName": "serverId",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "serverGeneration",
-            "columnName": "serverGeneration",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "deliveredAt",
-            "columnName": "deliveredAt",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "sampleId",
-            "serverId"
-          ]
         },
         "indices": [
           {
-            "name": "index_sensor_sample_deliveries_serverId",
-            "unique": false,
+            "name": "index_upload_servers_singletonKey",
+            "unique": true,
             "columnNames": [
-              "serverId"
+              "singletonKey"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_sensor_sample_deliveries_serverId` ON `${TABLE_NAME}` (`serverId`)"
-          }
-        ],
-        "foreignKeys": [
-          {
-            "table": "sensor_samples",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "sampleId"
-            ],
-            "referencedColumns": [
-              "id"
-            ]
-          },
-          {
-            "table": "upload_servers",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "serverId"
-            ],
-            "referencedColumns": [
-              "id"
-            ]
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_upload_servers_singletonKey` ON `${TABLE_NAME}` (`singletonKey`)"
           }
         ]
       },
@@ -1400,7 +1427,7 @@
       },
       {
         "tableName": "upload_stats",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `serverId` INTEGER NOT NULL, `date` TEXT NOT NULL, `usageEventsUploaded` INTEGER NOT NULL, `sensorSamplesUploaded` INTEGER NOT NULL, `batterySamplesUploaded` INTEGER NOT NULL, `usageUploadFailures` INTEGER NOT NULL, `sensorUploadFailures` INTEGER NOT NULL, `batteryUploadFailures` INTEGER NOT NULL, FOREIGN KEY(`serverId`) REFERENCES `upload_servers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `serverId` INTEGER NOT NULL, `date` TEXT NOT NULL, `studyId` TEXT, `participantId` TEXT, `randomDeviceId` TEXT, `enrollmentEpoch` TEXT, `usageEventsUploaded` INTEGER NOT NULL, `sensorSamplesUploaded` INTEGER NOT NULL, `batterySamplesUploaded` INTEGER NOT NULL, `usageUploadFailures` INTEGER NOT NULL, `sensorUploadFailures` INTEGER NOT NULL, `batteryUploadFailures` INTEGER NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
@@ -1419,6 +1446,26 @@
             "columnName": "date",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "studyId",
+            "columnName": "studyId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "participantId",
+            "columnName": "participantId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "randomDeviceId",
+            "columnName": "randomDeviceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "enrollmentEpoch",
+            "columnName": "enrollmentEpoch",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "usageEventsUploaded",
@@ -1482,19 +1529,19 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `index_upload_stats_serverId` ON `${TABLE_NAME}` (`serverId`)"
-          }
-        ],
-        "foreignKeys": [
+          },
           {
-            "table": "upload_servers",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "serverId"
+            "name": "index_upload_stats_studyId_participantId_randomDeviceId_enrollmentEpoch_date",
+            "unique": false,
+            "columnNames": [
+              "studyId",
+              "participantId",
+              "randomDeviceId",
+              "enrollmentEpoch",
+              "date"
             ],
-            "referencedColumns": [
-              "id"
-            ]
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_upload_stats_studyId_participantId_randomDeviceId_enrollmentEpoch_date` ON `${TABLE_NAME}` (`studyId`, `participantId`, `randomDeviceId`, `enrollmentEpoch`, `date`)"
           }
         ]
       },
@@ -1524,7 +1571,7 @@
       },
       {
         "tableName": "collection_module_state",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`moduleId` TEXT NOT NULL, `serverEnabled` INTEGER NOT NULL, `decision` TEXT NOT NULL, `decidedAtEpochMillis` INTEGER, `requiredApplied` INTEGER NOT NULL, `appliedVersion` INTEGER NOT NULL, `lastDisposition` TEXT, PRIMARY KEY(`moduleId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`moduleId` TEXT NOT NULL, `serverEnabled` INTEGER NOT NULL, `decision` TEXT NOT NULL, `decidedAtEpochMillis` INTEGER, `requiredApplied` INTEGER NOT NULL, `appliedVersion` INTEGER NOT NULL, PRIMARY KEY(`moduleId`))",
         "fields": [
           {
             "fieldPath": "moduleId",
@@ -1560,11 +1607,6 @@
             "columnName": "appliedVersion",
             "affinity": "INTEGER",
             "notNull": true
-          },
-          {
-            "fieldPath": "lastDisposition",
-            "columnName": "lastDisposition",
-            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -1573,11 +1615,347 @@
             "moduleId"
           ]
         }
+      },
+      {
+        "tableName": "upload_diagnostics",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `studyId` TEXT, `participantId` TEXT, `randomDeviceId` TEXT, `enrollmentEpoch` TEXT, `day` TEXT NOT NULL, `moduleFamily` TEXT NOT NULL, `issueCode` TEXT NOT NULL, `count` INTEGER NOT NULL, `firstOccurredAt` TEXT NOT NULL, `lastOccurredAt` TEXT NOT NULL, `httpStatus` INTEGER, `errorType` TEXT, `deliveryState` TEXT NOT NULL, `sealedForUpload` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "studyId",
+            "columnName": "studyId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "participantId",
+            "columnName": "participantId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "randomDeviceId",
+            "columnName": "randomDeviceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "enrollmentEpoch",
+            "columnName": "enrollmentEpoch",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "day",
+            "columnName": "day",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "moduleFamily",
+            "columnName": "moduleFamily",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "issueCode",
+            "columnName": "issueCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "count",
+            "columnName": "count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "firstOccurredAt",
+            "columnName": "firstOccurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastOccurredAt",
+            "columnName": "lastOccurredAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "httpStatus",
+            "columnName": "httpStatus",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "errorType",
+            "columnName": "errorType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deliveryState",
+            "columnName": "deliveryState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sealedForUpload",
+            "columnName": "sealedForUpload",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_upload_diagnostics_studyId_participantId_randomDeviceId_enrollmentEpoch_deliveryState_day",
+            "unique": false,
+            "columnNames": [
+              "studyId",
+              "participantId",
+              "randomDeviceId",
+              "enrollmentEpoch",
+              "deliveryState",
+              "day"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_upload_diagnostics_studyId_participantId_randomDeviceId_enrollmentEpoch_deliveryState_day` ON `${TABLE_NAME}` (`studyId`, `participantId`, `randomDeviceId`, `enrollmentEpoch`, `deliveryState`, `day`)"
+          },
+          {
+            "name": "index_upload_diagnostics_day_moduleFamily_issueCode",
+            "unique": false,
+            "columnNames": [
+              "day",
+              "moduleFamily",
+              "issueCode"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_upload_diagnostics_day_moduleFamily_issueCode` ON `${TABLE_NAME}` (`day`, `moduleFamily`, `issueCode`)"
+          },
+          {
+            "name": "index_upload_diagnostics_studyId_participantId_randomDeviceId_enrollmentEpoch_day_moduleFamily_issueCode_deliveryState_sealedForUpload",
+            "unique": false,
+            "columnNames": [
+              "studyId",
+              "participantId",
+              "randomDeviceId",
+              "enrollmentEpoch",
+              "day",
+              "moduleFamily",
+              "issueCode",
+              "deliveryState",
+              "sealedForUpload"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_upload_diagnostics_studyId_participantId_randomDeviceId_enrollmentEpoch_day_moduleFamily_issueCode_deliveryState_sealedForUpload` ON `${TABLE_NAME}` (`studyId`, `participantId`, `randomDeviceId`, `enrollmentEpoch`, `day`, `moduleFamily`, `issueCode`, `deliveryState`, `sealedForUpload`)"
+          }
+        ]
+      },
+      {
+        "tableName": "local_data_quarantine",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sourceTable` TEXT NOT NULL, `sourceId` TEXT NOT NULL, `studyId` TEXT, `participantId` TEXT, `randomDeviceId` TEXT, `rawData` BLOB NOT NULL, `reason` TEXT NOT NULL, `createdAt` TEXT NOT NULL, `settingsVersion` INTEGER, `httpStatus` INTEGER, `appVersion` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceTable",
+            "columnName": "sourceTable",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "sourceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "studyId",
+            "columnName": "studyId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "participantId",
+            "columnName": "participantId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "randomDeviceId",
+            "columnName": "randomDeviceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rawData",
+            "columnName": "rawData",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settingsVersion",
+            "columnName": "settingsVersion",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "httpStatus",
+            "columnName": "httpStatus",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "appVersion",
+            "columnName": "appVersion",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_local_data_quarantine_sourceTable_sourceId",
+            "unique": true,
+            "columnNames": [
+              "sourceTable",
+              "sourceId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_data_quarantine_sourceTable_sourceId` ON `${TABLE_NAME}` (`sourceTable`, `sourceId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "lifecycle_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, `observedAt` INTEGER NOT NULL, PRIMARY KEY(`key`))",
+        "fields": [
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "observedAt",
+            "columnName": "observedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "key"
+          ]
+        }
+      },
+      {
+        "tableName": "upload_queue_evidence",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`payloadType` TEXT NOT NULL, `rowId` TEXT NOT NULL, `settingsVersion` INTEGER, `decisionSeq` INTEGER, PRIMARY KEY(`payloadType`, `rowId`))",
+        "fields": [
+          {
+            "fieldPath": "payloadType",
+            "columnName": "payloadType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rowId",
+            "columnName": "rowId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settingsVersion",
+            "columnName": "settingsVersion",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "decisionSeq",
+            "columnName": "decisionSeq",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "payloadType",
+            "rowId"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_collection_acks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sequence` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `stableKey` TEXT NOT NULL, `record` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stableKey",
+            "columnName": "stableKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "record",
+            "columnName": "record",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "sequence"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pending_collection_acks_stableKey",
+            "unique": true,
+            "columnNames": [
+              "stableKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_pending_collection_acks_stableKey` ON `${TABLE_NAME}` (`stableKey`)"
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '88d71df2b4421845770f41148f87b3c7')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '892ffb5061c469fb8d41614ee6471b1c')"
     ]
   }
 }

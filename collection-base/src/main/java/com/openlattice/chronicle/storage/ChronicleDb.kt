@@ -2,17 +2,16 @@ package com.openlattice.chronicle.storage
 
 import android.content.Context
 import android.util.Log
-import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
-import net.zetetic.database.sqlcipher.SQLiteDatabase
-import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
 import java.io.File
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
 private const val TAG = "ChronicleDb"
-private const val DB_NAME = "chronicle"
 private const val ENCRYPTED_DB_NAME = "chronicle_encrypted"
 
 @Database(
@@ -32,27 +31,22 @@ private const val ENCRYPTED_DB_NAME = "chronicle_encrypted"
         AppNetworkUsageSampleEntry::class,
         DeviceSettingsSampleEntry::class,
         UploadServerEntity::class,
-        SensorSampleDeliveryEntity::class,
         SensorSampleDeadLetterEntity::class,
         UploadStatsEntity::class,
         UsagePollCheckpointEntity::class,
         CollectionModuleStateEntity::class,
         UploadDiagnosticEntity::class,
         LocalDataQuarantineEntity::class,
-        DiagnosticImportCheckpointEntity::class,
         LifecycleStateEntity::class,
-        PendingUploadBatchEntity::class,
-        UploadQueueEvidence::class
+        UploadQueueEvidence::class,
+        PendingCollectionAckEntity::class,
     ],
-    version = 32,
-    autoMigrations = [
-        AutoMigration(from = 1, to = 2),
-        AutoMigration(from = 2, to = 3)
-    ]
+    version = ChronicleDb.VERSION
 )
 abstract class ChronicleDb : RoomDatabase() {
     abstract fun queueEntryData(): StorageQueue
     abstract fun userQueueEntryData(): UserStorageQueue
+    abstract fun restrictedArtifactErasureDao(): RestrictedArtifactErasureDao
     abstract fun sensorSampleDao(): SensorSampleDao
     abstract fun batterySampleDao(): BatterySampleDao
     abstract fun connectivityStateSampleDao(): ConnectivityStateSampleDao
@@ -63,51 +57,40 @@ abstract class ChronicleDb : RoomDatabase() {
     abstract fun usagePollCheckpointDao(): UsagePollCheckpointDao
     abstract fun lifecycleStateDao(): LifecycleStateDao
     abstract fun uploadQueueEvidenceDao(): UploadQueueEvidenceDao
-    abstract fun pendingUploadBatchDao(): PendingUploadBatchDao
     abstract fun collectionModuleStateDao(): CollectionModuleStateDao
     abstract fun uploadDiagnosticDao(): UploadDiagnosticDao
     abstract fun localDataQuarantineDao(): LocalDataQuarantineDao
+    abstract fun pendingCollectionAckDao(): PendingCollectionAckDao
 
     companion object {
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(
-            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-            MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-            MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23,
-            MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27,
-            MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32
-        )
+        /** The reset release is version 1; a pre-reset database is refused and kept for recovery. */
+        const val VERSION = 4
+        /** Every upgrade from version 1, in order; the builder and the migration test both read this list. */
+        val ALL_MIGRATIONS: List<Migration> = listOf(DECISION_SEQ_MIGRATION, STORED_INSTANT_MIGRATION, BATTERY_PROVENANCE_MIGRATION)
 
         @Volatile
         private var INSTANCE: ChronicleDb? = null
 
         fun getInstance(context: Context): ChronicleDb {
             return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: buildEncryptedDatabase(context).also { INSTANCE = it }
+                INSTANCE ?: openEncryptedDatabase(context).also { INSTANCE = it }
             }
         }
 
-        private fun buildEncryptedDatabase(context: Context): ChronicleDb {
+        fun openEncryptedDatabase(context: Context, databaseName: String = ENCRYPTED_DB_NAME): ChronicleDb {
             System.loadLibrary("sqlcipher")
-            migrateUnencryptedDb(context)
 
-            val encryptedDbFile = context.getDatabasePath(ENCRYPTED_DB_NAME)
             val passphrase = DatabaseKeyManager.getPassphrase(
                 context,
-                allowCreate = !databaseBundleExists(encryptedDbFile)
+                allowCreate = recoverySourceFiles(context, databaseName).isEmpty()
             )
             val factory = SupportOpenHelperFactory(passphrase)
 
             var databaseOpened = false
             return try {
-                val db = buildRoomInstance(context, factory)
+                val db = buildRoomInstance(context, factory, databaseName)
                 db.openHelper.writableDatabase
                 databaseOpened = true
-                val oldDbFile = context.getDatabasePath(DB_NAME)
-                if (oldDbFile.exists()) {
-                    deleteDbFiles(oldDbFile)
-                }
                 db
             } catch (e: LocalStoreRecoveryRequiredException) {
                 throw e
@@ -127,110 +110,69 @@ abstract class ChronicleDb : RoomDatabase() {
             }
         }
 
-        private fun buildRoomInstance(context: Context, factory: SupportOpenHelperFactory): ChronicleDb {
+        fun buildRoomInstance(context: Context, factory: SupportSQLiteOpenHelper.Factory, databaseName: String = ENCRYPTED_DB_NAME): ChronicleDb {
             return Room.databaseBuilder(
                 context.applicationContext,
                 ChronicleDb::class.java,
-                ENCRYPTED_DB_NAME
+                databaseName
             )
-                .openHelperFactory(factory)
-                .addMigrations(*ALL_MIGRATIONS)
+                .openHelperFactory(SchemaRefusalFactory(factory))
+                .apply { ALL_MIGRATIONS.forEach { addMigrations(it) } }
                 .addCallback(UPLOAD_EVIDENCE_CALLBACK)
                 .build()
         }
 
-        private fun migrateUnencryptedDb(context: Context) {
-            val oldDbFile = context.getDatabasePath(DB_NAME)
-            if (!oldDbFile.exists()) return
-
-            val encryptedDbFile = context.getDatabasePath(ENCRYPTED_DB_NAME)
-            if (databaseBundleExists(encryptedDbFile)) {
-                if (!encryptedDbFile.exists()) {
-                    throw LocalStoreRecoveryRequiredException(
-                        LocalStoreRecoveryReason.DATABASE_OPEN_FAILED
-                    )
-                }
-                Log.i(TAG, "Encrypted DB already exists; plaintext cleanup waits for a verified open")
-                return
-            }
-
-            Log.i(TAG, "Migrating unencrypted database to SQLCipher")
-            val passphrase = DatabaseKeyManager.getPassphrase(context, allowCreate = true)
-            val temporaryDbFile = File(encryptedDbFile.absolutePath + ".migration")
-            try {
-                encryptedDbFile.parentFile?.mkdirs()
-                deleteDbFiles(temporaryDbFile)
-
-                val encryptedDb = SQLiteDatabase.openOrCreateDatabase(
-                    temporaryDbFile, passphrase, null, null
-                )
-                try {
-                    encryptedDb.execSQL("ATTACH DATABASE '${oldDbFile.absolutePath}' AS plaintext KEY ''")
-                    encryptedDb.execSQL("SELECT sqlcipher_export('main', 'plaintext')")
-                    // sqlcipher_export copies schema and rows but not user_version. At 0 Room takes its
-                    // create path, skips the migrations from the plaintext schema and fails validation.
-                    val schemaVersion = encryptedDb.rawQuery("PRAGMA plaintext.user_version", emptyArray()).use { cursor ->
-                        if (cursor.moveToFirst()) cursor.getInt(0) else 0
-                    }
-                    check(schemaVersion > 0) { "Plaintext database has no schema version" }
-                    encryptedDb.execSQL("PRAGMA main.user_version = $schemaVersion")
-                    encryptedDb.execSQL("DETACH DATABASE plaintext")
-                    encryptedDb.rawQuery("PRAGMA integrity_check", emptyArray()).use { cursor ->
-                        check(cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)) {
-                            "Encrypted database integrity check failed"
-                        }
-                    }
-                } finally {
-                    encryptedDb.close()
-                }
-
-                check(temporaryDbFile.renameTo(encryptedDbFile)) {
-                    "Unable to atomically install encrypted database"
-                }
-                Log.i(TAG, "Database migration to SQLCipher verified; plaintext cleanup follows verified open")
-            } catch (e: Exception) {
-                Log.e(TAG, "Encrypted database migration failed; preserving the plaintext database.")
-                deleteDbFiles(temporaryDbFile)
-                throw LocalStoreRecoveryRequiredException(
-                    LocalStoreRecoveryReason.DATABASE_MIGRATION_FAILED,
-                    e
-                )
-            } finally {
-                passphrase.fill(0)
-            }
-        }
-
-        private fun databaseBundleExists(dbFile: File): Boolean =
-            listOf("", "-wal", "-shm", "-journal").any { suffix ->
-                File(dbFile.absolutePath + suffix).exists()
-            }
-
-        internal fun recoverySourceFiles(context: Context): List<File> = buildList {
-            listOf(DB_NAME, ENCRYPTED_DB_NAME, "$ENCRYPTED_DB_NAME.migration").forEach { name ->
-                val dbFile = context.getDatabasePath(name)
-                listOf("", "-wal", "-shm", "-journal").forEach { suffix ->
-                    File(dbFile.absolutePath + suffix).takeIf(File::exists)?.let(::add)
-                }
-            }
+        internal fun recoverySourceFiles(context: Context, databaseName: String = ENCRYPTED_DB_NAME): List<File> {
+            val dbFile = context.getDatabasePath(databaseName)
+            return listOf("", "-wal", "-shm", "-journal")
+                .map { suffix -> File(dbFile.absolutePath + suffix) }.filter(File::exists)
         }
 
         /** Called only after [LocalStoreRecoveryManager] has encrypted and verified every source. */
         internal fun resetAfterVerifiedRecoveryBundle(context: Context) = synchronized(this) {
             INSTANCE?.close()
             INSTANCE = null
-            listOf(DB_NAME, ENCRYPTED_DB_NAME, "$ENCRYPTED_DB_NAME.migration").forEach { name ->
-                deleteDbFiles(context.getDatabasePath(name))
-            }
+            recoverySourceFiles(context).forEach { it.delete() }
             check(recoverySourceFiles(context).isEmpty()) {
                 "Failed to remove the local database after preserving its recovery bundle"
             }
         }
+    }
+}
 
-        private fun deleteDbFiles(dbFile: File) {
-            dbFile.delete()
-            File(dbFile.absolutePath + "-wal").delete()
-            File(dbFile.absolutePath + "-shm").delete()
-            File(dbFile.absolutePath + "-journal").delete()
+/**
+ * Room refuses a store it decrypted when the store holds another build's schema: an identity hash it does not know or
+ * a version with no migration path. It reports both as [IllegalStateException] from its open callback, which this
+ * factory turns into [LocalStoreRecoveryReason.LOCAL_SCHEMA_REPLACED] so the participant is told the app was updated.
+ */
+private class SchemaRefusalFactory(private val delegate: SupportSQLiteOpenHelper.Factory) : SupportSQLiteOpenHelper.Factory {
+    override fun create(configuration: SupportSQLiteOpenHelper.Configuration): SupportSQLiteOpenHelper {
+        val room = configuration.callback
+        val callback = object : SupportSQLiteOpenHelper.Callback(room.version) {
+            override fun onConfigure(db: SupportSQLiteDatabase) = room.onConfigure(db)
+            override fun onCreate(db: SupportSQLiteDatabase) = room.onCreate(db)
+            override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                refused { room.onUpgrade(db, oldVersion, newVersion) }
+            override fun onDowngrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                refused { room.onDowngrade(db, oldVersion, newVersion) }
+            override fun onOpen(db: SupportSQLiteDatabase) = refused { room.onOpen(db) }
+            override fun onCorruption(db: SupportSQLiteDatabase) = room.onCorruption(db)
         }
+        return delegate.create(
+            SupportSQLiteOpenHelper.Configuration.builder(configuration.context)
+                .name(configuration.name)
+                .callback(callback)
+                .noBackupDirectory(configuration.useNoBackupDirectory)
+                .allowDataLossOnRecovery(configuration.allowDataLossOnRecovery)
+                .build(),
+        )
+    }
+
+    private fun refused(open: () -> Unit) = try {
+        open()
+    } catch (e: LocalStoreRecoveryRequiredException) {
+        throw e
+    } catch (e: IllegalStateException) {
+        throw LocalStoreRecoveryRequiredException(LocalStoreRecoveryReason.LOCAL_SCHEMA_REPLACED, e)
     }
 }
