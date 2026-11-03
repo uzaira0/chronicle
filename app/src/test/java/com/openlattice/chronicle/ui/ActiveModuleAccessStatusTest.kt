@@ -11,7 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Drives MainActivity's Data Sharing route and the Overview "access needed" shortcut. */
+/** The capability rule behind the Overview "access needed" card; UsageAccessShortcutJourneyTest drives the card itself. */
 public class ActiveModuleAccessStatusTest {
     private val activeUsage = CollectionModuleState(
         moduleId = CollectionModuleId.USAGE_EVENTS,
@@ -20,13 +20,11 @@ public class ActiveModuleAccessStatusTest {
         decidedAtEpochMillis = 1L,
         requiredApplied = true,
         appliedVersion = 1,
-        appliedPolicySnapshot = null,
-        lastDisposition = null,
     )
 
     private fun environment(usageAccessGranted: Boolean) = CapabilityEnvironment(
         sdkInt = 36,
-        distribution = DistributionChannel.OPEN,
+        distribution = DistributionChannel.current(),
         googleServicesAvailable = true,
         healthConnectAvailable = true,
         healthConnectGranted = true,

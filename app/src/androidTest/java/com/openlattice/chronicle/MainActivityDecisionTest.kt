@@ -50,13 +50,9 @@ class MainActivityDecisionTest {
                 CollectionModuleId.SENSOR_GYROSCOPE,
             ),
         )
-        SensorSettings(AppTestState.context).save(
-            AndroidSensorSetting(
-                sensors = setOf(AndroidSensorType.accelerometer, AndroidSensorType.gyroscope),
-                samplingRateHz = 1,
-                dutyCycleActiveSeconds = 10,
-                dutyCyclePeriodSeconds = 120,
-            )
+        val setting = AndroidSensorSetting(samplingRateHz = 1, dutyCycleActiveSeconds = 10, dutyCyclePeriodSeconds = 120)
+        SensorSettings(AppTestState.context).applyResolvedSensors(
+            mapOf(AndroidSensorType.accelerometer to setting, AndroidSensorType.gyroscope to setting),
         )
     }
 

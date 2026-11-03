@@ -5,21 +5,18 @@ import android.content.Intent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import androidx.annotation.RequiresApi
-import androidx.appcompat.app.AlertDialog
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.fragment.app.DialogFragment
-import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.ui.updateEnrollmentSettings
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 
 class BatteryOptimizationExemptionDialog : DialogFragment() {
-    @RequiresApi(Build.VERSION_CODES.M)
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
 
         return activity?.let {
-            val builder = AlertDialog.Builder(it)
+            val builder = MaterialAlertDialogBuilder(it)
             builder.setTitle(R.string.battery_optimization_header)
                     .setMessage(R.string.battery_optimization_exemption)
                     .setPositiveButton(R.string.settings
@@ -29,7 +26,7 @@ class BatteryOptimizationExemptionDialog : DialogFragment() {
                     }
                     .setNegativeButton(android.R.string.cancel
                     ) { dialog, _ ->
-                        EnrollmentSettings(requireContext()).toggleBatteryOptimizationDialog(false)
+                        updateEnrollmentSettings { it.toggleBatteryOptimizationDialog(false) }
                         dialog.cancel()
                     }
 

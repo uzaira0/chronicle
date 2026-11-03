@@ -1,5 +1,6 @@
 package com.openlattice.chronicle
 
+import com.openlattice.chronicle.preferences.IDENTIFY_USER
 import android.app.AppOpsManager
 import android.content.Context
 import android.os.ParcelFileDescriptor
@@ -9,14 +10,11 @@ import com.openlattice.chronicle.api.MobileEnrollmentManifest
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
-import com.openlattice.chronicle.collection.state.consentPolicySnapshot
-import com.openlattice.chronicle.collection.state.MinimalPlayArtifactState
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.storage.ChronicleDb
-import com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
 import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.study.StudyParticipantPolicy
@@ -38,17 +36,13 @@ internal object AppTestState {
         PreferenceManager.getDefaultSharedPreferences(context).edit().clear().commit()
         EncryptedPrefsHelper.getEncryptedPrefs(context)
             .edit()
-            .putBoolean(context.getString(R.string.identify_user), false)
+            .putBoolean(IDENTIFY_USER, false)
             .commit()
         PreferenceManager.getDefaultSharedPreferences(context)
             .edit()
-            .putBoolean(context.getString(R.string.identify_user), false)
+            .putBoolean(IDENTIFY_USER, false)
             .commit()
         context.getSharedPreferences("collection_acknowledgment_prompt", Context.MODE_PRIVATE)
-            .edit()
-            .clear()
-            .commit()
-        context.getSharedPreferences("minimal_play_artifact_state", Context.MODE_PRIVATE)
             .edit()
             .clear()
             .commit()
@@ -72,8 +66,6 @@ internal object AppTestState {
                     decidedAtEpochMillis = null,
                     requiredApplied = false,
                     appliedVersion = 1,
-                    appliedPolicySnapshot = null,
-                    lastDisposition = null,
                 )
             }
         )
@@ -143,8 +135,7 @@ internal object AppTestState {
                 url = SERVER_ORIGIN,
                 studyId = STUDY_ID.toString(),
                 participantId = PARTICIPANT_ID,
-                sourceDeviceId = "11111111-1111-1111-1111-111111111111",
-                authMode = AUTH_MODE_API_KEY,
+                sourceRandomDeviceId = "11111111-1111-1111-1111-111111111111",
                 apiKey = "instrumentation-device-credential",
                 studyDisclosureJson = manifestJson,
                 disclosureVersion = participantPolicy.version,
@@ -167,22 +158,15 @@ internal object AppTestState {
                     decidedAtEpochMillis = decidedAt.takeIf { enabled },
                     requiredApplied = setting?.required == true,
                     appliedVersion = collectionSettings.settingsVersion,
-                    appliedPolicySnapshot = setting?.consentPolicySnapshot(),
-                    lastDisposition = null,
                 )
             },
         )
-
-        // The fixture represents a completed Play enrollment, including the durable artifact and
-        // authoritative-policy boundary proofs that production completes before collection starts.
-        MinimalPlayArtifactState.markBoundaryApplied(context)
-        MinimalPlayArtifactState.markPolicyCompatible(context)
 
         WithdrawalStateStore(context).completeReenrollment(STUDY_ID, PARTICIPANT_ID)
         check(
             EncryptedPrefsHelper.getEncryptedPrefs(context)
                 .edit()
-                .putBoolean(context.getString(R.string.identify_user), userIdentificationEnabled)
+                .putBoolean(IDENTIFY_USER, userIdentificationEnabled)
                 .commit(),
         ) { "Failed to persist the fixture's participant module choice" }
         EnrollmentSettings(context).apply {

@@ -32,4 +32,5 @@
     <color name="chronicle_outline">@color/eq_border</color>
     <color name="chronicle_text_primary">@color/eq_ink</color>
     <color name="chronicle_text_secondary">@color/eq_muted</color>
+    <color name="colorOnPrimary">@color/eq_primary_ink</color>
 </resources>

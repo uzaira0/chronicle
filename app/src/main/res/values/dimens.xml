@@ -12,5 +12,13 @@
     <dimen name="eq_radius_md">8dp</dimen>
     <dimen name="chronicle_touch_target">48dp</dimen>
     <dimen name="chronicle_sensor_row_min_height">88dp</dimen>
-    <dimen name="activity_horizontal_margin">@dimen/eq_space_4</dimen>
+    <dimen name="eq_space_7">48dp</dimen>
+    <dimen name="chronicle_touch_target_large">56dp</dimen>
+    <dimen name="chronicle_progress_height">60dp</dimen>
+    <dimen name="chronicle_bottom_clearance">96dp</dimen>
+    <dimen name="chronicle_enrollment_button_min_width">200dp</dimen>
+    <dimen name="chronicle_text_max_width">480dp</dimen>
+    <dimen name="chronicle_title_max_width">560dp</dimen>
+    <dimen name="chronicle_content_max_width">720dp</dimen>
+    <dimen name="chronicle_identification_icon_size">28dp</dimen>
 </resources>

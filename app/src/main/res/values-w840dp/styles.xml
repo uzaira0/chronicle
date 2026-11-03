@@ -1,0 +1,6 @@
+<resources>
+    <style name="Chronicle.Content" parent="">
+        <item name="android:layout_width">@dimen/chronicle_content_max_width</item>
+        <item name="android:layout_gravity">center_horizontal</item>
+    </style>
+</resources>

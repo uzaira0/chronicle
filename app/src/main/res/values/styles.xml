@@ -6,7 +6,7 @@
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorAccent">@color/colorAccent</item>
-        <item name="colorOnPrimary">@color/eq_primary_ink</item>
+        <item name="colorOnPrimary">@color/colorOnPrimary</item>
         <!-- Switches/checkboxes (Data Sharing toggles) activate with colorSecondary;
              without this they fall back to the Material default teal. -->
         <item name="colorSecondary">@color/eq_primary</item>
@@ -112,4 +112,22 @@
         <item name="android:indeterminateTint">@color/colorPrimary</item>
     </style>
 
+    <style name="Chronicle.Button.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="android:textColor">@color/colorPrimary</item>
+        <item name="iconTint">@color/colorPrimary</item>
+        <item name="android:minHeight">@dimen/chronicle_touch_target</item>
+    </style>
+    <style name="Chronicle.Caption" parent="TextAppearance.Material3.BodySmall">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="android:textColor">@color/chronicle_text_secondary</item>
+    </style>
+    <style name="Chronicle.Title" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="fontFamily">@font/atkinson_hyperlegible</item>
+        <item name="android:textColor">@color/chronicle_text_primary</item>
+    </style>
+    <style name="Chronicle.Content" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_gravity">center_horizontal</item>
+    </style>
 </resources>

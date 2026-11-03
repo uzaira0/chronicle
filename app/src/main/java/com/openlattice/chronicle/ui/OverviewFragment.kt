@@ -1,7 +1,5 @@
 package com.openlattice.chronicle.ui
 
-import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
-
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
@@ -10,6 +8,7 @@ import androidx.lifecycle.lifecycleScope
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.capability.CollectionCapabilityResolver
+import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -47,9 +46,9 @@ class OverviewFragment : Fragment(R.layout.fragment_overview) {
 
     private fun bind(view: View, snapshot: DashboardSnapshot, accessNeeded: Boolean) {
         view.findViewById<TextView>(R.id.overviewStudyId).text =
-            getString(R.string.overview_study, snapshot.studyId)
+            getString(R.string.overview_study, snapshot.studyId?.toString() ?: getString(R.string.overview_no_study))
         view.findViewById<TextView>(R.id.overviewParticipantId).text =
-            getString(snapshot.participationStop?.participant ?: R.string.overview_participant, snapshot.participantId)
+            getString(snapshot.participationStop?.copy?.participant ?: R.string.overview_participant, snapshot.participantId)
         view.findViewById<TextView>(R.id.overviewLastUpload).text =
             snapshot.lastUpload
         view.findViewById<TextView>(R.id.overviewLatestTimestamp).text =
@@ -74,8 +73,8 @@ class OverviewFragment : Fragment(R.layout.fragment_overview) {
             }
         } else {
             collectionStatus.text = getString(R.string.overview_collection_status, snapshot.collection.message)
-            collectionStatus.isClickable = false
             collectionStatus.setOnClickListener(null)
+            collectionStatus.isClickable = false
         }
         view.findViewById<TextView>(R.id.overviewServerHealth).text =
             getString(R.string.overview_server_health, snapshot.serverHealth.message)

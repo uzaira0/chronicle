@@ -1,56 +1,70 @@
 package com.openlattice.chronicle.ui
 
+import com.openlattice.chronicle.preferences.IDENTIFY_USER
+import com.openlattice.chronicle.EnrolledWork
 import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
 import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
-import androidx.appcompat.app.AlertDialog
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
-import com.google.android.material.switchmaterial.SwitchMaterial
-import com.openlattice.chronicle.R
+import com.google.android.material.materialswitch.MaterialSwitch
+import com.openlattice.chronicle.BatteryOptimizationExemptionDialog
+import com.openlattice.chronicle.OemBackgroundGuidance
+import com.openlattice.chronicle.OemBackgroundGuidanceDialog
+import com.openlattice.chronicle.hasIgnoreBatteryOptimization
+import com.openlattice.chronicle.services.notifications.CHANNEL_ID
+import com.openlattice.chronicle.services.notifications.deviceMonitoringMayRun
 import com.openlattice.chronicle.BuildConfig
-import com.openlattice.chronicle.collection.capability.DistributionChannel
-import com.openlattice.chronicle.LocalStoreRecoveryActivity
 import com.openlattice.chronicle.LicensesActivity
+import com.openlattice.chronicle.PlatformPolicyActivity
+import com.openlattice.chronicle.R
 import com.openlattice.chronicle.ServerEnrollmentActivity
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.capability.DistributionChannel
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.identification.DeviceUser
 import com.openlattice.chronicle.collection.identification.TargetUserRouter
 import com.openlattice.chronicle.collection.permissions.ModulePermissions
 import com.openlattice.chronicle.collection.permissions.PermissionKind
-import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.CollectionGate
+import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.CollectionModuleState
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.StorageAdmission
+import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.IDENTIFY_USER_CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.UnlockMonitoringRuntimeStatus
+import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
 import com.openlattice.chronicle.services.notifications.hasNotificationPermission
 import com.openlattice.chronicle.services.notifications.hasPostNotificationsRuntimePermission
 import com.openlattice.chronicle.services.notifications.notificationPopsUp
 import com.openlattice.chronicle.services.notifications.notificationSettingsIntent
-import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.services.withdrawal.WithdrawalState
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 import com.openlattice.chronicle.utils.ExternalLinks
+import java.net.URI
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.URI
 
 private const val TAG = "SettingsHomeFragment"
 
@@ -58,14 +72,13 @@ internal fun notificationAccessControlVisible(restrictedResearchPermissions: Boo
     restrictedResearchPermissions
 
 class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
-    private lateinit var settings: EnrollmentSettings
     private var activeStudyPrivacyUrl: String? = null
     private var activeStudyWithdrawalUrl: String? = null
     private var refreshingControls: Boolean = false
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        val toggle = view?.findViewById<SwitchMaterial>(R.id.identifyUserSwitch) ?: return@registerForActivityResult
+        val toggle = view?.findViewById<MaterialSwitch>(R.id.identifyUserSwitch) ?: return@registerForActivityResult
         toggle.isChecked = false
         if (granted) {
             showIdentifyUserDisclosure(toggle)
@@ -75,18 +88,14 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        settings = EnrollmentSettings(requireContext())
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
-            // Minimal distributions expose the enrolled identity in the study summary.
+            // Minimal distributions expose the enrolled identity in the study summary; study server
+            // details stays visible because it holds Withdraw from study.
             listOf(
                 R.id.settingsServerList,
-                R.id.openServerSettingsButton,
-                R.id.addServerSettingsButton,
             ).forEach { view.findViewById<View>(it).visibility = View.GONE }
         }
-        if (DistributionChannel.current() != DistributionChannel.RESEARCH) {
-            view.findViewById<View>(R.id.addServerSettingsButton).visibility = View.GONE
-        }
+
         if (!notificationAccessControlVisible(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)) {
             // Notification-listener access belongs only to the excluded research notification/
             // audio modules. Do not show a dead, high-risk system-permission control in Play.
@@ -101,9 +110,18 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     }
 
     private fun bindControls(view: View) {
-        view.findViewById<SwitchMaterial>(R.id.identifyUserSwitch).setOnClickListener { clicked ->
+        view.findViewById<MaterialButton>(R.id.surveyNotificationSettingsButton).setOnClickListener {
+            DeviceSettingsNavigator.open(requireContext(), notificationSettingsIntent(requireContext(), CHANNEL_ID))
+        }
+        view.findViewById<MaterialButton>(R.id.batterySettingsButton).setOnClickListener {
+            BatteryOptimizationExemptionDialog().show(parentFragmentManager, "batteryExemption")
+        }
+        view.findViewById<MaterialButton>(R.id.oemSettingsButton).setOnClickListener {
+            OemBackgroundGuidanceDialog().show(parentFragmentManager, "oemBackgroundGuidance")
+        }
+        view.findViewById<MaterialSwitch>(R.id.identifyUserSwitch).setOnClickListener { clicked ->
             if (refreshingControls) return@setOnClickListener
-            val toggle = clicked as SwitchMaterial
+            val toggle = clicked as MaterialSwitch
             if (!toggle.isChecked) {
                 setIdentifyUserEnabled(false)
                 return@setOnClickListener
@@ -131,9 +149,9 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             .addOnButtonCheckedListener { _, checkedId, isChecked ->
                 if (!isChecked || refreshingControls) return@addOnButtonCheckedListener
                 val user = when (checkedId) {
-                    R.id.deviceUserChild -> getString(R.string.user_target_child)
-                    R.id.deviceUserOther -> getString(R.string.user_other)
-                    else -> getString(R.string.user_unassigned)
+                    R.id.deviceUserParticipant -> DeviceUser.STUDY_PARTICIPANT
+                    R.id.deviceUserSomeoneElse -> DeviceUser.SOMEONE_ELSE
+                    else -> DeviceUser.NOT_SET
                 }
                 persistTargetUser(user)
             }
@@ -143,7 +161,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         }
 
         if (notificationAccessControlVisible(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)) {
-            view.findViewById<SwitchMaterial>(R.id.notificationAccessSwitch)
+            view.findViewById<MaterialSwitch>(R.id.notificationAccessSwitch)
                 .setOnClickListener {
                     if (!refreshingControls) confirmNotificationAccess()
                 }
@@ -159,14 +177,11 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                 startActivity(intent)
             }
         }
-        view.findViewById<MaterialButton>(R.id.addServerSettingsButton).setOnClickListener {
-            startActivity(Intent(requireContext(), ServerEnrollmentActivity::class.java))
-        }
         view.findViewById<MaterialButton>(R.id.openSourceLicensesButton).setOnClickListener {
             startActivity(Intent(requireContext(), LicensesActivity::class.java))
         }
         view.findViewById<MaterialButton>(R.id.privacyPolicyButton).setOnClickListener {
-            startActivity(Intent(requireContext(), com.openlattice.chronicle.PlatformPolicyActivity::class.java))
+            startActivity(Intent(requireContext(), PlatformPolicyActivity::class.java))
         }
         view.findViewById<MaterialButton>(R.id.studyWithdrawalSettingsButton).setOnClickListener {
             activeStudyWithdrawalUrl?.let { url -> ExternalLinks.openHttps(requireContext(), url) }
@@ -182,26 +197,29 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     }
 
     private fun showReminderTimingOptions() {
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.reminder_timing_title)
             .setMessage(R.string.reminder_timing_optional)
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(R.string.reminder_timing_review) { _, _ ->
-                DeviceSettingsNavigator.open(requireContext(), Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                    .setData(android.net.Uri.parse("package:${requireContext().packageName}")))
+                DeviceSettingsNavigator.open(requireContext(), Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                    .setData(Uri.parse("package:${requireContext().packageName}")))
             }.show()
     }
+
+    private data class IdentificationUpdateResult(val failureMessage: Int?, val targetResult: ModuleResult?)
 
     private fun setIdentifyUserEnabled(enabled: Boolean) {
         val context = requireContext()
         val appContext = context.applicationContext
         if (enabled && !hasNotificationPermission(appContext, IDENTIFY_USER_CHANNEL_ID)) {
-            view?.findViewById<SwitchMaterial>(R.id.identifyUserSwitch)?.isChecked = false
+            view?.findViewById<MaterialSwitch>(R.id.identifyUserSwitch)?.isChecked = false
             showNotificationPermissionRecovery()
             return
         }
         viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
-            val (persisted, targetResult) = withContext(Dispatchers.IO) {
+            val (failureMessage, targetResult) = withContext(Dispatchers.IO) {
+                val settings = EnrollmentSettings(appContext)
                 var targetResult: ModuleResult? = null
                 var studyAuthorized = false
                 val persisted = ResearchPersistenceGate.persistIfActive(appContext) {
@@ -213,7 +231,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                     check(
                         EncryptedPrefsHelper.getEncryptedPrefs(appContext)
                             .edit()
-                            .putBoolean(appContext.getString(R.string.identify_user), enabled)
+                            .putBoolean(IDENTIFY_USER, enabled)
                             .commit(),
                     ) { "Failed to persist identify-user preference" }
                     if (enabled) {
@@ -221,35 +239,40 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                     } else {
                         targetResult = TargetUserRouter.setTargetUser(
                             appContext,
-                            appContext.getString(R.string.user_unassigned),
+                            DeviceUser.NOT_SET,
                             settings,
                         )
-                        DeviceUnlockMonitoringService.stopService(appContext)
+                        DeviceUnlockMonitoringService.reconcile(appContext)
                     }
+                    // The survey reminder is armed only on a shared phone.
+                    EnrolledWork.rescheduleNotifications(appContext)
                 }
-                (persisted && studyAuthorized) to targetResult
+                val failureMessage = if (persisted && studyAuthorized) null else identificationFailureMessage(appContext, settings)
+                IdentificationUpdateResult(failureMessage, targetResult)
             }
-            if (!persisted) {
-                Toast.makeText(
-                    requireContext(),
-                    getString(R.string.settings_control_needs_enrollment),
-                    Toast.LENGTH_LONG,
-                ).show()
-            } else if (targetResult != null && targetResult !is ModuleResult.Ok) {
-                Toast.makeText(
-                    requireContext(),
-                    getString(R.string.settings_identification_off_save_failed),
-                    Toast.LENGTH_LONG,
-                ).show()
-            } else if (targetResult is ModuleResult.Ok) {
-                scheduleChronicleSyncWork(appContext)
-            }
+            reportIdentificationResult(appContext, failureMessage, targetResult)
             view?.let(::refresh)
         }
     }
 
-    private fun showIdentifyUserDisclosure(toggle: SwitchMaterial) {
-        AlertDialog.Builder(requireContext())
+    /** Names why an identify-user change was not saved, checked in the order a participant can act on it. */
+
+    private fun reportIdentificationResult(appContext: Context, failureMessage: Int?, targetResult: ModuleResult?) {
+        val message = when {
+            failureMessage != null -> failureMessage
+            targetResult is ModuleResult.Skipped -> TargetUserRouter.failureMessage(targetResult)
+            targetResult != null && targetResult !is ModuleResult.Ok -> R.string.settings_identification_off_save_failed
+            else -> null
+        }
+        if (message != null) {
+            Toast.makeText(requireContext(), getString(message), Toast.LENGTH_LONG).show()
+        } else if (targetResult is ModuleResult.Ok) {
+            EnrolledWork.rescheduleSync(appContext)
+        }
+    }
+
+    private fun showIdentifyUserDisclosure(toggle: MaterialSwitch) {
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.identify_user_disclosure_title)
             .setMessage(R.string.identify_user_disclosure_body)
             .setNegativeButton(android.R.string.cancel) { _, _ -> toggle.isChecked = false }
@@ -258,7 +281,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     }
 
     private fun showNotificationPermissionRecovery() {
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.settings_notifications_title)
             .setMessage(R.string.settings_notifications_body)
             .setNegativeButton(android.R.string.cancel) { _, _ -> view?.let(::refresh) }
@@ -275,24 +298,24 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         )
     }
 
-    private fun persistTargetUser(user: String) {
+    private fun persistTargetUser(user: DeviceUser) {
         val appContext = requireContext().applicationContext
         viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             val result = try {
                 withContext(Dispatchers.IO) {
-                    TargetUserRouter.setTargetUser(appContext, user, settings)
+                    TargetUserRouter.setTargetUser(appContext, user)
                 }
             } catch (error: LocalStoreRecoveryRequiredException) {
-                startActivity(LocalStoreRecoveryActivity.intent(requireContext(), error.recoveryReason))
+                requireActivity().openStoreRecovery(error)
                 return@launch
             }
             if (result is ModuleResult.Ok) {
-                scheduleChronicleSyncWork(appContext)
+                EnrolledWork.rescheduleSync(appContext)
             } else {
                 Log.w(TAG, "Target-user update failed: ${result.label}")
                 Toast.makeText(
                     requireContext(),
-                    getString(R.string.user_save_failed),
+                    getString(TargetUserRouter.failureMessage(result)),
                     Toast.LENGTH_LONG,
                 ).show()
             }
@@ -302,7 +325,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     private fun refresh(view: View) {
         val appContext = requireContext().applicationContext
         // Lock participant controls until the Room-backed active-enrollment proof is read off-main.
-        view.findViewById<SwitchMaterial>(R.id.identifyUserSwitch).apply {
+        view.findViewById<MaterialSwitch>(R.id.identifyUserSwitch).apply {
             visibility = View.GONE
             isEnabled = false
         }
@@ -313,7 +336,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             isEnabled = false
             for (index in 0 until childCount) getChildAt(index).isEnabled = false
         }
-        view.findViewById<SwitchMaterial>(R.id.notificationAccessSwitch).apply {
+        view.findViewById<MaterialSwitch>(R.id.notificationAccessSwitch).apply {
             visibility = if (notificationAccessControlVisible(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)) {
                 View.VISIBLE
             } else {
@@ -323,6 +346,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         }
         viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             val state = withContext(Dispatchers.IO) {
+                val settings = EnrollmentSettings(appContext)
                 val activeEnrollment = ResearchPersistenceGate.isActiveEnrollment(appContext)
                 val userIdentificationAuthorized =
                     activeEnrollment &&
@@ -332,6 +356,13 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                     userIdentificationAuthorized && settings.isUserIdentificationEnabled()
                 SettingsRefreshState(
                     withdrawal = WithdrawalStateStore(appContext).state(),
+                    access = SettingsAccessState(
+                        surveyReminderEnabled = BuildConfig.ALLOW_PARTICIPANT_FORM_REMINDERS &&
+                            (settings.getAwarenessNotificationsEnabled() || settings.getMobileReminderRequestCodes().isNotEmpty()),
+                        surveyNotificationGranted = hasNotificationPermission(appContext, CHANNEL_ID),
+                        batteryExempt = hasIgnoreBatteryOptimization(appContext),
+                        monitoringAuthorized = deviceMonitoringMayRun(appContext),
+                    ),
                     activeEnrollment = activeEnrollment,
                     userIdentificationAuthorized = userIdentificationAuthorized,
                     userIdentificationPreferenceEnabled = userIdentificationPreferenceEnabled,
@@ -362,39 +393,40 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
             studyAuthorized = state.userIdentificationAuthorized,
             participantEnabled = userIdentificationRuntime.effective,
         )
+        renderPlatformAccess(view, state.access, activeEnrollment)
         refreshingControls = true
         try {
-            view.findViewById<SwitchMaterial>(R.id.identifyUserSwitch).apply {
+            view.findViewById<MaterialSwitch>(R.id.identifyUserSwitch).apply {
                 visibility = if (userIdentificationControls.visible) View.VISIBLE else View.GONE
                 isChecked = userIdentificationRuntime.effective
                 isEnabled = userIdentificationControls.switchEnabled
             }
             view.findViewById<TextView>(R.id.identifyUserStatus).apply {
                 visibility = if (userIdentificationControls.visible) View.VISIBLE else View.GONE
-                text = when {
-                    userIdentificationRuntime.needsNotificationRecovery ->
-                        getString(R.string.identify_user_status_notification_recovery)
-                    userIdentificationRuntime.startDeferred ->
-                        getString(R.string.identify_user_status_start_deferred)
-                    userIdentificationRuntime.promptSilent ->
-                        getString(R.string.identify_user_status_silent)
-                    userIdentificationRuntime.effective ->
-                        getString(R.string.identify_user_status_active)
-                    else -> getString(R.string.identify_user_status_off)
-                }
+                text = getString(
+                    when (userIdentificationRuntime) {
+                        UserIdentificationRuntimeState.NEEDS_NOTIFICATION_RECOVERY ->
+                            R.string.identify_user_status_notification_recovery
+                        UserIdentificationRuntimeState.START_DEFERRED -> R.string.identify_user_status_start_deferred
+                        UserIdentificationRuntimeState.RUNNING_SILENT -> R.string.identify_user_status_silent
+                        UserIdentificationRuntimeState.RUNNING -> R.string.identify_user_status_active
+                        UserIdentificationRuntimeState.OFF -> R.string.identify_user_status_off
+                    },
+                )
             }
             view.findViewById<MaterialButton>(R.id.identifyUserNotificationSettingsButton).visibility =
                 if (userIdentificationControls.visible &&
-                    (userIdentificationRuntime.needsNotificationRecovery || userIdentificationRuntime.promptSilent)
+                    (userIdentificationRuntime == UserIdentificationRuntimeState.NEEDS_NOTIFICATION_RECOVERY ||
+                        userIdentificationRuntime == UserIdentificationRuntimeState.RUNNING_SILENT)
                 ) View.VISIBLE else View.GONE
             val currentUser = state.currentUser
             view.findViewById<MaterialButtonToggleGroup>(R.id.deviceUserGroup).apply {
                 visibility = if (userIdentificationControls.visible) View.VISIBLE else View.GONE
                 check(
-                    when (currentUser) {
-                        getString(R.string.user_target_child) -> R.id.deviceUserChild
-                        getString(R.string.user_other) -> R.id.deviceUserOther
-                        else -> R.id.deviceUserUnset
+                    when (DeviceUser.fromStored(currentUser)) {
+                        DeviceUser.STUDY_PARTICIPANT -> R.id.deviceUserParticipant
+                        DeviceUser.SOMEONE_ELSE -> R.id.deviceUserSomeoneElse
+                        DeviceUser.NOT_SET, null -> R.id.deviceUserUnset
                     },
                 )
                 isEnabled = userIdentificationControls.targetChoicesEnabled
@@ -402,7 +434,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
                     getChildAt(index).isEnabled = userIdentificationControls.targetChoicesEnabled
                 }
             }
-            view.findViewById<SwitchMaterial>(R.id.notificationAccessSwitch).apply {
+            view.findViewById<MaterialSwitch>(R.id.notificationAccessSwitch).apply {
                 visibility = if (notificationAccessControlVisible(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)) {
                     View.VISIBLE
                 } else {
@@ -421,7 +453,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         } finally {
             refreshingControls = false
         }
-        if (userIdentificationRuntime.effective) {
+        if (state.access.monitoringAuthorized) {
             if (!DeviceUnlockMonitoringService.startAuthorizedService(requireContext().applicationContext)) {
                 refresh(view)
             }
@@ -460,7 +492,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) return
         withNotificationAccessAllowed { activeModules ->
             val disclosure = notificationAccessDisclosure(activeModules, requireContext().copyResolver())
-            AlertDialog.Builder(requireContext())
+            MaterialAlertDialogBuilder(requireContext())
                 .setTitle(disclosure.title)
                 .setMessage(disclosure.body)
                 .setNegativeButton(android.R.string.cancel) { _, _ -> view?.let(::refresh) }
@@ -513,17 +545,18 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
         servers.forEach { server ->
             val row = LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(16, 16, 16, 16)
+                val spacing = resources.getDimensionPixelSize(R.dimen.eq_space_4)
+            setPadding(spacing, spacing, spacing, spacing)
                 setBackgroundResource(R.drawable.bg_panel)
             }
             row.addView(TextView(requireContext()).apply {
-                setTextAppearance(android.R.style.TextAppearance_Material_Body1)
+                setTextAppearance(R.style.Chronicle_Body)
                 text = getString(
                     R.string.settings_server_row,
                     server.name,
                     server.healthLabel,
                     server.url,
-                    getString(if (server.enabled) R.string.settings_uploads_enabled else R.string.settings_uploads_paused),
+                    getString(server.uploadsLabel),
                 )
                 setOnClickListener { openServer(server.id) }
             })
@@ -549,7 +582,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     private fun setServerEnabled(serverId: Long, enabled: Boolean) {
         viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
             withContext(Dispatchers.IO) { participantStorageWrite {
-                com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+                ResearchPersistenceGate
                     .setServerEnabled(requireContext().applicationContext, serverId, enabled)
             }.getOrThrow() }
             view?.let { refresh(it) }
@@ -574,8 +607,29 @@ internal fun identifyUserNotificationAction(
     else -> IdentifyUserNotificationAction.OPEN_SETTINGS
 }
 
+private fun renderPlatformAccess(view: View, access: SettingsAccessState, activeEnrollment: Boolean) {
+    val remindersVisible = activeEnrollment && access.surveyReminderEnabled
+    view.findViewById<TextView>(R.id.surveyNotificationStatus).apply {
+        visibility = if (remindersVisible) View.VISIBLE else View.GONE
+        setText(if (access.surveyNotificationGranted) R.string.survey_notifications_granted else R.string.survey_notifications_denied)
+    }
+    view.findViewById<View>(R.id.surveyNotificationSettingsButton).visibility =
+        if (remindersVisible) View.VISIBLE else View.GONE
+    view.findViewById<View>(R.id.batterySettingsButton).visibility = if (activeEnrollment) View.VISIBLE else View.GONE
+    val oem = activeEnrollment && OemBackgroundGuidance.matches(Build.MANUFACTURER)
+    view.findViewById<View>(R.id.oemSettingsButton).visibility = if (oem) View.VISIBLE else View.GONE
+    view.findViewById<TextView>(R.id.backgroundAccessStatus).apply {
+        visibility = if (activeEnrollment) View.VISIBLE else View.GONE
+        text = listOfNotNull(
+            view.context.getString(if (access.batteryExempt) R.string.background_access_granted else R.string.background_access_missing),
+            view.context.getString(R.string.oem_background_needs_review).takeIf { oem },
+        ).joinToString("\n")
+    }
+}
+
 private data class SettingsRefreshState(
     val withdrawal: WithdrawalState,
+    val access: SettingsAccessState,
     val activeEnrollment: Boolean,
     val userIdentificationAuthorized: Boolean,
     val userIdentificationPreferenceEnabled: Boolean,
@@ -586,13 +640,22 @@ private data class SettingsRefreshState(
     val snapshot: DashboardSnapshot,
 )
 
-internal data class UserIdentificationRuntimeState(
-    val effective: Boolean,
-    val needsNotificationRecovery: Boolean,
-    val startDeferred: Boolean,
-    /** Running, but the prompt channel is Silent or not "Pop on screen": prompts land unseen in the shade. */
-    val promptSilent: Boolean = false,
+private data class SettingsAccessState(
+    val surveyReminderEnabled: Boolean,
+    val surveyNotificationGranted: Boolean,
+    val batteryExempt: Boolean,
+    val monitoringAuthorized: Boolean,
 )
+
+/** Exactly one user-identification runtime mode; [effective] means the prompt service runs. */
+internal enum class UserIdentificationRuntimeState(val effective: Boolean) {
+    OFF(false),
+    NEEDS_NOTIFICATION_RECOVERY(false),
+    START_DEFERRED(false),
+    /** Running, but the prompt channel is Silent or not "Pop on screen": prompts land unseen in the shade. */
+    RUNNING_SILENT(true),
+    RUNNING(true),
+}
 
 internal fun userIdentificationRuntimeState(
     authorized: Boolean,
@@ -600,14 +663,12 @@ internal fun userIdentificationRuntimeState(
     notificationPermissionGranted: Boolean,
     runtimeStartDeferred: Boolean = false,
     promptPopsUp: Boolean = true,
-): UserIdentificationRuntimeState {
-    val effective = authorized && preferenceEnabled && notificationPermissionGranted && !runtimeStartDeferred
-    return UserIdentificationRuntimeState(
-        effective = effective,
-        needsNotificationRecovery = authorized && preferenceEnabled && !notificationPermissionGranted,
-        startDeferred = authorized && preferenceEnabled && notificationPermissionGranted && runtimeStartDeferred,
-        promptSilent = effective && !promptPopsUp,
-    )
+): UserIdentificationRuntimeState = when {
+    !authorized || !preferenceEnabled -> UserIdentificationRuntimeState.OFF
+    !notificationPermissionGranted -> UserIdentificationRuntimeState.NEEDS_NOTIFICATION_RECOVERY
+    runtimeStartDeferred -> UserIdentificationRuntimeState.START_DEFERRED
+    !promptPopsUp -> UserIdentificationRuntimeState.RUNNING_SILENT
+    else -> UserIdentificationRuntimeState.RUNNING
 }
 
 internal data class UserIdentificationControlState(
@@ -630,31 +691,11 @@ internal fun userIdentificationControlState(
     )
 }
 
-private val ENGLISH_SUMMARY: CopyResolver = englishCopy(
-    mapOf(
-        R.string.summary_no_enrollment to "No active study enrollment is configured on this device.",
-        R.string.summary_unavailable to "Unavailable",
-        R.string.summary_header to "Active study enrollment",
-        R.string.summary_study_id to "Study ID: %s",
-        R.string.summary_participant to "Participant reference: %s",
-        R.string.summary_server to "Study server: %s",
-        R.string.summary_host to "Server host: %s",
-        R.string.summary_origin to "Server origin: %s",
-        R.string.summary_institution to "Responsible institution: %s",
-        R.string.summary_contact to "Research contact: %s",
-        R.string.summary_disclosure_version to "Disclosure version: %s",
-        R.string.summary_uploads to "Uploads: %s",
-        R.string.summary_uploads_active to "active",
-        R.string.summary_uploads_stopped to "stopped",
-        R.string.summary_connection to "Connection: %s",
-    ),
-)
-
 internal fun activeEnrollmentSummary(
-    studyId: String,
+    studyId: UUID?,
     participantId: String,
     server: UploadServerSummary?,
-    copy: CopyResolver = ENGLISH_SUMMARY,
+    copy: CopyResolver,
 ): String {
     fun s(id: Int, vararg args: Any) = copy(id, args)
     if (server == null) return s(R.string.summary_no_enrollment)
@@ -663,7 +704,7 @@ internal fun activeEnrollmentSummary(
         .getOrNull()
         ?.takeIf(String::isNotBlank)
         ?: unavailable
-    val displayStudyId = studyId.ifBlank { unavailable }
+    val displayStudyId = studyId?.toString() ?: s(R.string.overview_no_study)
     val displayParticipantId = participantId.ifBlank { unavailable }
     val displayServerName = server.name.ifBlank { host }
     return buildList {
@@ -676,7 +717,7 @@ internal fun activeEnrollmentSummary(
         server.responsibleInstitution?.takeIf(String::isNotBlank)?.let { add(s(R.string.summary_institution, it)) }
         server.researchContact?.takeIf(String::isNotBlank)?.let { add(s(R.string.summary_contact, it)) }
         server.disclosureVersion?.takeIf(String::isNotBlank)?.let { add(s(R.string.summary_disclosure_version, it)) }
-        add(s(R.string.summary_uploads, s(if (server.enabled) R.string.summary_uploads_active else R.string.summary_uploads_stopped)))
+        add(s(R.string.summary_uploads, s(server.uploadsLabel)))
         add(s(R.string.summary_connection, server.healthLabel))
     }.joinToString("\n")
 }
@@ -699,3 +740,17 @@ internal fun activeNotificationAccessModules(
     .map(CollectionModuleState::moduleId)
     .filter { ModulePermissions.needsKind(listOf(it), PermissionKind.NOTIFICATION_LISTENER) }
     .toSet()
+
+private fun identificationFailureMessage(appContext: Context, settings: EnrollmentSettings): Int {
+    val enrolled = settings.isEnrolledOrThrow() &&
+        settings.getParticipationStatus() == ParticipationStatus.ENROLLED &&
+        WithdrawalStateStore(appContext).stateOrThrow() == WithdrawalState.NONE
+    return when {
+        !enrolled -> R.string.settings_control_needs_enrollment
+        StorageAdmission.isPaused(appContext) -> R.string.settings_control_storage_paused
+        !settings.isUserIdentificationStudyAuthorized() ||
+            !CollectionGate.collects(appContext, CollectionModuleId.USER_IDENTIFICATION) ->
+            R.string.settings_identification_unavailable
+        else -> R.string.settings_identification_save_failed
+    }
+}

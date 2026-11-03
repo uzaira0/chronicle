@@ -12,7 +12,7 @@ import androidx.work.ForegroundUpdater
 import androidx.work.ProgressUpdater
 import androidx.work.WorkerFactory
 
-    fun auditWorkerParameters(): WorkerParameters {
+    fun auditWorkerParameters(runAttemptCount: Int = 0): WorkerParameters {
         val executor = Executor { }
         val progress = Proxy.newProxyInstance(ProgressUpdater::class.java.classLoader, arrayOf(ProgressUpdater::class.java)) { _, _, _ ->
             error("no progress expected")
@@ -23,6 +23,6 @@ import androidx.work.WorkerFactory
         val factory = object : WorkerFactory() {
             override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker? = null
         }
-        return WorkerParameters(UUID.randomUUID(), Data.EMPTY, emptyList(), WorkerParameters.RuntimeExtras(), 0, 0,
+        return WorkerParameters(UUID.randomUUID(), Data.EMPTY, emptyList(), WorkerParameters.RuntimeExtras(), runAttemptCount, 0,
             executor, kotlin.coroutines.EmptyCoroutineContext, WorkManagerTaskExecutor(executor), factory, progress, foreground)
     }

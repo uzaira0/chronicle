@@ -37,9 +37,7 @@ object SystemBarInsets : Application.ActivityLifecycleCallbacks {
         ViewCompat.requestApplyInsets(content)
     }
 
-    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-        activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-    }
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
     override fun onActivityStarted(activity: Activity) = Unit
     override fun onActivityResumed(activity: Activity) = Unit
     override fun onActivityPaused(activity: Activity) = Unit

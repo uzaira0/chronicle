@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.services
 
+import androidx.annotation.CheckResult
 import android.app.Notification
 import android.app.Service
 import android.content.Context
@@ -10,6 +11,7 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 
+@CheckResult
 internal fun startForegroundServiceIfPermitted(context: Context, intent: Intent): Boolean {
     return try {
         // Manifest FGS permissions are install grants; handle framework refusal: https://developer.android.com/develop/background-work/services/fgs/declare
@@ -25,6 +27,7 @@ internal fun startForegroundServiceIfPermitted(context: Context, intent: Intent)
     }
 }
 
+@CheckResult
 internal fun promoteForegroundServiceIfPermitted(service: Service, id: Int, notification: Notification): Boolean {
     return try {
         // specialUse has no runtime prerequisites; promotion enforces access: https://developer.android.com/develop/background-work/services/fgs/service-types#special-use

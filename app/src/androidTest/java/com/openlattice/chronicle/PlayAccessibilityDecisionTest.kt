@@ -5,6 +5,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.accessibility.AccessibilityChecks
 import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.assertion.ViewAssertions.matches
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
 import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.openlattice.chronicle.collection.CollectionModuleId
@@ -34,7 +36,7 @@ class PlayAccessibilityDecisionTest {
     @Test
     fun enrollmentDecisionSurfacePassesAccessibilityChecks() {
         ActivityScenario.launch<Enrollment>(Intent(AppTestState.context, Enrollment::class.java)).use {
-            onView(withId(R.id.button)).perform(click())
+            onView(withId(R.id.button)).check(matches(isDisplayed())).perform(click())
         }
     }
 
@@ -50,7 +52,9 @@ class PlayAccessibilityDecisionTest {
         )
         ActivityScenario.launch<MainActivity>(Intent(AppTestState.context, MainActivity::class.java)).use {
             onView(withId(R.id.nav_data_sharing)).perform(click())
+            onView(withId(R.id.dataSharingPageTitle)).check(matches(isDisplayed()))
             onView(withId(R.id.nav_settings)).perform(click())
+            onView(withId(R.id.settingsHomeScroll)).check(matches(isDisplayed()))
         }
     }
 
@@ -63,7 +67,7 @@ class PlayAccessibilityDecisionTest {
         ActivityScenario.launch<UserIdentificationActivity>(
             Intent(AppTestState.context, UserIdentificationActivity::class.java),
         ).use {
-            onView(withId(R.id.child_user_btn)).perform(click())
+            onView(withId(R.id.participant_user_btn)).check(matches(isDisplayed())).perform(click())
         }
     }
 }

@@ -5,9 +5,9 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import androidx.appcompat.app.AlertDialog
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.fragment.app.DialogFragment
-import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.ui.updateEnrollmentSettings
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 
 class OemBackgroundGuidanceDialog : DialogFragment() {
@@ -21,22 +21,22 @@ class OemBackgroundGuidanceDialog : DialogFragment() {
                 "samsung" -> R.string.oem_background_vendor_samsung
                 else -> error("Unsupported manufacturer")
             }
-            AlertDialog.Builder(context)
+            MaterialAlertDialogBuilder(context)
                 .setTitle(R.string.oem_background_guidance_title)
                 .setMessage(getString(R.string.oem_background_guidance_body, getString(vendorLabel)))
                 .setPositiveButton(R.string.oem_background_guidance_open_settings) { dialog, _ ->
-                    EnrollmentSettings(context).toggleOemGuidanceDialog(false)
+                    updateEnrollmentSettings { it.toggleOemGuidanceDialog(false) }
                     dialog.cancel()
                     val preferred = OemBackgroundGuidance.preferredIntents(
                         Build.MANUFACTURER,
                         context.packageName,
                         context.applicationInfo.loadLabel(context.packageManager).toString(),
-                    ).firstOrNull { it.resolveActivity(context.packageManager) != null }
+                    ).firstOrNull { DeviceSettingsNavigator.canOpen(context, it) }
                         ?: Intent(Settings.ACTION_SETTINGS)
                     DeviceSettingsNavigator.open(context, preferred)
                 }
                 .setNegativeButton(android.R.string.cancel) { dialog, _ ->
-                    EnrollmentSettings(context).toggleOemGuidanceDialog(false)
+                    updateEnrollmentSettings { it.toggleOemGuidanceDialog(false) }
                     dialog.cancel()
                 }
                 .create()

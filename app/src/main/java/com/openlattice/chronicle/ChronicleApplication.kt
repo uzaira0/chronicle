@@ -1,25 +1,23 @@
 package com.openlattice.chronicle
 
 import android.app.Application
-import android.os.Build
+import android.os.UserManager
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.security.InvitedServerCa
 import androidx.work.Configuration
-import com.openlattice.chronicle.services.crypto.FileSealedEnvelopeStore
-import com.openlattice.chronicle.services.crypto.PayloadSealer
-import com.openlattice.chronicle.services.upload.installLegacyCrashHandler
-import java.io.File
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.profileinstaller.ProfileInstallerInitializer
+import androidx.startup.AppInitializer
+import com.openlattice.chronicle.services.upload.installPreAndroid11CrashHandler
 
 /**
  * Application shell for WorkManager **on-demand initialization** ([Configuration.Provider]).
  *
- * Needed by direct-boot collection (2026-07-15): a process started before the user's first
- * unlock skips every non-`directBootAware` ContentProvider — including the `androidx.startup`
- * `InitializationProvider` that auto-initializes WorkManager — and providers are never
- * instantiated later in that process's lifetime. Without on-demand initialization, the first
- * `WorkManager.getInstance(context)` after unlock (the direct-boot buffer drain, or
- * `StartOnBoot`'s worker scheduling delivered into the still-alive process) would throw.
- * With it, `getInstance(context)` self-initializes on first use in every process, direct-boot
- * or not. The `WorkManagerInitializer` entry is removed from the manifest accordingly
- * (`tools:node="remove"`), as on-demand initialization requires.
+ * Lifecycle uses the native direct-boot-aware Startup provider. WorkManager's initializer
+ * is removed because its database needs credential storage; the configuration provider
+ * initializes it on first post-unlock use, including processes that started while locked.
  *
  * **This class must never touch credential-encrypted storage** (the SQLCipher Room DB,
  * `EncryptedSharedPreferences`) — `onCreate` runs pre-unlock in a direct-boot process, where
@@ -29,15 +27,17 @@ class ChronicleApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
-        installLegacyCrashHandler(this)
+        installPreAndroid11CrashHandler(this)
+        InvitedServerCa.attach(this)
         registerActivityLifecycleCallbacks(SystemBarInsets)
-        // Path only; nothing is read or written until an upload worker seals a batch after unlock.
-        // dataDir/no_backup is noBackupFilesDir, so the envelopes never enter a backup.
-        PayloadSealer.sealedEnvelopeStore =
-            FileSealedEnvelopeStore(File(applicationInfo.dataDir, "no_backup/sealed-envelopes"))
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N ||
-            getSystemService(android.os.UserManager::class.java)?.isUserUnlocked == true) {
-            com.openlattice.chronicle.collection.state.ResearchPersistenceGate.initializeAsync(this)
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onResume(owner: LifecycleOwner) {
+                AppInitializer.getInstance(this@ChronicleApplication).initializeComponent(ProfileInstallerInitializer::class.java)
+                owner.lifecycle.removeObserver(this)
+            }
+        })
+        if (getSystemService(UserManager::class.java)?.isUserUnlocked == true) {
+            ResearchPersistenceGate.initializeAsync(this)
         }
     }
 

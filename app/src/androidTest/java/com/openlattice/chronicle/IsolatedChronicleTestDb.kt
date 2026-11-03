@@ -29,7 +29,6 @@ internal class IsolatedChronicleTestDb private constructor(
             val factory = SupportOpenHelperFactory(passphrase)
             val db = Room.databaseBuilder(context, ChronicleDb::class.java, name)
                 .openHelperFactory(factory)
-                .addMigrations(*ChronicleDb.ALL_MIGRATIONS)
                 .allowMainThreadQueries()
                 .build()
             return IsolatedChronicleTestDb(db, context, name)

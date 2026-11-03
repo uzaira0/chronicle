@@ -6,6 +6,7 @@ import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.annotation.RequiresApi
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,26 +17,29 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.withStarted
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.openlattice.chronicle.collection.state.CollectionAckRetryQueue
 import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
-import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.preferences.EnrollmentSettings
-import com.openlattice.chronicle.preferences.SensorSettings
-import com.openlattice.chronicle.services.enrollment.scheduleEnrollmentMonitoringWork
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.hasPostNotificationsRuntimePermission
-import com.openlattice.chronicle.services.notifications.userIdentificationMayRun
-import com.openlattice.chronicle.services.notifications.scheduleNotificationsWorker
-import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import com.openlattice.chronicle.services.sync.triggerImmediateChronicleSync
 import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
+import com.openlattice.chronicle.services.withdrawal.WithdrawalState
+import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.ui.OverviewFragment
 import com.openlattice.chronicle.collection.capability.activeModuleAccessMissing
 import com.openlattice.chronicle.ui.DataSharingFragment
 import com.openlattice.chronicle.ui.SettingsHomeFragment
 import com.openlattice.chronicle.ui.UploadsFragment
+import com.openlattice.chronicle.ui.openStoreRecovery
+import com.openlattice.chronicle.ui.storageFailureHandler
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
+import com.openlattice.chronicle.storage.LocalStoreState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -43,13 +47,13 @@ private const val FOREGROUND_SYNC_INTERVAL = 60_000L
 private val EXEMPTION_DIALOG_TAGS =
     listOf("batteryExemption", "hibernationExemption", "backgroundDataRestricted", "oemBackgroundGuidance")
 
-class MainActivity : AppCompatActivity() {
+class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO) : AppCompatActivity() {
 
     private lateinit var enrollmentSettings: EnrollmentSettings
     private lateinit var bottomNav: BottomNavigationView
 
-    /** Set once the authoritative off-main enrollment read admitted this dashboard. */
-    private var enrollmentConfirmed = false
+    private var routingJob: Job? = null
+    private var enrolledServicesStarted = false
     private var ackRouteAttempted = false
     private var accessRouteAttempted = false
     private var lastForegroundSyncEnqueuedAt = 0L
@@ -65,70 +69,111 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        try {
-            enrollmentSettings = EnrollmentSettings(this)
-        } catch (error: LocalStoreRecoveryRequiredException) {
-            startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
-            finish()
-            return
-        }
-
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                startActivity(Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_HOME)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                })
+        lifecycleScope.launch(storageFailureHandler()) {
+            enrollmentSettings = withContext(ioDispatcher) { EnrollmentSettings(applicationContext) }
+            WithdrawalStateStore(this@MainActivity).states.observe(this@MainActivity) { state ->
+                if (state == WithdrawalState.COMPLETE || state == WithdrawalState.CANCELLED) routeFromLocalEnrollment()
             }
-        })
-
-        if (ParticipantWithdrawalManager.collectionMustRemainStopped(this)) {
-            ParticipantWithdrawalManager.resumePending(this)
-            setupNavigation()
-            selectTab(R.id.nav_settings)
-            return
+            routeFromLocalEnrollment()
         }
 
-        // On MAIN, isEnrolled() answers from the gate's published snapshot, which is false until
-        // hydration after a cold start (e.g. an OEM process kill). Route from the authoritative
-        // Room-backed read instead, off the main thread.
-        lifecycleScope.launch {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    startActivity(Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    })
+                }
+            })
+        }
+
+    }
+
+    /** Creation, resume and completed withdrawal share the authoritative off-main Room read. */
+    private fun routeFromLocalEnrollment() {
+        if (!::enrollmentSettings.isInitialized || isFinishing) return
+        routingJob?.cancel()
+        routingJob = lifecycleScope.launch(storageFailureHandler()) {
             val enrolled = try {
-                withContext(Dispatchers.IO) { enrollmentSettings.isEnrolledOrThrow() }
+                withContext(ioDispatcher) {
+                    // Unreadable retained acknowledgments need the recovery screen, like an unreadable store.
+                    CollectionAckRetryQueue.of(applicationContext).load()
+                    // Refresh the cached identity fields as well as Room after withdrawal.
+                    EnrollmentSettings(applicationContext).hasConfiguredEnrollmentOrThrow()
+                }
             } catch (error: LocalStoreRecoveryRequiredException) {
-                startActivity(LocalStoreRecoveryActivity.intent(this@MainActivity, error.recoveryReason))
-                finish()
+                // A full disk keeps the appropriate participant screen reachable; the next resume retries the read.
+                ResearchPersistenceGate.closeForPersistenceFailure()
+                val identity = if (LocalStoreState.of(error) == LocalStoreState.WriteRefused) {
+                    withContext(ioDispatcher) { EnrollmentSettings(applicationContext).hasEnrollmentIdentity() }
+                } else false
+                navigateWhenStarted {
+                    if (openStoreRecovery(error)) finish()
+                    else {
+                        if (!routeToEnrollmentOrWithdrawal(identity) && !::bottomNav.isInitialized) {
+                            setupNavigation()
+                            handleSelectTabExtra(intent)
+                        }
+                    }
+                }
                 return@launch
             } catch (error: CancellationException) {
-                throw error // Destroyed mid-read (e.g. rotation): the new instance decides.
+                throw error
             } catch (error: RuntimeException) {
                 Log.e("MainActivity", "Enrollment read failed", error)
                 false
             }
-            if (!enrolled) {
-                DeviceUnlockMonitoringService.stopService(applicationContext)
-                startActivity(Intent(this@MainActivity, Enrollment::class.java).apply {
-                    data = intent.data
-                    action = intent.action
-                })
-                return@launch
-            }
-            enrollmentConfirmed = true
-
-            // The read may finish after onSaveInstanceState (Home pressed mid-read); fragment
-            // commits must wait until the Activity is started again.
-            lifecycle.withStarted {
-
-                startEnrolledServices()
-                setupNavigation()
-                handleSelectTabExtra(intent)
-                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                    showNextExemptionDialog()
-                    resumeEnrolled()
-                }
-            }
+            navigateWhenStarted { applyStartupRoute(enrolled) }
         }
     }
+
+    /** Runs inside [navigateWhenStarted]: the route the startup read decided. */
+    private fun applyStartupRoute(enrolled: Boolean) {
+        if (routeToEnrollmentOrWithdrawal(enrolled)) return
+        // Navigation may already exist without the services: a withdrawal or a full disk set it up first.
+        if (!enrolledServicesStarted) {
+            enrolledServicesStarted = true
+            startEnrolledServices()
+        }
+        if (!::bottomNav.isInitialized) {
+            setupNavigation()
+            handleSelectTabExtra(intent)
+        }
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            showNextExemptionDialog()
+            resumeEnrolled()
+        }
+    }
+
+    private fun routeToEnrollmentOrWithdrawal(enrolled: Boolean): Boolean {
+        val withdrawal = WithdrawalStateStore(this).state()
+        if (withdrawal.requiresResolution) {
+            ParticipantWithdrawalManager.resumePending(this)
+            if (!::bottomNav.isInitialized) {
+                setupNavigation()
+                selectTab(R.id.nav_settings)
+            }
+            return true
+        }
+        if (!enrolled) {
+            DeviceUnlockMonitoringService.stopService(applicationContext)
+            startActivity(Intent(this, Enrollment::class.java).apply {
+                data = intent.data
+                action = intent.action
+            })
+            finish()
+            return true
+        }
+        return false
+    }
+
+    /**
+     * The one boundary for navigation an asynchronous read decides. Its job survives STOPPED, so the result waits for
+     * STARTED: a fragment transaction after onSaveInstanceState would crash (H-STALE-NAV, AND-V01). ast-grep rule
+     * android-main-activity-async-navigation keeps every such tab change inside it.
+     */
+    private suspend fun navigateWhenStarted(route: () -> Unit) = lifecycle.withStarted { if (!isFinishing) route() }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -161,10 +206,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showFragment(fragment: Fragment) {
+        if (supportFragmentManager.findFragmentById(R.id.mainFragmentContainer)?.javaClass == fragment.javaClass) return
         supportFragmentManager
             .beginTransaction()
             .replace(R.id.mainFragmentContainer, fragment)
-            .commit()
+            .commitNow()
     }
 
     /** Switches the bottom nav to [itemId] (used by in-page links, e.g. the Overview review card). */
@@ -173,35 +219,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startEnrolledServices() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            if (userIdentificationMayRun(applicationContext)) {
-                DeviceUnlockMonitoringService.startAuthorizedService(applicationContext)
-            } else {
-                DeviceUnlockMonitoringService.stopService(applicationContext)
+        lifecycleScope.launch(storageFailureHandler()) {
+            withContext(ioDispatcher) {
+                // Notification permission is NOT a gate. Data collection (foreground-service based,
+                // poll-driven) runs whether or not notifications are granted; a denied permission only
+                // hides study reminders / new-data-option alerts. The optional ask lives on the
+                // acknowledgment screen after the participant agrees.
+                EnrolledWork.reconcile(applicationContext)
+                CollectionLoopCoordinator(applicationContext).updateSensorService()
+                DeviceUnlockMonitoringService.reconcile(applicationContext)
             }
-        }
-        // Notification permission is NOT a gate. Data collection (foreground-service based,
-        // poll-driven) runs whether or not notifications are granted; a denied permission only
-        // hides study reminders / new-data-option alerts. The optional ask now lives on the
-        // acknowledgment screen after the participant agrees. Previously this finish()'d the
-        // dashboard and bounced to NotificationPermissionActivity, which (a) blocked enrollment
-        // on an unnecessary permission and (b) raced/stacked with the consent screen.
-        scheduleChronicleSyncWork(this)
-        scheduleNotificationsWorker(this)
-        scheduleEnrollmentMonitoringWork(this)
-
-        if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
-            val sensorSettings = SensorSettings(this)
-            if (sensorSettings.isEnabled()) {
-                DistributionRestrictedRuntime.startHardwareSensors(this)
-            }
-            DistributionRestrictedRuntime.enqueueSensorSettingsRefresh(this)
-            DistributionRestrictedRuntime.scheduleSensorSettingsRefresh(this)
-        } else {
-            // A Play update must erase stale research-only sensor configuration instead of
-            // attempting to start a collector that is deliberately absent from the artifact.
-            SensorSettings(this).clear()
-        }
+        }.invokeOnCompletion { if (it != null) enrolledServicesStarted = false }
     }
 
     /**
@@ -230,22 +258,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::enrollmentSettings.isInitialized &&
-            ParticipantWithdrawalManager.collectionMustRemainStopped(this)
-        ) {
-            ParticipantWithdrawalManager.resumePending(this)
-            return
-        }
-        showNextExemptionDialog()
-        if (::enrollmentSettings.isInitialized && (enrollmentConfirmed || enrollmentSettings.isEnrolled())) {
-            resumeEnrolled()
-        }
+        routeFromLocalEnrollment()
     }
 
     /**
-     * Shows the first background-collection prompt that applies. Runs on every resume and again once
-     * the enrollment read confirms: on a cold start the first resume comes before it, so the
-     * enrolled-only prompts would otherwise wait for the next resume.
+     * Shows the first background-collection prompt after the routing read confirms enrollment.
+     * Every resume rechecks local enrollment before showing enrolled-only prompts.
      */
     private fun showNextExemptionDialog() {
         if (!::enrollmentSettings.isInitialized) return
@@ -253,9 +271,7 @@ class MainActivity : AppCompatActivity() {
         // check each return stacked another copy of a dialog that was still open. One dialog at a
         // time; the next one in the chain shows after this one is dismissed.
         if (EXEMPTION_DIALOG_TAGS.any { supportFragmentManager.findFragmentByTag(it) != null }) return
-        val enrolled = enrollmentConfirmed || enrollmentSettings.isEnrolled()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-            !hasIgnoreBatteryOptimization(this) &&
+        if (!hasIgnoreBatteryOptimization(this) &&
             enrollmentSettings.isBatteryOptimizationDialogEnabled()
         ) {
             BatteryOptimizationExemptionDialog().show(supportFragmentManager, "batteryExemption")
@@ -267,10 +283,9 @@ class MainActivity : AppCompatActivity() {
             // months without UI opens — the normal state for a passive collection device.
             // One dialog at a time: this chains behind the battery prompt.
             AppHibernationExemptionDialog().show(supportFragmentManager, "hibernationExemption")
-        } else if (enrolled && isBackgroundDataRestricted() && enrollmentSettings.isBackgroundDataDialogEnabled()) {
+        } else if (isBackgroundDataRestricted() && enrollmentSettings.isBackgroundDataDialogEnabled()) {
             BackgroundDataRestrictionDialog().show(supportFragmentManager, "backgroundDataRestricted")
-        } else if (enrolled &&
-            OemBackgroundGuidance.matches(Build.MANUFACTURER) &&
+        } else if (OemBackgroundGuidance.matches(Build.MANUFACTURER) &&
             enrollmentSettings.isOemGuidanceDialogEnabled()
         ) {
             OemBackgroundGuidanceDialog().show(supportFragmentManager, "oemBackgroundGuidance")
@@ -298,6 +313,11 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("main_activity_prefs", Context.MODE_PRIVATE)
         if (prefs.getBoolean("notification_asked", false)) return
         prefs.edit().putBoolean("notification_asked", true).apply()
+        NotificationRationaleDialog().show(supportFragmentManager, NotificationRationaleDialog.TAG)
+    }
+
+    /** Called by [NotificationRationaleDialog] once the participant has read why notifications are asked. */
+    internal fun requestNotificationPermission() {
         notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 
@@ -309,27 +329,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun routeToAcknowledgmentIfPending() {
-        if (ackRouteAttempted || !(enrollmentConfirmed || enrollmentSettings.isEnrolled())) return
+        if (ackRouteAttempted) return
         lifecycleScope.launch {
-            val pending = withContext(Dispatchers.IO) {
+            val pending = withContext(ioDispatcher) {
                 try {
                     CollectionLoopCoordinator(applicationContext).pendingAcknowledgmentSnapshot()
                 } catch (e: Exception) {
-                    Log.w("MainActivity", "Failed to read pending acknowledgments", e)
-                    com.openlattice.chronicle.collection.state.PendingAcknowledgmentSnapshot(emptySet(), "")
+                    Log.e("MainActivity", "Pending acknowledgment status is unavailable")
+                    null
                 }
             }
-            if (pending.modules.isNotEmpty() && !ackRouteAttempted) {
-                ackRouteAttempted = true
-                accessRouteAttempted = true // Data Sharing also shows the missing-access rows.
-                // A module is awaiting a per-module decision — land the participant on the Data
-                // Sharing tab to review it. No bulk "I agree": each module is decided individually
-                // there (the old all-at-once acknowledgment screen is retired).
-                selectTab(R.id.nav_data_sharing)
+            if (pending == null) {
+                Toast.makeText(this@MainActivity, R.string.ds_capability_failed, Toast.LENGTH_LONG).show()
                 return@launch
             }
-            if (accessRouteAttempted) return@launch
-            val accessMissing = withContext(Dispatchers.IO) {
+            val decisionPending = pending.modules.isNotEmpty()
+            navigateWhenStarted {
+                if (decisionPending && !ackRouteAttempted) {
+                    ackRouteAttempted = true
+                    accessRouteAttempted = true // Data Sharing also shows the missing-access rows.
+                    // A module is awaiting a per-module decision — land the participant on the Data
+                    // Sharing tab to review it. No bulk "I agree": each module is decided individually
+                    // there (the old all-at-once acknowledgment screen is retired).
+                    selectTab(R.id.nav_data_sharing)
+                }
+            }
+            if (decisionPending || accessRouteAttempted) return@launch
+            val accessMissing = withContext(ioDispatcher) {
                 try {
                     activeModuleAccessMissing(applicationContext)
                 } catch (e: Exception) {
@@ -337,11 +363,13 @@ class MainActivity : AppCompatActivity() {
                     false
                 }
             }
-            if (accessMissing && !accessRouteAttempted) {
-                accessRouteAttempted = true
-                // An accepted module is inert until its OS access (e.g. Usage Access, which
-                // enrollment defers to Data Sharing) is granted — land there so it is requested.
-                selectTab(R.id.nav_data_sharing)
+            navigateWhenStarted {
+                if (accessMissing && !accessRouteAttempted) {
+                    accessRouteAttempted = true
+                    // An accepted module is inert until its OS access (e.g. Usage Access, which
+                    // enrollment defers to Data Sharing) is granted — land there so it is requested.
+                    selectTab(R.id.nav_data_sharing)
+                }
             }
         }
     }

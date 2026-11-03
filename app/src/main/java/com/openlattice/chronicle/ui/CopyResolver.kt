@@ -3,9 +3,8 @@ package com.openlattice.chronicle.ui
 import android.content.Context
 
 /**
- * Resolves a string resource id plus format arguments to display text. Pure presenters keep a
- * JVM-testable English table as their default resolver; screens pass [Context.copyResolver] so
- * the same presenter follows the device locale.
+ * Resolves a string resource id plus format arguments to display text. Pure presenters keep
+ * resource resolution injectable; screens pass [Context.copyResolver] to follow the device locale.
  */
 typealias CopyResolver = (id: Int, args: Array<out Any>) -> String
 

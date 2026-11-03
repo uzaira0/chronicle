@@ -17,7 +17,7 @@ class SensitiveLoggingInvariantTest {
             "mobileSigningSecret",
             "MOBILE_SIGNING_SECRET",
             "participantId",
-            "sourceDeviceId",
+            "sourceRandomDeviceId",
             "X-Api-Key",
             "Authorization",
             "deviceSecret",
@@ -40,7 +40,7 @@ class SensitiveLoggingInvariantTest {
                 .flatMap { dir -> dir.walkTopDown().filter { it.isFile && (it.extension == "kt" || it.extension == "java") } }
 
         fun isAllowed(line: String): Boolean =
-            line.contains("Backfilled sourceDeviceId on \$backfilled server row(s)")
+            line.contains("Backfilled sourceRandomDeviceId on \$backfilled server row(s)")
     }
 
     @Test

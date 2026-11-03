@@ -1,6 +1,7 @@
 package com.openlattice.chronicle.layout
 
 import android.graphics.Rect
+import android.graphics.Bitmap
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
@@ -12,7 +13,9 @@ import androidx.core.widget.NestedScrollView
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckPreset
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult.AccessibilityCheckResultType
+import com.google.android.apps.common.testing.accessibility.framework.Parameters
 import com.google.android.apps.common.testing.accessibility.framework.uielement.AccessibilityHierarchyAndroid
+import com.google.android.apps.common.testing.accessibility.framework.utils.contrast.BitmapImage
 import java.util.Locale
 
 /** Geometry checks that hold on any device: text fits, children fit, nothing sits under a system bar. */
@@ -34,10 +37,11 @@ object LayoutChecks {
         return issues.distinct()
     }
 
-    fun accessibility(root: View): List<String> {
-        val hierarchy = AccessibilityHierarchyAndroid.newBuilder(root).build()
+    fun accessibility(root: View, screenshot: Bitmap? = null): List<String> {
+        val hierarchy = AccessibilityHierarchyAndroid.newBuilder(root).setObtainRenderingInfo(true).build()
+        val parameters = Parameters().apply { screenshot?.let { putScreenCapture(BitmapImage(it)) } }
         return AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset(AccessibilityCheckPreset.LATEST)
-            .flatMap { it.runCheckOnHierarchy(hierarchy) }
+            .flatMap { it.runCheckOnHierarchy(hierarchy, null, parameters) }
             .filter { it.type == AccessibilityCheckResultType.ERROR }
             .map { result ->
                 val element = result.element

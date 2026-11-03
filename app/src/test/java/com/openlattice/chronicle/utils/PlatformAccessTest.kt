@@ -15,13 +15,14 @@ import android.content.pm.PackageInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.UserManager
 import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.PermissionActivity
-import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.R
+import com.openlattice.chronicle.collection.capability.DistributionChannel
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.NOTIFICATION_DELETED_ACTION
 import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
@@ -40,11 +41,26 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowApplication
-import org.robolectric.util.ReflectionHelpers
+import com.openlattice.chronicle.EnrollmentTestStores
+import com.openlattice.chronicle.WorkManagerRule
+import com.openlattice.chronicle.audit.AuditStores
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.onPersistenceWorker
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.services.notifications.startMonitoringCommand
+import org.junit.Rule
+import org.junit.rules.TestRule
 
 @RunWith(RobolectricTestRunner::class)
-@Config(application = Application::class)
+@Config(application = Application::class, shadows = [EnrollmentTestStores.LifecycleModules::class])
 class PlatformAccessTest {
+    // Only the service lifecycle schedules work; platform access checks need no WorkManager database.
+    @get:Rule val workManagerRule = TestRule { base, description ->
+        if (description.methodName?.substringBefore('[') ==
+            "unlockServiceSeparatesSystemAndPrivateActionsAndUnregistersBothInstances") {
+            WorkManagerRule().apply(base, description)
+        } else base
+    }
     private val app = ApplicationProvider.getApplicationContext<Application>()
     private val userManager = requireNotNull(app.getSystemService(UserManager::class.java)) { "user manager available" }
     private val privateReceiverPermission = app.packageName + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
@@ -124,20 +140,21 @@ class PlatformAccessTest {
 
     @Test @Config(sdk = [26, 27, 36])
     fun notificationListenerCheckTracksGrantAndRevocation() {
+        val shipsListener = DistributionChannel.current() == DistributionChannel.RESEARCH
         val component = ComponentName(app.packageName, "com.openlattice.chronicle.services.notifications.NotificationListener")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             val manager = shadowOf(requireNotNull(app.getSystemService(NotificationManager::class.java)) { "notification manager available" })
             manager.setNotificationListenerAccessGranted(component, false)
             assertFalse(hasNotificationListenerAccess(app))
             manager.setNotificationListenerAccessGranted(component, true)
-            assertEquals(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS, hasNotificationListenerAccess(app))
+            assertEquals(shipsListener, hasNotificationListenerAccess(app))
             manager.setNotificationListenerAccessGranted(component, false)
         } else {
             val key = "enabled_notification_listeners"
             Settings.Secure.putString(app.contentResolver, key, "")
             assertFalse(hasNotificationListenerAccess(app))
             Settings.Secure.putString(app.contentResolver, key, component.flattenToString())
-            assertEquals(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS, hasNotificationListenerAccess(app))
+            assertEquals(shipsListener, hasNotificationListenerAccess(app))
             Settings.Secure.putString(app.contentResolver, key, "")
         }
         assertFalse(hasNotificationListenerAccess(app))
@@ -201,14 +218,17 @@ class PlatformAccessTest {
     @Test @Config(sdk = [26, 32, Build.VERSION_CODES.TIRAMISU, 36])
     fun unlockServiceSeparatesSystemAndPrivateActionsAndUnregistersBothInstances() {
         shadowOf(app).grantPermissions(privateReceiverPermission)
-        // Exercise the registration body without starting the unrelated enrollment executor.
-        val service = Robolectric.buildService(DeviceUnlockMonitoringService::class.java).get()
+        onPersistenceWorker {
+            AuditStores.install(app, enrolled = true)
+            ResearchPersistenceGate.initialize(app)
+        }
         val before = shadowOf(app).registeredReceivers
-        ReflectionHelpers.callInstanceMethod<Unit>(service, "registerReceivers")
-        ReflectionHelpers.setField(service, "receiversRegistered", true)
-        val registrations = shadowOf(app).registeredReceivers.filterNot { it in before }
+        val controller = Robolectric.buildService(DeviceUnlockMonitoringService::class.java).create()
+        var registrations = emptyList<ShadowApplication.Wrapper>()
         try {
-            assertEquals(4, registrations.size)
+            startMonitoringCommand(controller.get(), Intent(), 1)
+            registrations = shadowOf(app).registeredReceivers.filterNot { it in before }
+            assertEquals(5, registrations.size)
             val unlock = registrations.single { it.intentFilter.hasAction(Intent.ACTION_USER_PRESENT) }
             assertTrue(unlock.intentFilter.hasAction(Intent.ACTION_SCREEN_ON))
             assertEquals(2, unlock.intentFilter.countActions())
@@ -219,7 +239,18 @@ class PlatformAccessTest {
             assertNotSame(unlock.broadcastReceiver, identify.broadcastReceiver)
             assertReceiverExport(registrations.single { it.intentFilter.hasAction(NOTIFICATION_DELETED_ACTION) }, exported = false)
             assertReceiverExport(registrations.single { it.intentFilter.hasAction(Intent.ACTION_POWER_CONNECTED) }, exported = true)
-        } finally { service.onDestroy() }
+            assertReceiverExport(registrations.single {
+                it.intentFilter.hasAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            }, exported = true)
+        } finally {
+            controller.destroy()
+            onPersistenceWorker {
+                ChronicleDb.getInstance(app).close()
+                EnrollmentTestStores.db = null
+                EnrollmentTestStores.prefs = null
+                ResearchPersistenceGate.resetAfterLocalStoreRecovery()
+            }
+        }
         assertTrue(registrations.none { it in shadowOf(app).registeredReceivers })
     }
 

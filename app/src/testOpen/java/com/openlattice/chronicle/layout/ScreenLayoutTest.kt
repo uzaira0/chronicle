@@ -11,6 +11,7 @@ import android.view.View
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.drawToBitmap
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RoborazziOptions
@@ -22,11 +23,15 @@ import com.openlattice.chronicle.PermissionActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.StudyDisclosureActivity
 import com.openlattice.chronicle.UserIdentificationActivity
+import com.openlattice.chronicle.api.EnrollmentPreviewResponse
+import com.openlattice.chronicle.audit.AuditStores
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.state.CollectionOrientationActivity
 import com.openlattice.chronicle.collection.state.ConsentPlan
+import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.services.notifications.NotificationPermissionActivity
 import com.openlattice.chronicle.storage.LocalStoreRecoveryReason
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -36,6 +41,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.util.Locale
 
 /**
  * Every participant-facing screen, on the device and text extremes Android allows: small and
@@ -69,6 +75,7 @@ class ScreenLayoutTest(
         SMALL_HUGE_FONT("w320dp-h568dp-port-xhdpi", 2.0f, intArrayOf(0, 24, 0, 48)),
         LANDSCAPE_LARGE_FONT("w891dp-h411dp-land-xxhdpi", 1.3f, intArrayOf(32, 24, 48, 0)),
         TABLET("sw800dp-w800dp-h1280dp-port-xhdpi", 1.3f, intArrayOf(0, 24, 0, 48)),
+        TABLET_LANDSCAPE("sw800dp-w1280dp-h800dp-land-xhdpi", 1.3f, intArrayOf(0, 24, 0, 48)),
         PHONE_DARK("w411dp-h891dp-port-night-xxhdpi", 1.0f, intArrayOf(0, 24, 0, 48)),
     }
 
@@ -79,7 +86,7 @@ class ScreenLayoutTest(
         val context = ApplicationProvider.getApplicationContext<Context>()
         RuntimeEnvironment.setQualifiers("$locale-${device.qualifiers}")
         RuntimeEnvironment.setFontScale(device.fontScale)
-        TestStores.install(context, screen.enrolled)
+        AuditStores.install(context, screen.enrolled)
         if (screen == Screen.USAGE_PERMISSION) denyUsageAccess(context)
         if (screen == Screen.NOTIFICATION_PERMISSION) {
             shadowOf(context as android.app.Application).denyPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -89,17 +96,25 @@ class ScreenLayoutTest(
             settle()
             var issues = emptyList<String>()
             scenario.onActivity { activity ->
-                assertTrue("Chronicle windows must hide screenshots and recent-task previews",
-                    activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE != 0)
                 val root = activity.window.decorView
                 // Before Android 15 the window keeps content clear of the bars; from 15 the app must.
                 val bars = if (Build.VERSION.SDK_INT >= 35) applySystemBars(root) else Rect()
-                issues = LayoutChecks.run(root, bars) + LayoutChecks.accessibility(root)
+                issues = LayoutChecks.run(root, bars) + LayoutChecks.accessibility(root,
+                    if (device == Device.PHONE_DARK) root.drawToBitmap() else null)
+                if (device == Device.TABLET_LANDSCAPE) {
+                    listOf(R.id.overviewContent, R.id.uploadsContent, R.id.settingsHomeContent, R.id.dataSharingContent)
+                        .mapNotNull { root.findViewById<View>(it) }
+                        .forEach { content -> assertTrue("Expanded content must stay within its readable column",
+                            content.width <= activity.resources.getDimensionPixelSize(R.dimen.chronicle_content_max_width)) }
+                }
                 if (Build.VERSION.SDK_INT == 36 && GOLDEN(screen, device, locale)) {
+                    if (COMPARES_OR_RECORDS_GOLDENS) assertHostFormatsDigitsLikeTheGoldens()
                     root.captureRoboImage(
                         "src/testOpen/screenshots/${screen.name.lowercase()}_${device.name.lowercase()}_$locale.png",
+                        // Any changed pixel fails: native Robolectric rendering is deterministic, and a
+                        // 1% budget let a changed word (well under 1% of a screen) pass unnoticed.
                         roborazziOptions = RoborazziOptions(
-                            compareOptions = RoborazziOptions.CompareOptions(changeThreshold = 0.01f),
+                            compareOptions = RoborazziOptions.CompareOptions(changeThreshold = 0f),
                         ),
                     )
                 }
@@ -117,19 +132,23 @@ class ScreenLayoutTest(
         Screen.DATA_SHARING -> tab(context, R.id.nav_data_sharing)
         Screen.SETTINGS -> tab(context, R.id.nav_settings)
         Screen.ENROLLMENT, Screen.ENROLLMENT_DONE -> Intent(context, Enrollment::class.java)
-        // Field names are StudyDisclosureActivity's private extras; the body is a realistic
-        // multi-paragraph disclosure so wrapping and scrolling are exercised.
-        Screen.STUDY_DISCLOSURE -> Intent(context, StudyDisclosureActivity::class.java)
-            .putExtra("study_disclosure_title", context.getString(R.string.title_study_information))
-            .putExtra("study_disclosure_body", List(6) { context.getString(R.string.enrollment_done) }.joinToString("\n\n"))
-            .putExtra("study_privacy_url", "https://chronicle.example.org/privacy")
-            .putExtra("study_consent_url", "https://chronicle.example.org/consent")
+        // The real disclosure: every section heading and enabled-function line from resources,
+        // around the study-authored policy text of the enrollment-preview fixture.
+        Screen.STUDY_DISCLOSURE -> StudyDisclosureActivity.intent(context, disclosurePreview())
         Screen.CONSENT -> CollectionOrientationActivity.intent(context, EIGHT_MODULE_PLAN)
         Screen.USAGE_PERMISSION -> Intent(context, PermissionActivity::class.java)
         Screen.NOTIFICATION_PERMISSION -> Intent(context, NotificationPermissionActivity::class.java)
         Screen.USER_IDENTIFICATION -> Intent(context, UserIdentificationActivity::class.java)
         Screen.LOCAL_STORE_RECOVERY ->
             LocalStoreRecoveryActivity.intent(context, LocalStoreRecoveryReason.DATABASE_OPEN_FAILED)
+    }
+
+    private fun disclosurePreview(): EnrollmentPreviewResponse {
+        val json = requireNotNull(javaClass.getResource("/enrollment-preview.json")).readText()
+        val preview = requireNotNull(ChronicleJson.moshi.adapter(EnrollmentPreviewResponse::class.java).fromJson(json))
+        val manifest = preview.manifest
+        return preview.copy(manifest = manifest.copy(participantPolicy =
+            manifest.participantPolicy.copy(consentDocumentUrl = "https://research.example.org/consent")))
     }
 
     private fun tab(context: Context, id: Int) =
@@ -173,6 +192,26 @@ class ScreenLayoutTest(
     }
 
     companion object {
+        /** Set by the Roborazzi Gradle plugin for record, compare and verify runs. */
+        private val COMPARES_OR_RECORDS_GOLDENS =
+            listOf("record", "compare", "verify").any { System.getProperty("roborazzi.test.$it") == "true" }
+
+        /**
+         * Robolectric formats numbers with the host JDK (java.util.Formatter and its CLDR data), not
+         * Android ICU. For ar-XB, JDK 17 and 21 give Arabic-Indic digits and JDK 25 gives Latin ones,
+         * and the goldens were recorded on JDK 25 (toolchain-manifest.yaml jdk.build_runtime). On
+         * another host every ar-rXB golden showing a count differs, so name the cause instead.
+         */
+        private fun assertHostFormatsDigitsLikeTheGoldens() {
+            val digit = String.format(Locale.forLanguageTag("ar-XB"), "%d", 8)
+            assertEquals(
+                "screenshot goldens need host-JDK digits as recorded on JDK 25; java.version " +
+                    "${System.getProperty("java.version")} formats ar-XB 8 as '$digit'. Set JAVA_HOME to JDK 25.",
+                "8",
+                digit,
+            )
+        }
+
         private val EIGHT_MODULE_PLAN = ConsentPlan(
             required = listOf(
                 CollectionModuleId.USAGE_EVENTS,
@@ -195,7 +234,7 @@ class ScreenLayoutTest(
         private val GOLDEN = { _: Screen, device: Device, locale: String ->
             when (device) {
                 Device.PHONE -> locale == "en" || locale == "ar-rXB-ldrtl"
-                Device.SMALL_HUGE_FONT, Device.LANDSCAPE_LARGE_FONT, Device.TABLET -> locale == "es"
+                Device.SMALL_HUGE_FONT, Device.LANDSCAPE_LARGE_FONT, Device.TABLET, Device.TABLET_LANDSCAPE -> locale == "es"
                 Device.PHONE_DARK -> locale == "en"
             }
         }

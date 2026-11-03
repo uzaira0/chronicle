@@ -11,4 +11,6 @@
     <color name="neutral">#C0BACD</color>
     <color name="eq_ripple">#33C6B5FF</color>
     <color name="colorPrimaryDark">@color/eq_primary</color>
+    <color name="colorPrimary">@color/eq_focus</color>
+    <color name="colorOnPrimary">@color/eq_bg</color>
 </resources>

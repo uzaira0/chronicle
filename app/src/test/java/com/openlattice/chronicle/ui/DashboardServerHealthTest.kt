@@ -17,7 +17,7 @@ class DashboardServerHealthTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val server = UploadServerEntity(
         name = "study", url = "https://example.org", studyId = "s", participantId = "p",
-        sourceDeviceId = "d", lastUploadTime = "2026-10-01T18:00:00Z",
+        sourceRandomDeviceId = "d", lastUploadTime = "2026-10-01T18:00:00Z",
     )
 
     @Test fun `offline device never reports a healthy server`() {
@@ -32,5 +32,14 @@ class DashboardServerHealthTest {
             context.getString(R.string.server_health_healthy),
             DashboardDataRepository.loadServerHealth(context, listOf(server), online = true).message,
         )
+    }
+
+    /** A server refusing every upload (a version contract mismatch) never recovers alone: the participant is sent to the study team. */
+    @Test fun `uploads that keep failing say the data is kept and to contact the study team`() {
+        fun health(failures: Int) = DashboardDataRepository.loadServerHealth(
+            context, listOf(server.copy(consecutiveFailures = failures, lastUploadError = "HTTP_CLIENT_ERROR")), online = true).message
+        assertEquals(context.getString(R.string.server_health_status, context.getString(R.string.health_status_degraded).lowercase()),
+            health(1))
+        assertEquals(context.getString(R.string.server_health_uploads_failing), health(11))
     }
 }
