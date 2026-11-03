@@ -17,6 +17,9 @@ import com.openlattice.chronicle.services.lifecycle.INTERACTION_NETWORK_CONNECTE
 import com.openlattice.chronicle.services.lifecycle.INTERACTION_NETWORK_DISCONNECTED
 import com.openlattice.chronicle.services.lifecycle.INTERACTION_POWER_SAVE_MODE_ON
 import com.openlattice.chronicle.services.lifecycle.INTERACTION_POWER_SAVE_MODE_OFF
+import com.openlattice.chronicle.storage.forEachArchive
+import com.openlattice.chronicle.storage.UploadQueueTable
+import com.openlattice.chronicle.storage.updateUsageData
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
 import com.openlattice.chronicle.storage.QueueEntry
@@ -87,7 +90,7 @@ internal fun eraseSharedQueueModule(db: ChronicleDb, moduleId: CollectionModuleI
                         LocalOperationalIssue.MODULE_POLICY_ERASED,
                     )
                     if (kept.isEmpty()) queue.deleteEntry(entry)
-                    else queue.updateData(entry.writeTimestamp, entry.id,
+                    else db.updateUsageData(entry,
                         JsonSerializer.serializeQueueEntry(ChronicleData(kept)))
                 }
             }
@@ -104,7 +107,7 @@ private fun quarantineAmbiguousSharedRow(db: ChronicleDb, entry: QueueEntry) {
     val inserted = db.localDataQuarantineDao().insert(LocalDataQuarantineEntity(
         id = "dataQueue:$sourceId", sourceTable = "dataQueue", sourceId = sourceId,
         studyId = server?.studyId, participantId = server?.participantId,
-        deviceId = server?.sourceDeviceId, rawData = entry.data,
+        randomDeviceId = server?.sourceRandomDeviceId, rawData = entry.data,
         reason = "SAMPLE_QUARANTINED", createdAt = OffsetDateTime.now().toString(),
     ))
     queueDelete(db, entry)
@@ -119,16 +122,13 @@ private fun quarantineAmbiguousSharedRow(db: ChronicleDb, entry: QueueEntry) {
 /** Runs after live queue erasure, in the same transaction, including newly quarantined rows. */
 internal fun eraseSharedQueueModuleQuarantine(db: ChronicleDb, moduleId: CollectionModuleId) {
     val quarantine = db.localDataQuarantineDao()
-    val rows = quarantine.forSource("dataQueue")
-    rows.forEach { row ->
+    db.forEachArchive(UploadQueueTable.USAGE) { row ->
         val mapped = runCatching { JsonSerializer.deserializeQueueEntry(row.rawData) }.getOrNull()
         val events = mapped?.map { it as? ExtractedUsageEvent }
         if (events == null || events.any { it == null }) {
             quarantine.delete(row)
         } else {
-            val kept = events.filterNotNull().mapNotNull { event ->
-                eraseSharedUsageEvent(moduleId, event)
-            }
+            val kept = events.filterNotNull().mapNotNull { event -> eraseSharedUsageEvent(moduleId, event) }
             if (kept.isEmpty()) quarantine.delete(row)
             else if (kept != events) {
                 quarantine.update(row.copy(rawData = JsonSerializer.serializeQueueEntry(ChronicleData(kept))))

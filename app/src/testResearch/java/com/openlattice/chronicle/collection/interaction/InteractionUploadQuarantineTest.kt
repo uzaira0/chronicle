@@ -1,17 +1,17 @@
 package com.openlattice.chronicle.collection.interaction
 
 import android.content.Context
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.EnrollmentTestStores
 import com.openlattice.chronicle.api.RestrictedChronicleStudyApi
+import com.openlattice.chronicle.audit.studyApi
+import com.openlattice.chronicle.collection.AndroidInteractionEvent
 import com.openlattice.chronicle.collection.InteractionEventType
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
-import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
+import com.openlattice.chronicle.services.upload.decodedUploadBody
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.InteractionSampleEntry
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.interactionSampleDao
-import com.openlattice.chronicle.study.StudyEncryptionSetting
 import java.lang.reflect.Proxy
 import java.util.UUID
 import org.junit.After
@@ -28,15 +28,13 @@ class InteractionUploadQuarantineTest {
     private lateinit var db: ChronicleDb
 
     @Before fun setUp() {
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, context.getSharedPreferences("interaction-quarantine-test", Context.MODE_PRIVATE))
-        db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
+        db = EnrollmentTestStores.install(context)
+        EnrollmentTestStores.api = studyApi { method, _ -> error("Unexpected public study API call: $method") }
         val study = UUID.fromString("11111111-1111-1111-1111-111111111111")
         db.uploadServerDao().insert(UploadServerEntity(
             name = "test", url = "https://localhost", studyId = study.toString(),
-            participantId = "p1", sourceDeviceId = "d1", createdAt = "2026-09-01T00:00:00Z",
+            participantId = "p1", sourceRandomDeviceId = "d1", createdAt = "2026-09-01T00:00:00Z",
         ))
-        EncryptionSettingStore.of(context).put(study, StudyEncryptionSetting(enabled = false))
     }
 
     @After fun tearDown() = db.close()
@@ -59,8 +57,7 @@ class InteractionUploadQuarantineTest {
         val api = Proxy.newProxyInstance(RestrictedChronicleStudyApi::class.java.classLoader,
             arrayOf(RestrictedChronicleStudyApi::class.java)) { _, method, args ->
             check(method.name == "uploadAndroidInteractionData")
-            @Suppress("UNCHECKED_CAST")
-            val events = args[4] as List<com.openlattice.chronicle.collection.AndroidInteractionEvent>
+            val events = decodedUploadBody<List<AndroidInteractionEvent>>(args[3])
             uploadedIds += events.map { it.id }
             1
         } as RestrictedChronicleStudyApi

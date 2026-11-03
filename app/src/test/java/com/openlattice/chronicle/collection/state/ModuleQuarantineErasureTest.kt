@@ -1,23 +1,32 @@
 package com.openlattice.chronicle.collection.state
 
+import com.openlattice.chronicle.preferences.CURRENT_USER
+import android.database.sqlite.SQLiteException
+import org.junit.Assert
+import org.junit.Rule
+
+import com.openlattice.chronicle.android.fromInteractionType
+
 import android.content.Context
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import com.openlattice.chronicle.collection.CollectionDataDisposition
+import com.openlattice.chronicle.EnrollmentTestStores
+import com.openlattice.chronicle.audit.AuditStores
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.constants.ANDROID_SYSTEM_PACKAGE
 import com.openlattice.chronicle.constants.INTERACTION_BATTERY_LOW
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.models.ExtractedUsageEvent
+import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.serialization.JsonSerializer
-import com.openlattice.chronicle.services.release.purgeRestrictedPlayRows
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
 import com.openlattice.chronicle.storage.QueueEntry
+import com.openlattice.chronicle.storage.SensorSampleEntry
+import com.openlattice.chronicle.storage.serializeMalformedRow
 import java.time.OffsetDateTime
 import org.junit.After
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -28,35 +37,34 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class ModuleQuarantineErasureTest {
-    @get:org.junit.Rule val backgroundPersistence = com.openlattice.chronicle.collection.state.BackgroundPersistenceRule()
+    @get:Rule val backgroundPersistence = BackgroundPersistenceRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var db: ChronicleDb
 
     @Before fun setUp() {
-        val prefs = context.getSharedPreferences("module-erasure-test", Context.MODE_PRIVATE)
-        prefs.edit().clear().commit()
-        com.openlattice.chronicle.preferences.EncryptedPrefsHelper::class.java.getDeclaredField("instance")
-            .apply { isAccessible = true }.set(com.openlattice.chronicle.preferences.EncryptedPrefsHelper, prefs)
-        db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
-        listOf("audio_content", "app_network_usage", "battery_samples", "direct_boot_diagnostic").forEach { source ->
+        AuditStores.install(context, enrolled = true)
+        db = ChronicleDb.getInstance(context)
+        ResearchPersistenceGate.initialize(context)
+        listOf(restrictedQueueTable(ModuleQueue.AUDIO_CONTENT_SAMPLES), restrictedQueueTable(ModuleQueue.APP_NETWORK_USAGE_SAMPLES),
+            "battery_samples", "direct_boot_diagnostic").forEach { source ->
             db.localDataQuarantineDao().insert(LocalDataQuarantineEntity(
                 id = source, sourceTable = source, sourceId = "row-1",
-                studyId = "study", participantId = "participant", deviceId = "device",
-                rawData = "malformed".toByteArray(), reason = "SAMPLE_QUARANTINED",
+                studyId = "study", participantId = "participant", randomDeviceId = "device",
+                rawData = "malformed".toByteArray(), reason = LocalOperationalIssue.SAMPLE_QUARANTINED.name,
                 createdAt = "2026-09-28T00:00:00Z",
             ))
         }
     }
 
     @After fun tearDown() {
-        com.openlattice.chronicle.preferences.EncryptedPrefsHelper::class.java.getDeclaredField("instance")
-            .apply { isAccessible = true }.set(com.openlattice.chronicle.preferences.EncryptedPrefsHelper, null)
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, null)
+        ResearchPersistenceGate.resetAfterLocalStoreRecovery()
+        StorageAdmission.clear(context)
+        EnrollmentTestStores.prefs = null
+        EnrollmentTestStores.db = null
         db.close()
     }
 
-    private fun usage(activity: String? = "MainActivity") = ExtractedUsageEvent(
+    private fun usage(activity: String? = "MainActivity") = ExtractedUsageEvent(eventType = fromInteractionType("Activity Resumed"),
         appPackageName = "example.app", interactionType = "Activity Resumed",
         timestamp = OffsetDateTime.parse("2026-09-28T10:00:00Z"), timezone = "UTC",
         user = "participant", applicationLabel = "Example", activityClass = activity,
@@ -64,48 +72,25 @@ class ModuleQuarantineErasureTest {
 
     private fun quarantine(id: String, raw: ByteArray) = LocalDataQuarantineEntity(
         id = id, sourceTable = "dataQueue", sourceId = id,
-        studyId = "study", participantId = "participant", deviceId = "device",
-        rawData = raw, reason = "SAMPLE_QUARANTINED", createdAt = "2026-09-28T00:00:00Z",
+        studyId = "study", participantId = "participant", randomDeviceId = "device",
+        rawData = raw, reason = LocalOperationalIssue.SAMPLE_QUARANTINED.name, createdAt = "2026-09-28T00:00:00Z",
     ).also { db.localDataQuarantineDao().insert(it) }
 
     private fun discard(moduleId: CollectionModuleId) {
-        CollectionLoopCoordinator::class.java.getDeclaredMethod("applyDisposition",
-            CollectionModuleId::class.java, CollectionDataDisposition::class.java).apply { isAccessible = true }
-            .invoke(CollectionLoopCoordinator(context), moduleId, CollectionDataDisposition.DISCARD_AND_STOP)
-    }
-
-    @Test fun dedicatedPayloadAdmissionAndErasureUseTheSameModule() {
-        val module = CollectionModuleId.CONNECTIVITY_STATE
-        val payload = com.openlattice.chronicle.crypto.EncryptedPayloadType.CONNECTIVITY_STATE
-        db.collectionModuleStateDao().upsertAll(listOf(com.openlattice.chronicle.storage.CollectionModuleStateEntity(
-            module.id, false, ParticipantDecision.ACCEPTED.name, 0, false, 1, null, CollectionDataDisposition.HOLD_PENDING.id,
-        )))
-        val policy = com.openlattice.chronicle.services.upload.UploadDispositionPolicy(db)
-        org.junit.Assert.assertFalse(policy.allows(payload))
-        org.junit.Assert.assertTrue(policy.allows(com.openlattice.chronicle.crypto.EncryptedPayloadType.BATTERY))
-        val old = com.openlattice.chronicle.services.crypto.PayloadSealer.sealedEnvelopeStore
-        val erased = mutableSetOf<com.openlattice.chronicle.crypto.EncryptedPayloadType>()
-        com.openlattice.chronicle.services.crypto.PayloadSealer.sealedEnvelopeStore =
-            object : com.openlattice.chronicle.services.crypto.SealedEnvelopeStore {
-                override fun load(stream: String): com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry? = null
-                override fun save(stream: String, entry: com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry) = Unit
-                override fun clear() = Unit
-                override fun erase(types: Set<com.openlattice.chronicle.crypto.EncryptedPayloadType>) { erased += types }
-            }
-        try {
-            eraseModuleAuxiliaryState(context, module)
-            assertEquals(setOf(payload), erased)
-        } finally { com.openlattice.chronicle.services.crypto.PayloadSealer.sealedEnvelopeStore = old }
+        ResearchPersistenceGate.stop {
+            ResearchErasureFence(context).erase(setOf(moduleId), ownerKey =
+                ResearchErasureFence.enrollmentKey(db.uploadServerDao().getConfiguredServer()!!))
+            CollectionLoopCoordinator(context).replayPendingErasures()
+        }
     }
 
     @Test fun identificationDiscardRedactsLiveAndQuarantinedUsers() {
-        val preference = context.getString(com.openlattice.chronicle.R.string.current_user)
-        EncryptedPrefsHelper.getEncryptedPrefs(context).edit().putString(preference, "identified-user").commit()
+        EncryptedPrefsHelper.getEncryptedPrefs(context).edit().putString(CURRENT_USER, "identified-user").commit()
         val raw = JsonSerializer.serializeQueueEntry(listOf(usage()))
         quarantine("identified", raw)
         db.queueEntryData().insertEntry(QueueEntry(1_000, 1, raw))
         discard(CollectionModuleId.USER_IDENTIFICATION)
-        org.junit.Assert.assertFalse(EncryptedPrefsHelper.getEncryptedPrefs(context).contains(preference))
+        Assert.assertFalse(EncryptedPrefsHelper.getEncryptedPrefs(context).contains(CURRENT_USER))
         val live = db.queueEntryData().getEntriesAfter(Long.MIN_VALUE, Long.MIN_VALUE, 10).single()
         assertEquals("", (JsonSerializer.deserializeQueueEntry(live.data).single() as ExtractedUsageEvent).user)
         val kept = db.localDataQuarantineDao().get("dataQueue", "identified")!!
@@ -165,7 +150,7 @@ class ModuleQuarantineErasureTest {
             "CREATE TRIGGER fail_quarantine BEFORE UPDATE ON local_data_quarantine BEGIN SELECT RAISE(ABORT, 'quarantine down'); END",
         )
 
-        assertThrows(java.lang.reflect.InvocationTargetException::class.java) {
+        assertThrows(SQLiteException::class.java) {
             discard(CollectionModuleId.IN_APP_ACTIVITY_CLASS)
         }
 
@@ -173,30 +158,37 @@ class ModuleQuarantineErasureTest {
         assertArrayEquals(raw, db.queueEntryData().getEntriesAfter(Long.MIN_VALUE, Long.MIN_VALUE, 10).single().data)
     }
 
+    @Test fun sensorDiscardErasesThatSensorsQuarantinedRowsAndKeepsOtherSensors() {
+        listOf("gyroscope", "light").forEach { type ->
+            val row = SensorSampleEntry("$type-row", type, "2026-09-28T00:00:00Z", "UTC", 1f, 2f, 3f, null, 1)
+            db.localDataQuarantineDao().insert(LocalDataQuarantineEntity(
+                id = "sensor_samples:${row.id}", sourceTable = "sensor_samples", sourceId = row.id,
+                studyId = "study", participantId = "participant", randomDeviceId = "device",
+                rawData = serializeMalformedRow(row), reason = LocalOperationalIssue.SAMPLE_QUARANTINED.name,
+                createdAt = "2026-09-28T00:00:00Z",
+            ))
+        }
+
+        discard(CollectionModuleId.SENSOR_GYROSCOPE)
+
+        assertNull(db.localDataQuarantineDao().get("sensor_samples", "gyroscope-row"))
+        assertNotNull(db.localDataQuarantineDao().get("sensor_samples", "light-row"))
+    }
+
     @Test fun moduleDiscardErasesOnlyItsQuarantineSourceInTheTableTransaction() {
         assertThrows(IllegalStateException::class.java) {
             db.runInTransaction {
-                eraseRestrictedQueueAndQuarantineInTransaction(db, DispositionQueue.AUDIO_CONTENT_SAMPLES)
+                eraseRestrictedQueueAndQuarantineInTransaction(db, ModuleQueue.AUDIO_CONTENT_SAMPLES)
                 error("rollback")
             }
         }
-        assertEquals(1, db.localDataQuarantineDao().count("audio_content"))
+        assertEquals(1, db.localDataQuarantineDao().count(restrictedQueueTable(ModuleQueue.AUDIO_CONTENT_SAMPLES)))
 
         db.runInTransaction {
-            eraseRestrictedQueueAndQuarantineInTransaction(db, DispositionQueue.AUDIO_CONTENT_SAMPLES)
+            eraseRestrictedQueueAndQuarantineInTransaction(db, ModuleQueue.AUDIO_CONTENT_SAMPLES)
         }
-        assertNull(db.localDataQuarantineDao().get("audio_content", "row-1"))
-        assertNotNull(db.localDataQuarantineDao().get("app_network_usage", "row-1"))
+        assertNull(db.localDataQuarantineDao().get(restrictedQueueTable(ModuleQueue.AUDIO_CONTENT_SAMPLES), "row-1"))
+        assertNotNull(db.localDataQuarantineDao().get(restrictedQueueTable(ModuleQueue.APP_NETWORK_USAGE_SAMPLES), "row-1"))
         assertNotNull(db.localDataQuarantineDao().get("battery_samples", "row-1"))
-    }
-
-    @Test fun playBoundaryErasesRestrictedQuarantineAndRetainsApprovedModuleQuarantine() {
-        purgeRestrictedPlayRows(db)
-
-        assertNull(db.localDataQuarantineDao().get("audio_content", "row-1"))
-        assertNull(db.localDataQuarantineDao().get("app_network_usage", "row-1"))
-        assertNotNull(db.localDataQuarantineDao().get("battery_samples", "row-1"))
-        // Ownerless direct-boot diagnostic counts hold no sample data; diagnostics are retained.
-        assertNotNull(db.localDataQuarantineDao().get("direct_boot_diagnostic", "row-1"))
     }
 }

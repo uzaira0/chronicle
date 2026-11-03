@@ -19,7 +19,7 @@ class LocalDataQuarantineDaoTest {
             listOf("old", "new").forEach { epoch ->
                 db.uploadDiagnosticDao().upsert(UploadDiagnosticEntity(
                     id = epoch, studyId = "study", participantId = "participant",
-                    deviceId = "device", enrollmentEpoch = epoch,
+                    randomDeviceId = "device", enrollmentEpoch = epoch,
                     day = "2026-01-01", moduleFamily = "SENSOR", issueCode = "LOCAL_BUFFER_OVERFLOW",
                     count = 1, firstOccurredAt = "2026-01-01T00:00:00Z",
                     lastOccurredAt = "2026-01-01T00:00:00Z", httpStatus = null, errorType = null,
@@ -46,7 +46,7 @@ class LocalDataQuarantineDaoTest {
             val entry = LocalDataQuarantineEntity(
                 id = "battery_samples:sample-1", sourceTable = "battery_samples",
                 sourceId = "sample-1", studyId = "study", participantId = "participant",
-                deviceId = "device", rawData = raw,
+                randomDeviceId = "device", rawData = raw,
                 reason = "SAMPLE_QUARANTINED", createdAt = OffsetDateTime.now().toString(),
             )
             db.localDataQuarantineDao().insert(entry)

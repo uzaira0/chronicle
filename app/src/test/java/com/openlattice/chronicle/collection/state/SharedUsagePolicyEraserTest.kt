@@ -1,5 +1,7 @@
 package com.openlattice.chronicle.collection.state
 
+import com.openlattice.chronicle.android.fromInteractionType
+
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.constants.ANDROID_SYSTEM_PACKAGE
 import com.openlattice.chronicle.constants.INTERACTION_BATTERY_LOW
@@ -10,7 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SharedUsagePolicyEraserTest {
-    private fun event(pkg: String, interaction: String, activity: String? = null) = ExtractedUsageEvent(
+    private fun event(pkg: String, interaction: String, activity: String? = null) = ExtractedUsageEvent(eventType = fromInteractionType(interaction),
         appPackageName = pkg, interactionType = interaction,
         timestamp = OffsetDateTime.parse("2026-01-01T00:00:00Z"), timezone = "UTC",
         user = "", applicationLabel = pkg, activityClass = activity,

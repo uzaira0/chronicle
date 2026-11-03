@@ -1,5 +1,6 @@
 package com.openlattice.chronicle.services.upload
 
+import com.openlattice.chronicle.collection.state.currentAppVersion
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
 import com.openlattice.chronicle.storage.UploadDiagnosticEntity
@@ -31,11 +32,13 @@ internal fun quarantineMalformedSample(
             sourceId = scopedSourceId,
             studyId = server.studyId,
             participantId = server.participantId,
-            deviceId = server.sourceDeviceId,
+            randomDeviceId = server.sourceRandomDeviceId,
             rawData = rawData,
             reason = reason,
             createdAt = now.toString(),
             settingsVersion = settingsVersion,
+            httpStatus = httpStatus,
+            appVersion = currentAppVersion(),
         ))
         removeFromActiveQueue()
         if (inserted != -1L) {
@@ -43,7 +46,7 @@ internal fun quarantineMalformedSample(
                 id = UUID.randomUUID().toString(),
                 studyId = server.studyId,
                 participantId = server.participantId,
-                deviceId = server.sourceDeviceId,
+                randomDeviceId = server.sourceRandomDeviceId,
                 enrollmentEpoch = "${server.id}:${server.createdAt}",
                 day = LocalDate.now().toString(),
                 moduleFamily = family.name,
