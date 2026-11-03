@@ -27,11 +27,11 @@ class DirectBootSensorSnapshotTest {
                 AndroidSensorType.accelerometer to SensorConfig(50, 10, 60),
                 AndroidSensorType.light to SensorConfig(5, 30, 300),
             ),
-            settingsVersion = 7,
+            owner = "enrollment-key",
         )
 
         assertTrue(written)
-        assertEquals(7, snapshot.settingsVersion())
+        assertEquals("enrollment-key", snapshot.owner())
         assertEquals(
             setOf(AndroidSensorType.accelerometer, AndroidSensorType.light),
             snapshot.collectableSensors(),
@@ -49,7 +49,7 @@ class DirectBootSensorSnapshotTest {
             ),
         )
         snapshot.write(mapOf(AndroidSensorType.light to SensorConfig(5, 30, 300)))
-        assertNull(snapshot.settingsVersion())
+        assertNull(snapshot.owner())
 
         assertEquals(setOf(AndroidSensorType.light), snapshot.collectableSensors())
         // The dropped sensor's stale overrides are gone: reads fall back to defaults.
@@ -75,7 +75,7 @@ class DirectBootSensorSnapshotTest {
 
     @Test
     fun stalenessBoundFailsClosed() {
-        snapshot.write(mapOf(AndroidSensorType.accelerometer to SensorConfig()))
+        snapshot.write(mapOf(AndroidSensorType.accelerometer to SensorConfig()), "enrollment-key")
         assertTrue(snapshot.isUsableFor(DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS))
 
         now += DirectBootSensorSnapshot.MAX_SNAPSHOT_AGE_MILLIS + 1

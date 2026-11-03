@@ -8,16 +8,13 @@ import java.util.*
 data class ExtractedUsageEvent @JsonCreator constructor(
     val appPackageName: String,
     val interactionType: String,
-    /**
-     * The raw Android `UsageEvents.Event` event type integer, carried verbatim so the backend
-     * stores the authoritative numeric type (the `event_type` column) instead of reverse-parsing
-     * it from [interactionType]. Defaults to -1 for backward-compatibility when deserializing
-     * events queued by an older app build that did not carry it.
-     */
-    val eventType: Int = -1,
+    /** Raw Android event type, or the reserved supplemental lifecycle type. */
+    val eventType: Int,
     val timestamp: OffsetDateTime,
     val timezone: String,
     val user: String,
     val applicationLabel: String,
     val activityClass: String? = null,
+    /** Assigned once when the event is queued; the server stores each ID once, so retries cannot duplicate it. */
+    val clientEventId: UUID? = null,
 ) : ChronicleSample

@@ -13,14 +13,9 @@ class SensorTypeMappingTest {
         assertEquals(Sensor.TYPE_SIGNIFICANT_MOTION, SensorTypeMapping.toAndroidType(AndroidSensorType.significantMotion))
         assertEquals(AndroidSensorType.tiltDetector, SensorTypeMapping.fromAndroidType(22))
         assertEquals(AndroidSensorType.screenOrientation, SensorTypeMapping.fromAndroidType(27))
-        assertEquals(AndroidSensorType.samsungMotion, SensorTypeMapping.fromAndroidType(65559))
-        assertEquals(AndroidSensorType.samsungGripWifi, SensorTypeMapping.fromAndroidType(65575))
     }
 
-    @Test
-    fun preservesRawVectorWidthForSamsungGripWifi() {
-        assertEquals(16, SensorTypeMapping.valueCount(AndroidSensorType.samsungGripWifi))
-    }
+
 
     @Test
     fun treatsSignificantMotionAsTriggerSensor() {
@@ -49,7 +44,6 @@ class SensorTypeMappingTest {
         listOf(
             AndroidSensorType.significantMotion,
             AndroidSensorType.tiltDetector,
-            AndroidSensorType.samsungMotion,
             AndroidSensorType.screenOrientation,
             AndroidSensorType.stepCounter,
             AndroidSensorType.light,

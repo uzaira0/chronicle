@@ -5,71 +5,76 @@ import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.StepsRecord
-import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Data
+import androidx.work.ForegroundUpdater
 import androidx.work.ListenableWorker
+import androidx.work.ProgressUpdater
+import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import androidx.work.impl.utils.taskexecutor.WorkManagerTaskExecutor
+import com.openlattice.chronicle.EnrollmentTestStores
+import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.HealthConnectRecordType
+import com.openlattice.chronicle.collection.HealthMetricType
 import com.openlattice.chronicle.collection.sink.HealthMetricSampleSink
+import com.openlattice.chronicle.collection.state.BackgroundPersistenceRule
+import com.openlattice.chronicle.collection.state.ResearchPersistenceBarrier
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.collection.state.ParticipantDecision
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
 import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.healthMetricSampleDao
+import java.lang.reflect.Proxy
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Proxy
-import java.time.Instant
-import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantReadWriteLock
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
-import kotlin.reflect.KClass
-import androidx.work.ForegroundUpdater
-import androidx.work.ProgressUpdater
-import androidx.work.WorkerFactory
 
 @RunWith(RobolectricTestRunner::class)
-@Config(application = Application::class, sdk = [28])
+@Config(application = Application::class, sdk = [28], shadows = [HealthMetricModuleHolderTestShadow::class])
 class HealthConnectUploadLeaseRegressionTest {
-    @get:org.junit.Rule val backgroundPersistence = com.openlattice.chronicle.collection.state.BackgroundPersistenceRule()
+    @get:org.junit.Rule val backgroundPersistence = BackgroundPersistenceRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
+    private val lock = ReentrantReadWriteLock(true)
     private lateinit var db: ChronicleDb
     @Before fun setUp() {
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
         val prefs = context.getSharedPreferences("health-upload-order", Context.MODE_PRIVATE)
         prefs.edit().clear().putString(STUDY_ID, "11111111-1111-1111-1111-111111111111")
             .putString(PARTICIPANT_ID, "participant").putString(PARTICIPATION_STATUS, "ENROLLED").commit()
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, prefs)
+        EnrollmentTestStores.prefs = prefs
         db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
-        db.uploadServerDao().insert(UploadServerEntity(name = "study", url = "https://localhost",
-            studyId = prefs.getString(STUDY_ID, "")!!, participantId = "participant", sourceDeviceId = "device"))
-        ResearchPersistenceGate.initialize(context)
+        EnrollmentTestStores.db = db
+        db.uploadServerDao().insert(UploadServerEntity(name = "study", url = "https://localhost", apiKey = "test-device-key",
+            studyId = prefs.getString(STUDY_ID, "")!!, participantId = "participant", sourceRandomDeviceId = "device"))
+        ResearchPersistenceGate.initialize(context, ResearchPersistenceBarrier(lock))
     }
     @After fun tearDown() {
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
-        HealthMetricModuleHolder::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(HealthMetricModuleHolder, null)
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, null)
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, null)
+        HealthMetricModuleHolderTestShadow.module = null
+        EnrollmentTestStores.db = null
+        EnrollmentTestStores.prefs = null
         db.close()
     }
 
@@ -79,15 +84,13 @@ class HealthConnectUploadLeaseRegressionTest {
             persistenceGuard = ResearchPersistenceGate.guard(context)), source = {
             sourceEntered.countDown()
             check(bindingCompleted.await(5, TimeUnit.SECONDS))
-            listOf(HealthMetricReading(com.openlattice.chronicle.collection.HealthMetricType.STEPS,
+            listOf(HealthMetricReading(HealthMetricType.STEPS,
                 1.0, "count", 1, 2, "provider"))
-        }, enrolled = { true })
-        HealthMetricModuleHolder::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(HealthMetricModuleHolder, module)
+        }, enrolled = { true }, persistLease = { ResearchPersistenceGate.withReadLease(it) })
+        HealthMetricModuleHolderTestShadow.module = module
         val pool = Executors.newFixedThreadPool(3)
         val upload = pool.submit<ListenableWorker.Result> { worker().doWork() }
         assertTrue(sourceEntered.await(5, TimeUnit.SECONDS))
-        val barrier = ResearchPersistenceGate::class.java.getDeclaredField("barrier").apply { isAccessible = true }.get(ResearchPersistenceGate)
-        val lock = barrier.javaClass.getDeclaredField("lock").apply { isAccessible = true }.get(barrier) as ReentrantReadWriteLock
         val writer = pool.submit { lock.writeLock().lockInterruptibly(); try { ResearchPersistenceGate.closeForPersistenceFailure() } finally {
             lock.writeLock().unlock() } }
         val queueWriter = pool.submit { UploadQueueSingleFlight.withExclusiveMutation {} }
@@ -110,10 +113,10 @@ class HealthConnectUploadLeaseRegressionTest {
             persistenceGuard = ResearchPersistenceGate.guard(context)), source = {
             sourceEntered.countDown()
             check(bindingCompleted.await(5, TimeUnit.SECONDS))
-            listOf(HealthMetricReading(com.openlattice.chronicle.collection.HealthMetricType.STEPS,
+            listOf(HealthMetricReading(HealthMetricType.STEPS,
                 1.0, "count", 1, 2, "provider"))
-        }, enrolled = { true })
-        HealthMetricModuleHolder::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(HealthMetricModuleHolder, module)
+        }, enrolled = { true }, persistLease = { ResearchPersistenceGate.withReadLease(it) })
+        HealthMetricModuleHolderTestShadow.module = module
         val pool = Executors.newSingleThreadExecutor()
         val upload = pool.submit<ListenableWorker.Result> { worker().doWork() }
         try {
@@ -121,13 +124,14 @@ class HealthConnectUploadLeaseRegressionTest {
             val old = db.uploadServerDao().getConfiguredServer()!!
             ResearchPersistenceGate.stop {
                 db.uploadServerDao().delete(old.id)
-                db.uploadServerDao().insert(old.copy(id = 0, sourceDeviceId = "replacement-device"))
+                db.uploadServerDao().insert(old.copy(id = 0, sourceRandomDeviceId = "replacement-device"))
             }
             assertTrue("replacement enrollment itself remains active", ResearchPersistenceGate.isActiveEnrollment(context))
             bindingCompleted.countDown()
             val result = upload.get(5, TimeUnit.SECONDS)
             assertEquals(0, db.healthMetricSampleDao().count())
-            assertEquals(ListenableWorker.Result.success(), result)
+            // The replacement is enrolled, so its upload first polls the status; no study API answers here.
+            assertEquals(ListenableWorker.Result.retry(), result)
         } finally {
             bindingCompleted.countDown(); pool.shutdownNow()
             assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS))
@@ -135,22 +139,32 @@ class HealthConnectUploadLeaseRegressionTest {
     }
 
     @Test fun healthRecordFutureHasDeadlineAndCanBeCancelled() {
+        HealthConnectScopeStore.of(context).replace(setOf(HealthConnectRecordType.STEPS))
+        db.collectionModuleStateDao().upsertAll(listOf(CollectionModuleStateEntity(
+            CollectionModuleId.HEALTH_CONNECT.id, true, ParticipantDecision.ACCEPTED.name, 1, false, 1)))
+        ResearchPersistenceGate.initialize(context, ResearchPersistenceBarrier(lock))
+        val readEntered = CountDownLatch(1)
+        val permissions = Proxy.newProxyInstance(androidx.health.connect.client.PermissionController::class.java.classLoader,
+            arrayOf(androidx.health.connect.client.PermissionController::class.java)) { _, _, _ ->
+            setOf(HealthPermission.getReadPermission(StepsRecord::class))
+        }
         val neverCompleting = Proxy.newProxyInstance(HealthConnectClient::class.java.classLoader,
             arrayOf(HealthConnectClient::class.java)) { _, method, _ ->
-            if (method.name == "readRecords") COROUTINE_SUSPENDED else error("unexpected ${method.name}")
+            when (method.name) {
+                "getPermissionController" -> permissions
+                "readRecords" -> { readEntered.countDown(); COROUTINE_SUSPENDED }
+                else -> error("unexpected ${method.name}")
+            }
         } as HealthConnectClient
-        val source = AndroidHealthMetricSource(context)
-        val read = source.javaClass.getDeclaredMethod("readRecords", HealthConnectClient::class.java, Set::class.java,
-            KClass::class.java, TimeRangeFilter::class.java).apply { isAccessible = true }
+        val source = AndroidHealthMetricSource(context, clientProvider = { neverCompleting }, isForeground = { true })
         val pool = Executors.newSingleThreadExecutor()
-        val call = pool.submit<Throwable?> {
-            try {
-                read.invoke(source, neverCompleting, setOf(HealthPermission.getReadPermission(StepsRecord::class)),
-                    StepsRecord::class, TimeRangeFilter.between(Instant.EPOCH, Instant.ofEpochMilli(10)))
-                null
-            } catch (error: InvocationTargetException) { error.targetException }
+        val call = pool.submit<TimeoutException> {
+            assertThrows(TimeoutException::class.java) { source.read() }
         }
-        try { assertTrue(call.get(12, TimeUnit.SECONDS) is TimeoutException) }
+        try {
+            assertTrue("the public source reached the provider", readEntered.await(5, TimeUnit.SECONDS))
+            call.get(12, TimeUnit.SECONDS)
+        }
         finally { call.cancel(true); pool.shutdownNow(); assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS)) }
     }
 

@@ -7,10 +7,25 @@ import android.util.Log
 import com.openlattice.chronicle.android.AndroidDeviceSensorAvailability
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.android.InteractionPointerCaptureCapability
-import com.openlattice.chronicle.sensors.SensorTypeMapping
+import com.openlattice.chronicle.api.CollectedUploadHeaders
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.capability.DistributionModulePolicy
+import com.openlattice.chronicle.collection.state.EnrollmentIdentity
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.collection.state.CollectionLoopStore
-import java.util.*
+import com.openlattice.chronicle.collection.state.CollectionModuleState
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate.OwnerAdmission
+import com.openlattice.chronicle.collection.state.enrollmentIdentity
+import com.openlattice.chronicle.preferences.AppliedOperationalModules
+import com.openlattice.chronicle.preferences.configuredStudyModuleEnabled
+import com.openlattice.chronicle.sensors.SensorTypeMapping
+import com.openlattice.chronicle.services.upload.UploadWorker
+import com.openlattice.chronicle.services.upload.CollectedUploadBody
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.storage.UploadServerEntity
+import java.util.UUID
 
 private val TAG = SensorAvailabilityReporter::class.java.simpleName
 
@@ -25,66 +40,56 @@ object SensorAvailabilityReporter {
         }
 
     /**
-     * @return true if the report was sent and acknowledged by the server,
+     * @return true if the report was acknowledged or intentionally skipped,
      *   false on any failure (network, auth, server error). Callers should treat
      *   false as a transient signal and may persist the failure for visibility.
      */
-    fun checkAndReport(
-        context: Context,
-        studyId: UUID,
-        participantId: String,
-        deviceId: String,
-        apiKey: String?,
-        requestedSensors: Set<AndroidSensorType>,
-        serverUrl: String,
-        mobileSigningSecretOverride: String? = null
-    ): Boolean {
-        val gate = com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-        val expected = gate.captureOwner(context)?.takeIf {
-            it.studyId == studyId.toString() && it.participantId == participantId && it.sourceDeviceId == deviceId &&
-                it.url == serverUrl && it.apiKey == apiKey && it.mobileSigningSecretOverride == mobileSigningSecretOverride
-        } ?: return false
-        return try {
-            gate.runIfExpectedOwner(context, expected) {
-            if (!CollectionLoopStore.of(context).collects(CollectionModuleId.SENSOR_AVAILABILITY)) {
-                return@runIfExpectedOwner true
+    internal fun checkAndReport(context: Context, expected: EnrollmentIdentity): Boolean = try {
+        ResearchPersistenceGate.withOwnerAdmission(context) { admission ->
+            val owner = when (admission) {
+                is OwnerAdmission.Admitted -> admission.owner
+                is OwnerAdmission.Stopped -> admission.owner
+                is OwnerAdmission.Refused -> return@withOwnerAdmission false
             }
-            val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-            val available = mutableSetOf<AndroidSensorType>()
-            val unavailable = mutableSetOf<AndroidSensorType>()
-
-            for (sensorType in requestedSensors) {
-                val androidType = SensorTypeMapping.toAndroidType(sensorType)
-                val sensor = sensorManager.getDefaultSensor(androidType)
-                if (sensor != null) {
-                    available.add(sensorType)
-                } else {
-                    unavailable.add(sensorType)
-                }
+            if (owner.enrollmentIdentity() != expected) return@withOwnerAdmission false
+            if (admission is OwnerAdmission.Stopped) return@withOwnerAdmission true
+            if (CollectionModuleState.collectionHalted(CollectionLoopStore.of(context).loadAll().values)) {
+                return@withOwnerAdmission true
             }
-
-            val availability = AndroidDeviceSensorAvailability(
-                availableSensors = available,
-                unavailableSensors = unavailable,
-            )
-
-            val studyApi = com.openlattice.chronicle.services.upload.UploadWorker.getChronicleStudyApi(
-                serverUrl,
-                mobileSigningSecretOverride
-            )
-            val result = studyApi.reportAndroidSensorAvailability(
-                studyId, participantId, deviceId, apiKey, availability
-            )
-
-            Log.i(
-                TAG,
-                "Reported sensor availability: requested=$requestedSensors, available=$available, unavailable=$unavailable (result=$result)"
-            )
-            true
-            } ?: false
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to report sensor availability", e)
-            false
+            reportAdmittedAvailability(context, owner)
         }
+    } catch (e: Exception) {
+        Log.w(TAG, "Failed to report sensor availability", e)
+        false
     }
+
+    private fun reportAdmittedAvailability(context: Context, owner: UploadServerEntity): Boolean {
+        val studyId = UUID.fromString(owner.studyId)
+        // Not consent-gated, so it has no decision row: the enrollment's study settings decide.
+        if (!DistributionModulePolicy.supports(CollectionModuleId.SENSOR_AVAILABILITY) ||
+            !configuredStudyModuleEnabled(owner, studyId, owner.participantId, CollectionModuleId.SENSOR_AVAILABILITY,
+                appliedOperationalModules = AppliedOperationalModules.load(context, owner))) {
+            return true
+        }
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        // Every modeled sensor type is checked whether or not a sensor module is enabled; one list: what the device has.
+        val availability = AndroidDeviceSensorAvailability(availableSensors = AndroidSensorType.entries.filterTo(mutableSetOf()) {
+            sensorManager.getDefaultSensor(SensorTypeMapping.toAndroidType(it)) != null
+        })
+
+        val studyApi = UploadWorker.getChronicleStudyApi(
+            owner.url
+        )
+        val body = CollectedUploadBody.encodeSnapshot(availability, AndroidDeviceSensorAvailability::class.java)
+        if (body == null) {
+            LocalUploadDiagnosticsStore.of(context).recordOperational(
+                LocalUploadModuleFamily.SENSOR, LocalOperationalIssue.SAMPLE_QUARANTINED)
+            return true
+        }
+        studyApi.reportAndroidSensorAvailability(studyId, owner.participantId,
+            CollectedUploadHeaders(owner.sourceRandomDeviceId, owner.apiKey).toMap(), body)
+        Log.i(TAG, "Sensor availability reported")
+        return true
+    }
+
 }

@@ -1,8 +1,6 @@
 package com.openlattice.chronicle.collection.sensors
 
-import com.openlattice.chronicle.android.AndroidSensorSetting
 import com.openlattice.chronicle.android.AndroidSensorType
-import com.openlattice.chronicle.collection.settings.LegacySensorSettingSource
 import com.openlattice.chronicle.sensors.SensorTypeMapping
 import java.time.OffsetDateTime
 
@@ -191,7 +189,7 @@ class ManualSensorRuntimeScheduler(
 /**
  * Fake [SensorRuntimeSettings] with directly-settable values. The scalar [samplingRate] /
  * [dutyActive] / [dutyPeriod] are the per-sensor defaults; the override maps let a test give
- * an individual sensor its own rate/duty (per-sensor consent redesign, 2026-06-11).
+ * an individual sensor its own rate/duty.
  */
 class FakeSensorRuntimeSettings(
     var sensors: Set<AndroidSensorType> = setOf(AndroidSensorType.accelerometer),
@@ -208,12 +206,5 @@ class FakeSensorRuntimeSettings(
     override fun dutyCyclePeriodSeconds(sensor: AndroidSensorType): Int = periodOverrides[sensor] ?: dutyPeriod
 }
 
-/** Fake [LegacySensorSettingSource] returning a fixed (or null) legacy setting. */
-class FakeLegacySensorSettingSource(
-    var setting: AndroidSensorSetting? = null,
-) : LegacySensorSettingSource {
-    override fun read(): AndroidSensorSetting? = setting
-}
-
-/** Whether [sensorType] is a one-shot trigger sensor — convenience for tests. */
+/** Whether [sensorType] is a one-shot trigger sensor. */
 fun isTrigger(sensorType: AndroidSensorType): Boolean = SensorTypeMapping.isTriggerSensor(sensorType)

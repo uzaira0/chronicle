@@ -48,8 +48,8 @@ class InteractionGridReducerTest {
         assertEquals(1.0, y, 1e-9)
     }
 
-    @Test fun rawNodeBoundsAreAuthoritativeAndOnlyLegacyGridIsDerived() {
-        val derived = deriveLegacyInteractionGridPosition(
+    @Test fun rawNodeBoundsAreAuthoritativeAndGridIsDerived() {
+        val derived = deriveInteractionGridPosition(
             bounds = InteractionNodeBounds(left = 500, top = 900, right = 542, bottom = 1168),
             displayWidth = 1080,
             displayHeight = 1920,

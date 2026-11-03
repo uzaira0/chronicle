@@ -1,381 +1,138 @@
 package com.openlattice.chronicle.collection.directboot
 
 import android.content.Context
-import com.openlattice.chronicle.android.AndroidSensorType
-import com.openlattice.chronicle.collection.core.CollectionLog
+import android.util.Log
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.serialization.ChronicleJson
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
 import com.openlattice.chronicle.storage.SensorSampleEntry
-import com.openlattice.chronicle.serialization.JsonSerializer
-import com.squareup.moshi.Moshi
+import com.openlattice.chronicle.storage.UploadServerEntity
+import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.Types
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
 import java.io.FileOutputStream
-import java.io.RandomAccessFile
+import java.io.IOException
+import java.security.GeneralSecurityException
 import java.security.MessageDigest
-import java.time.OffsetDateTime
+import java.security.ProviderException
 import java.util.UUID
 
 private const val TAG = "DirectBootSampleBuffer"
+
 /**
- * The device-protected-storage sample buffer for the direct-boot window.
- *
- * Between a reboot and the user's first unlock, the SQLCipher Room DB (credential-encrypted
- * storage) cannot be opened, so the sensor runtime writes its flushes here instead: an
- * append-only file of length-prefixed records, each record an AES/GCM-encrypted JSON batch
- * of [SensorSampleEntry] (see [KeystoreDirectBootRecordCipher]). After unlock,
- * [drain] replays the buffered entries into the normal `sensor_samples` queue — the caller
- * supplies the persist function so the drain can re-check each sample's collection gate at
- * drain time (consent may have been revoked while the device was off; the gate is the
- * persistence chokepoint, mirroring the runtime's flush semantics).
- *
- * Durability/idempotency:
- *  - a drain first renames the live file to a draining file and checkpoints consumed batches;
- *    a crash replays only the still-buffered records;
- *  - `sensor_samples` inserts use `OnConflictStrategy.IGNORE` on the sample id, so
- *    re-persisting a partially-drained file is a DB-level no-op for the rows already in;
- *  - a truncated/corrupt tail is copied to encrypted local quarantine before checkpointing;
- *    the incident is journaled for diagnostic replay.
- *
- * The buffer is bounded by [MAX_BUFFER_BYTES]; once full, further appends are dropped (and
- * loudly logged) rather than growing device-protected storage unboundedly — the locked
- * window is normally minutes, not days.
+ * Pre-unlock sensor samples for one enrollment: one append-only file in device-protected
+ * storage, each record `[length][AES-GCM blob]` of a JSON sample batch. After unlock the drain
+ * worker replays it through the consent gate and deletes it; erasure or withdrawal deletes it.
  */
-class DirectBootSampleBuffer(
-    private val dir: File,
-    private val cipher: DirectBootRecordCipher,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
-    private val reportLoss: (String, Int, String) -> Unit = { _, _, _ -> },
-    private val ownerForAppend: () -> String? = { "test-owner" },
-    private val settingsVersionForAppend: () -> Int? = { null },
-) {
-    constructor(context: Context) : this(
-        File(directBootFilesDir(context), DIRECT_BOOT_BUFFER_DIR_NAME),
-        KeystoreDirectBootRecordCipher(),
-        reportLoss = { code, count, id -> DirectBootDiagnosticsJournal(context).record(code, count, id) },
-        ownerForAppend = { DirectBootDiagnosticsJournal(context).currentOwner()?.let(::ownerKey) },
-        settingsVersionForAppend = com.openlattice.chronicle.preferences.DirectBootSensorSnapshot(context).settingsVersion().let { version -> {
-            version } },
-    )
+class DirectBootSampleBuffer(private val file: File, private val cipher: DirectBootRecordCipher) {
+    constructor(context: Context, owner: String) :
+        this(File(directBootBufferDir(context), "buffer-$owner.bin"), KeystoreDirectBootRecordCipher())
 
-    private data class Batch(val owner: String?, val samples: List<SensorSampleEntry>, val settingsVersion: Int? = null)
-    private data class OwnedSample(val owner: String?, val sample: SensorSampleEntry, val settingsVersion: Int?)
-    private data class DecodeResult(
-        val entries: List<OwnedSample>,
-        val badRecords: List<Pair<Int, ByteArray>>,
-        val corruptTail: ByteArray,
-    )
+    /** Samples dropped at capacity before unlock; the diagnostics store is unreadable until then. */
+    private val droppedFile = File(file.parentFile, "${file.name}.dropped")
 
-    /** Outcome of a [drain]: what persisted, what was dropped, and whether persistence failed. */
-    data class DrainResult(
-        val persisted: Int,
-        val corruptRecordsDropped: Int,
-        val failed: Boolean,
-    )
+    fun isEmpty(): Boolean = file.length() == 0L
 
-    /** IDs confirmed persisted or erased by policy; all other IDs remain buffered. */
-    data class DrainTransfer(
-        val transferredIds: Set<String>,
-        val failed: Boolean = false,
-        val discardedIds: Set<String> = emptySet(),
-    )
-
-    private val liveFile: File get() = File(dir, DIRECT_BOOT_LIVE_FILE_NAME)
-    private val drainingFile: File get() = File(dir, DIRECT_BOOT_DRAINING_FILE_NAME)
-
-    /** Whether there is nothing buffered (neither live nor crashed-drain records). */
-    fun isEmpty(): Boolean = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-        !(liveFile.length() > 0L || drainingFile.length() > 0L)
-    }
-
-    /** Reserve room for one maximum-size record before admitting another sample. */
-    fun hasAdmissionCapacity(): Boolean = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-        liveFile.length() + MAX_RECORD_BYTES <= MAX_BUFFER_BYTES
-    }
-
-    /**
-     * Irreversibly removes both active and interrupted-drain records at an enrollment boundary.
-     * A failed deletion is reported to the caller so withdrawal/recovery can retry instead of
-     * allowing samples from an old study to drain into a later enrollment.
-     */
-    fun clear(): Boolean = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-        val liveCleared = !liveFile.exists() || liveFile.delete()
-        val drainingCleared = !drainingFile.exists() || drainingFile.delete()
-        val otherCleared = dir.listFiles()?.filter { it != liveFile && it != drainingFile }
-            ?.all(File::deleteRecursively) ?: true
-        if (liveCleared && drainingCleared && otherCleared) dir.delete()
-        liveCleared && drainingCleared && otherCleared
-    }
-
-    /** Remove a disabled sensor from active records and retained encrypted copies. */
-    fun eraseSensorType(sensorType: String, expectedOwner: String? = null,
-                        beforeErase: (Set<String>) -> Unit = {}): Int =
-        eraseSensorTypes(setOf(sensorType), expectedOwner, beforeErase)
-
-    internal fun eraseSensorTypes(sensorTypes: Set<String>, expectedOwner: String?,
-                                  beforeErase: (Set<String>) -> Unit = {}): Int =
-        synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-            val removed = linkedSetOf<String>()
-            val sampleFiles = dir.walkTopDown().filter {
-                it.isFile && !it.name.startsWith("diagnostics") &&
-                    (it.name.endsWith(".bin") || it.name.endsWith(".tmp"))
-            }.toList()
-            sampleFiles.filter { it.name.endsWith(".tmp") }.forEach {
-                check(it.delete()) { "Unable to erase direct-boot sample checkpoint" }
-            }
-            sampleFiles.filter { !it.name.endsWith(".tmp") && it.length() > 0L }.forEach { file ->
-                val decoded = decodeAll(file)
-                val policyIds = linkedSetOf<String>()
-                val keep = decoded.entries.filterNot {
-                    val unknownSensor = runCatching { AndroidSensorType.valueOf(it.sample.sensorType) }.isFailure
-                    // Ownerless legacy records of an erased sensor cannot prove another owner, so they go too.
-                    val erase = unknownSensor || (it.sample.sensorType in sensorTypes &&
-                        (expectedOwner == null || it.owner.isNullOrBlank() || it.owner == expectedOwner))
-                    if (erase && removed.add(it.sample.id)) {
-                        if (unknownSensor) reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, "unknown-sensor:${it.sample.id}")
-                        else policyIds += it.sample.id
-                    }
-                    erase
-                }
-                beforeErase(policyIds)
-                // Undecodable sample payloads cannot be scoped to a sensor or enrollment.
-                writeRecords(file, keep)
-                if (file == liveFile || file == drainingFile) {
-                    runCatching { preserveCorruption(decoded, retainPayloads = false) }
-                        .onFailure { log.warn(TAG, "Unable to journal erased corrupt samples", it) }
-                }
-            }
-            removed.size
-        }
-
-    /**
-     * Encrypts and appends [samples] as one record. Returns [ModuleResult.Ok] on success
-     * (the runtime treats it exactly like a Room flush), [ModuleResult.Failed] on an I/O or
-     * crypto error (the runtime re-queues and retries). A full buffer journals the exact
-     * capacity loss and returns Ok with `items = 0`; the direct-boot runtime counts it as loss.
-     */
-    fun append(samples: List<SensorSampleEntry>): ModuleResult {
+    /** Encrypts and appends one record. A full buffer drops the batch and reports `items = 0`. */
+    fun append(samples: List<SensorSampleEntry>): ModuleResult = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
         if (samples.isEmpty()) return ModuleResult.Ok(items = 0)
-        return synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-            try {
-                if (!dir.isDirectory && !dir.mkdirs()) {
-                    return@synchronized failed(IllegalStateException("Cannot create buffer dir"))
-                }
-                val owner = ownerForAppend() ?: return@synchronized failed(
-                    IllegalStateException("Direct-boot enrollment owner is unavailable"),
-                )
-                val blob = cipher.encrypt(BATCH_ADAPTER.toJson(Batch(owner, samples, settingsVersionForAppend())).toByteArray(Charsets.UTF_8))
-                require(blob.size <= MAX_RECORD_BYTES) { "Direct-boot batch exceeds record limit" }
-                if (liveFile.length() + blob.size + Int.SIZE_BYTES > MAX_BUFFER_BYTES) {
-                    reportLoss("DIRECT_BOOT_CAPACITY_DROPPED", samples.size, UUID.randomUUID().toString())
-                    log.error(
-                        TAG,
-                        "Direct-boot buffer full (${liveFile.length()} bytes); dropping ${samples.size} sample(s)",
-                    )
-                    return@synchronized ModuleResult.Ok(items = 0)
-                }
-                FileOutputStream(liveFile, true).use { fos ->
-                    DataOutputStream(fos).apply {
-                        writeInt(blob.size)
-                        write(blob)
-                        flush()
-                    }
-                    fos.fd.sync()
-                }
-                ModuleResult.Ok(items = samples.size)
-            } catch (e: Exception) {
-                failed(e)
+        try {
+            val blob = cipher.encrypt(ADAPTER.toJson(samples).toByteArray(Charsets.UTF_8))
+            if (file.length() + Int.SIZE_BYTES + blob.size > MAX_BUFFER_BYTES) {
+                Log.e(TAG, "Direct-boot buffer full; dropping ${samples.size} sample(s)")
+                runCatching { droppedFile.writeText((droppedCount() + samples.size).toString()) }
+                    .onFailure { Log.e(TAG, "Unable to count dropped direct-boot samples", it) }
+                return ModuleResult.Ok(items = 0)
             }
+            val dir = checkNotNull(file.parentFile)
+            if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Cannot create the direct-boot buffer directory")
+            FileOutputStream(file, true).use { out ->
+                DataOutputStream(out).apply { writeInt(blob.size); write(blob); flush() }
+                out.fd.sync()
+            }
+            ModuleResult.Ok(items = samples.size)
+        } catch (error: IOException) {
+            appendFailed(error)
+        } catch (error: GeneralSecurityException) {
+            appendFailed(error)
+        } catch (error: ProviderException) {
+            appendFailed(error)
         }
     }
 
+    private fun appendFailed(error: Exception): ModuleResult {
+        Log.e(TAG, "Direct-boot buffer append failed", error)
+        return ModuleResult.Failed(error, redactedMessage = "direct-boot buffer append failed: ${error.javaClass.simpleName}")
+    }
+
     /**
-     * Replays only records owned by [expectedOwner] through [persist] in batches of
-     * [DRAIN_BATCH]. Consumed batches are checkpointed; failures retain the remainder.
+     * Hands each record to [persist] in order, then deletes the file. When [persist] returns
+     * false the file is kept for a later retry; re-persisting is safe because sample IDs are
+     * insert-ignored. The file ends at a clean end or at a torn final write. Any other unreadable
+     * record keeps every byte: the file moves to `corrupt-<uuid>.bin`, which no drain opens and
+     * withdrawal deletes with the directory. Samples dropped at capacity and a set-aside file are
+     * handed to [reportLoss] so the study sees them in the upload diagnostics.
      */
     fun drain(
-        expectedOwner: String = "test-owner",
-        enrollmentCreatedAt: String? = null,
-        persist: (List<SensorSampleEntry>) -> DrainTransfer,
-    ): DrainResult = drainWithSettingsVersion(expectedOwner, enrollmentCreatedAt) { samples, _ -> persist(samples) }
-
-    fun drainWithSettingsVersion(
-        expectedOwner: String = "test-owner",
-        enrollmentCreatedAt: String? = null,
-        persist: (List<SensorSampleEntry>, Int?) -> DrainTransfer,
-    ): DrainResult = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-        // Drain the interrupted file independently: a partial tail must never frame newer records.
-        if (drainingFile.length() == 0L && liveFile.length() > 0L) {
-            if (!liveFile.renameTo(drainingFile)) {
-                return@synchronized DrainResult(0, 0, failed = true)
-            }
-        }
-        if (drainingFile.length() == 0L) {
-            drainingFile.delete()
-            return@synchronized DrainResult(0, 0, failed = false)
-        }
-
-        val decoded = decodeAll(drainingFile)
-        val createdAt = enrollmentCreatedAt?.let { runCatching { OffsetDateTime.parse(it).toInstant() }.getOrNull() }
-        val entries = decoded.entries.map {
-            val timestamp = runCatching { OffsetDateTime.parse(it.sample.timestamp).toInstant() }.getOrNull()
-            if (it.owner == null && createdAt != null && timestamp != null && timestamp >= createdAt) {
-                it.copy(owner = expectedOwner)
-            } else it
-        }
-        val corrupt = decoded.badRecords.size + if (decoded.corruptTail.isNotEmpty()) 1 else 0
-        preserveCorruption(decoded)
-        val unauthorized = entries.filter { it.owner != expectedOwner }
-        if (unauthorized.isNotEmpty()) {
-            val quarantineDir = File(dir, "quarantine")
-            check(quarantineDir.isDirectory || quarantineDir.mkdirs())
-            val digest = MessageDigest.getInstance("SHA-256")
-                .digest(unauthorized.joinToString("|") { "${it.owner}:${it.sample.id}" }.toByteArray())
-                // Owner quarantine filename is a repeatable payload key, never an authorization token.
-                // nosemgrep: chronicle-uuid-from-string
-            val quarantine = File(quarantineDir,
-                "owner-${UUID.nameUUIDFromBytes(digest)}.bin")
-            if (!quarantine.exists()) writeRecords(quarantine, unauthorized)
-        }
-        var remaining = entries.filter { it.owner == expectedOwner }
-        // Remove the unauthorized records and corrupt tail before persisting. The encrypted
-        // quarantine and undecodable bytes are durable first.
-        writeRecords(drainingFile, remaining)
-        var persisted = 0
-        val retained = mutableListOf<OwnedSample>()
-        while (remaining.isNotEmpty()) {
-            val version = remaining.first().settingsVersion
-            val batch = remaining.take(DRAIN_BATCH).takeWhile { it.settingsVersion == version }
-            val result = persist(batch.map { it.sample }, version)
-            val consumed = result.transferredIds + result.discardedIds
-            check(consumed.all { id -> batch.any { it.sample.id == id } })
-            result.discardedIds.forEach { id -> reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, "unknown-sensor:$id") }
-            persisted += batch.count { it.sample.id in result.transferredIds }
-            retained += batch.filterNot { it.sample.id in consumed }
-            remaining = remaining.drop(batch.size)
-            writeRecords(drainingFile, retained + remaining)
-            if (result.failed) {
-                log.error(TAG, "Drain persist failed after $persisted sample(s); remaining samples retained")
-                return@synchronized DrainResult(persisted, corrupt, failed = true)
-            }
-        }
-        if (retained.isEmpty()) {
-            check(drainingFile.delete()) { "Unable to retire direct-boot drain" }
-        }
-        if (persisted > 0 || corrupt > 0) {
-            log.info(TAG, "Drained $persisted direct-boot sample(s); $corrupt corrupt record(s) dropped")
-        }
-        if (retained.isEmpty() && liveFile.length() > 0L) {
-            val next = drainWithSettingsVersion(expectedOwner, enrollmentCreatedAt, persist)
-            DrainResult(persisted + next.persisted, corrupt + next.corruptRecordsDropped, next.failed)
-        } else DrainResult(persisted, corrupt, failed = retained.isNotEmpty())
-    }
-
-    private fun preserveCorruption(decoded: DecodeResult, retainPayloads: Boolean = true) {
-        decoded.badRecords.forEach { (ordinal, blob) ->
-            val digest = MessageDigest.getInstance("SHA-256").digest(blob)
-            // Corrupt record digest and ordinal deduplicate that record during repeated drains.
-            // nosemgrep: chronicle-uuid-from-string
-            val id = UUID.nameUUIDFromBytes(digest + ordinal.toByte()).toString()
-            val preserved = File(dir, "corrupt-$id.bin")
-            if (retainPayloads && !preserved.exists()) preserved.writeBytes(blob)
-            reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, id)
-        }
-        if (decoded.corruptTail.isNotEmpty()) {
-            val digest = MessageDigest.getInstance("SHA-256").digest(decoded.corruptTail)
-            // Truncated-tail digest deduplicates the same loss incident across drain retries.
-            // nosemgrep: chronicle-uuid-from-string
-            val id = UUID.nameUUIDFromBytes(digest).toString()
-            val preserved = File(dir, "corrupt-$id.bin")
-            if (retainPayloads && !preserved.exists()) preserved.writeBytes(decoded.corruptTail)
-            reportLoss("DIRECT_BOOT_CORRUPT_RECORD", 1, id)
-        }
-    }
-
-    /** A bad payload has a trustworthy length, so the next record can still be decoded. */
-    private fun decodeAll(file: File): DecodeResult {
-        val entries = mutableListOf<OwnedSample>()
-        val badRecords = mutableListOf<Pair<Int, ByteArray>>()
-        var corruptTail = byteArrayOf()
-        var ordinal = 0
-        RandomAccessFile(file, "r").use { input ->
-            while (true) {
-                if (input.filePointer == input.length()) break
-                val recordStart = input.filePointer
-                ordinal++
-                val blob = try {
-                    val length = input.readInt()
-                    if (length !in 1..MAX_RECORD_BYTES) throw EOFException()
-                    val blob = ByteArray(length)
-                    input.readFully(blob)
-                    blob
-                } catch (_: EOFException) {
-                    input.seek(recordStart)
-                    corruptTail = ByteArray((input.length() - recordStart).toInt()).also(input::readFully)
-                    break
-                }
-                try {
-                    val json = cipher.decrypt(blob).toString(Charsets.UTF_8)
-                    val batch = if (json.trimStart().startsWith("[")) {
-                        Batch(null, LEGACY_ADAPTER.fromJson(json).orEmpty())
-                    } else BATCH_ADAPTER.fromJson(json) ?: error("Empty direct-boot batch")
-                    entries.addAll(batch.samples.map { OwnedSample(batch.owner, it, batch.settingsVersion) })
-                } catch (e: Exception) {
-                    badRecords += ordinal to blob
-                    log.warn(TAG, "Quarantining corrupt direct-boot record", e)
+        reportLoss: (LocalOperationalIssue, Int) -> Unit,
+        persist: (List<SensorSampleEntry>) -> Boolean,
+    ): Boolean = synchronized(DIRECT_BOOT_BUFFER_LOCK) {
+        droppedCount().takeIf { it > 0 }?.let { reportLoss(LocalOperationalIssue.DIRECT_BOOT_CAPACITY_DROPPED, it) }
+        droppedFile.delete()
+        if (!file.exists()) return true
+        try {
+            DataInputStream(file.inputStream().buffered()).use { input ->
+                while (true) {
+                    val batch = readRecord(input) ?: break
+                    if (!persist(batch)) return false
                 }
             }
+        } catch (error: IOException) {
+            return quarantine(error, reportLoss)
+        } catch (error: GeneralSecurityException) {
+            return quarantine(error, reportLoss)
+        } catch (error: JsonDataException) {
+            return quarantine(error, reportLoss)
         }
-        return DecodeResult(entries, badRecords, corruptTail)
+        file.delete() || !file.exists()
     }
 
-    private fun writeRecords(destination: File, entries: List<OwnedSample>) {
-        val temp = File(destination.parentFile, "${destination.name}.tmp")
-        FileOutputStream(temp).use { fos ->
-            DataOutputStream(fos).use { output ->
-                entries.groupBy { it.owner to it.settingsVersion }.forEach { (evidence, owned) ->
-                    owned.chunked(DRAIN_BATCH).forEach { chunk ->
-                        val blob = cipher.encrypt(BATCH_ADAPTER.toJson(
-                            Batch(evidence.first, chunk.map { it.sample }, evidence.second),
-                        ).toByteArray(Charsets.UTF_8))
-                        check(blob.size in 1..MAX_RECORD_BYTES)
-                        output.writeInt(blob.size)
-                        output.write(blob)
-                    }
-                }
-                output.flush()
-                fos.fd.sync()
-            }
+    /** The next record, or null at the end of the file or inside a torn final write. */
+    private fun readRecord(input: DataInputStream): List<SensorSampleEntry>? {
+        val blob = try {
+            val size = input.readInt()
+            if (size !in 1..MAX_BUFFER_BYTES) throw IOException("Corrupt direct-boot record length")
+            ByteArray(size).also(input::readFully)
+        } catch (_: EOFException) {
+            return null
         }
-        check(temp.renameTo(destination)) { "Unable to checkpoint direct-boot drain" }
+        return ADAPTER.fromJson(cipher.decrypt(blob).toString(Charsets.UTF_8)) ?: throw IOException("Empty direct-boot record")
     }
 
-    private fun failed(e: Exception): ModuleResult.Failed {
-        log.error(TAG, "Direct-boot buffer write failed", e)
-        return ModuleResult.Failed(e, redactedMessage = "direct-boot buffer append failed: ${e.javaClass.simpleName}")
+    private fun quarantine(error: Exception, reportLoss: (LocalOperationalIssue, Int) -> Unit): Boolean {
+        Log.e(TAG, "Unreadable direct-boot record; keeping the buffer aside", error)
+        if (!file.renameTo(File(file.parentFile, "corrupt-${UUID.randomUUID()}.bin"))) return false
+        reportLoss(LocalOperationalIssue.DIRECT_BOOT_CORRUPT_RECORD, 1)
+        return true
     }
+
+    private fun droppedCount(): Int =
+        runCatching { droppedFile.takeIf(File::exists)?.readText()?.trim()?.toInt() }.getOrNull() ?: 0
 
     companion object {
-        /** Hard bound on the live buffer file; appends beyond it are dropped, not grown. */
-        const val MAX_BUFFER_BYTES: Long = 8L * 1024 * 1024
+        /** Encrypted pre-unlock bytes kept per enrollment; later samples are dropped. */
+        const val MAX_BUFFER_BYTES: Int = 8 * 1024 * 1024
 
-        /** Sanity bound on a single record (a runtime flush is ≤500 samples). */
-        const val MAX_RECORD_BYTES: Int = 4 * 1024 * 1024
+        private val ADAPTER = ChronicleJson.moshi.adapter<List<SensorSampleEntry>>(
+            Types.newParameterizedType(List::class.java, SensorSampleEntry::class.java))
 
-        /** Samples per persist call during a drain — the runtime's flush-threshold batch. */
-        const val DRAIN_BATCH: Int = 500
-
-        private val MOSHI = Moshi.Builder()
-            .add(KotlinJsonAdapterFactory())
-            .build()
-        private val BATCH_ADAPTER = MOSHI.adapter(Batch::class.java)
-        private val LEGACY_ADAPTER = MOSHI.adapter<List<SensorSampleEntry>>(
-                Types.newParameterizedType(List::class.java, SensorSampleEntry::class.java),
-            )
-
-        internal fun ownerKey(owner: DirectBootDiagnosticsJournal.Owner): String =
-            JsonSerializer.toJson(owner)
+        /** Opaque enrollment key, so a buffer never drains into a later enrollment. */
+        fun ownerKey(server: UploadServerEntity): String = MessageDigest.getInstance("SHA-256")
+            .digest("${server.studyId}:${server.participantId}:${server.sourceRandomDeviceId}:${server.id}:${server.createdAt}"
+                .toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }.take(32)
     }
 }

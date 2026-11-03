@@ -2,32 +2,24 @@ package com.openlattice.chronicle.collection.directboot
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import java.security.GeneralSecurityException
 import java.security.KeyStore
+import java.security.KeyStoreException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/**
- * Encrypts/decrypts one direct-boot buffer record. Seam so the buffer is JVM-testable
- * without the Android Keystore.
- */
+/** Encrypts one direct-boot buffer record; tests swap in a JVM cipher. */
 interface DirectBootRecordCipher {
     fun encrypt(plaintext: ByteArray): ByteArray
     fun decrypt(blob: ByteArray): ByteArray
 }
 
 /**
- * AES-256/GCM cipher over a non-exportable Android Keystore key.
- *
- * Device-protected storage is encrypted with a boot-time device key, not the user
- * credential — weaker than the credential-encrypted storage everything else uses. Buffered
- * sensor samples are therefore additionally encrypted record-by-record with this key. The
- * key is deliberately usable while the device is locked (`unlockedDeviceRequired` stays
- * false — the whole point is writing during the pre-unlock window) and is hardware-backed
- * where the device supports it.
- *
- * Blob layout: `[1-byte version][12-byte GCM IV][ciphertext + 16-byte tag]`.
+ * AES-256/GCM over a non-exportable Keystore key. Device-protected storage is keyed at boot, not by the
+ * user credential, so each buffered record is also encrypted with this key, which stays usable while
+ * locked. Blob layout: `[1-byte version][12-byte GCM IV][ciphertext + 16-byte tag]`.
  */
 class KeystoreDirectBootRecordCipher : DirectBootRecordCipher {
 
@@ -45,11 +37,13 @@ class KeystoreDirectBootRecordCipher : DirectBootRecordCipher {
     }
 
     override fun decrypt(blob: ByteArray): ByteArray {
-        require(blob.size > 1 + IV_LENGTH_BYTES) { "Record too short: ${blob.size} bytes" }
-        require(blob[0] == FORMAT_VERSION) { "Unknown record version ${blob[0]}" }
+        if (blob.size <= 1 + IV_LENGTH_BYTES) throw GeneralSecurityException("Record too short: ${blob.size} bytes")
+        if (blob[0] != FORMAT_VERSION) throw GeneralSecurityException("Unknown record version ${blob[0]}")
         val iv = blob.copyOfRange(1, 1 + IV_LENGTH_BYTES)
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(TAG_LENGTH_BITS, iv))
+        // A read never creates the key: a new key cannot open records sealed by the lost one.
+        val key = existingKey() ?: throw KeyStoreException("Direct-boot buffer key is missing")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, iv))
         return cipher.doFinal(blob, 1 + IV_LENGTH_BYTES, blob.size - 1 - IV_LENGTH_BYTES)
     }
 
@@ -61,20 +55,18 @@ class KeystoreDirectBootRecordCipher : DirectBootRecordCipher {
         private const val IV_LENGTH_BYTES = 12
         private const val TAG_LENGTH_BITS = 128
 
-        /**
-         * Creates the buffer key if missing. Called from the normal-mode snapshot rewrite so
-         * the key exists before the first locked boot ever needs it (key *use* works while
-         * locked; creating it ahead of time in normal mode avoids relying on keystore
-         * generation semantics in direct-boot mode).
-         */
+        /** Creates the key while unlocked, so the first locked boot only uses it. */
         fun ensureKey() {
             getOrCreateKey()
         }
 
+        private fun existingKey(): SecretKey? =
+            KeyStore.getInstance(KEYSTORE).apply { load(null) }.getKey(KEY_ALIAS, null) as? SecretKey
+
+        /** Only the write path creates the key. */
         @Synchronized
         private fun getOrCreateKey(): SecretKey {
-            val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-            (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+            existingKey()?.let { return it }
             val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
             generator.init(
                 KeyGenParameterSpec.Builder(

@@ -1,8 +1,8 @@
 package com.openlattice.chronicle.collection.sensors
 
+import android.util.Log
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.CollectionModuleSetting
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.collection.sink.SensorSampleWriter
@@ -15,6 +15,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.IdentityHashMap
+import java.util.concurrent.RejectedExecutionException
 
 private const val TAG = "SensorRuntimeController"
 
@@ -35,14 +37,14 @@ public enum class SensorCollectionMode {
  * The hardware-sensor runtime, extracted out of `HardwareSensorService` (refactor plan
  * §9.1 step 2). This is pure, `Context`-free logic — it owns:
  *
- *  - **per-sensor duty cycles** — since the per-sensor consent redesign (2026-06-11) each
+ *  - **per-sensor duty cycles** — each
  *    sensor is its own module with its own sampling rate + duty cycle, so each continuous
  *    sensor runs an **independent** active-phase / idle-phase loop through
  *    [SensorRuntimeScheduler] at its own [SensorRuntimeSettings.dutyCycleActiveSeconds] /
  *    [SensorRuntimeSettings.dutyCyclePeriodSeconds], with [SensorCollectionMode.DEGRADED]
  *    doubling the idle window in power-save mode;
  *  - **the in-memory buffer** — a bounded queue of [SensorSampleEntry],
- *    flushed at [FLUSH_THRESHOLD] entries and on [stop];
+ *    flushed at [FLUSH_THRESHOLD] entries, on [stop] and before each sensor upload run;
  *  - **power-save degraded mode** — the [SensorGateway.isPowerSaveMode] probe maps to a
  *    sampling-period / batch-latency multiplier;
  *  - **the critical-battery stop** — before each active phase the battery level is
@@ -87,7 +89,6 @@ public class SensorRuntimeController(
     private val sampleLease: (() -> Unit) -> Unit = { it() },
     private val retainOnStop: Boolean = false,
     private val observationAdmission: (AndroidSensorType) -> CollectionPersistenceGuard = { CollectionPersistenceGuard.ALLOW },
-    private val log: CollectionLog = CollectionLog.LOGCAT,
     /** Redacted count of already-collected samples affected by a local loss path. */
     private val reportLoss: (String, Int) -> Unit = { _, _ -> },
     /** Direct-boot capacity refusal has already been counted in its encrypted journal. */
@@ -220,7 +221,7 @@ public class SensorRuntimeController(
      */
     public fun start() {
         if (!started.compareAndSet(false, true)) {
-            log.info(TAG, "Sensor runtime already started; ignoring duplicate start")
+            Log.i(TAG, "Sensor runtime already started; ignoring duplicate start")
             return
         }
         shutdownLossReported.set(false)
@@ -240,8 +241,8 @@ public class SensorRuntimeController(
         if (!started.get() || scheduler.isShutdown()) return
         try {
             scheduler.execute { reconcileSafely() }
-        } catch (error: java.util.concurrent.RejectedExecutionException) {
-            log.warn(TAG, "Sensor reconciliation deferred after scheduler shutdown", error)
+        } catch (error: RejectedExecutionException) {
+            Log.w(TAG, "Sensor reconciliation deferred after scheduler shutdown", error)
         }
     }
 
@@ -251,12 +252,12 @@ public class SensorRuntimeController(
      * Idempotent: [scheduledContinuous] / [armedPersistent] guard against double-scheduling,
      * so re-running this (on [reconcile]) only picks up newly-enabled sensors.
      */
-    private val persistentOrigins = java.util.concurrent.ConcurrentHashMap<AndroidSensorType, CollectionPersistenceGuard>()
+    private val persistentOrigins = ConcurrentHashMap<AndroidSensorType, CollectionPersistenceGuard>()
 
     private fun reconcileSafely() {
         try { scheduleConfiguredSensors() }
         catch (error: Exception) {
-            log.warn(TAG, "Sensor authorization refresh failed; retry scheduled", error)
+            Log.w(TAG, "Sensor authorization refresh failed; retry scheduled", error)
             scheduleStorageAdmissionRecheck()
         }
     }
@@ -303,9 +304,9 @@ public class SensorRuntimeController(
             persistentOrigins[sensorType] = origin
             armedPersistent.add(sensorType)
             clearPersistentRetry(sensorType)
-            log.info(TAG, "Registered persistent (always-armed) listener for ${sensorType.name}")
+            Log.i(TAG, "Registered persistent (always-armed) listener for ${sensorType.name}")
         } else {
-            log.warn(TAG, "Persistent sensor ${sensorType.name} registration failed")
+            Log.w(TAG, "Persistent sensor ${sensorType.name} registration failed")
             schedulePersistentRetry(sensorType)
         }
     }
@@ -320,7 +321,7 @@ public class SensorRuntimeController(
         armedPersistent.remove(sensorType)
         persistentOrigins.remove(sensorType)
         try { scheduler.execute { schedulePersistentRetry(sensorType) } }
-        catch (error: RuntimeException) { if (!scheduler.isShutdown()) log.warn(TAG, "Sensor recovery scheduling failed", error) }
+        catch (error: RuntimeException) { if (!scheduler.isShutdown()) Log.w(TAG, "Sensor recovery scheduling failed", error) }
     }
 
     private fun schedulePersistentRetry(sensorType: AndroidSensorType) {
@@ -332,7 +333,7 @@ public class SensorRuntimeController(
         } ?: 1
         if (attempt > MAX_PERSISTENT_RETRY_ATTEMPTS) {
             persistentRetryScheduled.remove(sensorType)
-            log.error(
+            Log.e(
                 TAG,
                 "Persistent sensor ${sensorType.name} remains unavailable after " +
                     "$MAX_PERSISTENT_RETRY_ATTEMPTS retry attempts",
@@ -349,7 +350,7 @@ public class SensorRuntimeController(
         } catch (error: RuntimeException) {
             persistentRetryScheduled.remove(sensorType)
             if (!scheduler.isShutdown()) {
-                log.warn(TAG, "Unable to schedule persistent sensor retry", error)
+                Log.w(TAG, "Unable to schedule persistent sensor retry", error)
             }
         }
     }
@@ -368,7 +369,7 @@ public class SensorRuntimeController(
             }
         } catch (error: RuntimeException) {
             storageAdmissionRecheckScheduled.set(false)
-            if (!scheduler.isShutdown()) log.warn(TAG, "Unable to schedule storage admission recheck", error)
+            if (!scheduler.isShutdown()) Log.w(TAG, "Unable to schedule storage admission recheck", error)
         }
     }
 
@@ -401,7 +402,7 @@ public class SensorRuntimeController(
         reportPendingLoss()
         if (isServiceDestroy && result is ModuleResult.Failed) {
             lastDestroyFlushFailedMessage = result.redactedMessage
-            log.error(TAG, "Service-destroy flush failed; samples may be lost", result.error)
+            Log.e(TAG, "Service-destroy flush failed; samples may be lost", result.error)
         }
         if (isServiceDestroy && (retainOnStop || retainedOrigin != null)) sampleLease {
             val accepted = buffer.toList().filter { origins[it.id]?.isCurrent() == true }
@@ -425,7 +426,7 @@ public class SensorRuntimeController(
     /** Records that a service-destroy flush failed outside the [ModuleResult] contract. */
     public fun recordDestroyFlushFailure(message: String) {
         lastDestroyFlushFailedMessage = message
-        log.error(TAG, "Service-destroy flush failure recorded: $message")
+        Log.e(TAG, "Service-destroy flush failure recorded: $message")
         if (buffer.isNotEmpty() && shutdownLossReported.compareAndSet(false, true)) {
             reportLoss("LOCAL_SHUTDOWN_DROPPED", buffer.size)
         }
@@ -443,11 +444,11 @@ public class SensorRuntimeController(
         val periodSeconds = settings.dutyCyclePeriodSeconds(sensorType).toLong()
         val idleSeconds = (periodSeconds - activeSeconds) * mode.multiplier
 
-        log.info(TAG, "Duty cycle ${sensorType.name} ($mode): ${activeSeconds}s active / ${idleSeconds}s idle")
+        Log.i(TAG, "Duty cycle ${sensorType.name} ($mode): ${activeSeconds}s active / ${idleSeconds}s idle")
 
         val admitted = try { collectionGate(sensorType) && prepareCollection() && shouldCollect() }
         catch (error: Exception) {
-            log.warn(TAG, "Sensor admission failed; active phase will retry", error)
+            Log.w(TAG, "Sensor admission failed; active phase will retry", error)
             scheduler.schedule(STORAGE_RETRY_DELAY_SECONDS) { if (!scheduler.isShutdown()) scheduleCycle(sensorType) }
             return
         }
@@ -461,8 +462,8 @@ public class SensorRuntimeController(
                 }
             }
         } else {
-            // Skip this sensor's active phase; re-check after its idle window.
-            scheduler.schedule(idleSeconds) {
+            // A skipped active phase retries after a full period, including full-duty sensors.
+            scheduler.schedule(periodSeconds * mode.multiplier) {
                 if (!scheduler.isShutdown()) scheduleCycle(sensorType)
             }
         }
@@ -475,7 +476,7 @@ public class SensorRuntimeController(
     private fun shouldCollect(): Boolean {
         val level = gateway.batteryLevelPercent()
         if (level in 0..BATTERY_CRITICAL_THRESHOLD) {
-            log.warn(TAG, "Battery at $level% (<= $BATTERY_CRITICAL_THRESHOLD%), skipping collection")
+            Log.w(TAG, "Battery at $level% (<= $BATTERY_CRITICAL_THRESHOLD%), skipping collection")
             return false
         }
         return true
@@ -488,7 +489,7 @@ public class SensorRuntimeController(
         val rateHz = settings.samplingRateHz(sensorType)
         if (rateHz !in 1..CollectionModuleSetting.MAX_SENSOR_SAMPLING_RATE_HZ) {
             activeContinuous.remove(sensorType)
-            log.error(
+            Log.e(
                 TAG,
                 "Refusing invalid sampling rate for ${sensorType.name}; sensor remains stopped",
             )
@@ -499,7 +500,7 @@ public class SensorRuntimeController(
         val maxReportLatencyUs = BASE_MAX_REPORT_LATENCY_US * multiplier
 
         if (gateway.registerContinuousSensor(sensorType, samplingPeriodUs, maxReportLatencyUs)) {
-            log.info(
+            Log.i(
                 TAG,
                 "Registered continuous listener for ${sensorType.name} " +
                     "($mode, samplingPeriod=${samplingPeriodUs}us, " +
@@ -507,14 +508,14 @@ public class SensorRuntimeController(
             )
         } else {
             activeContinuous.remove(sensorType)
-            log.warn(TAG, "Sensor ${sensorType.name} not available on this device")
+            Log.w(TAG, "Sensor ${sensorType.name} not available on this device")
         }
     }
 
     private fun stopCollecting(sensorType: AndroidSensorType) {
         if (!activeContinuous.remove(sensorType)) return
         gateway.unregisterContinuousSensor(sensorType)
-        log.info(TAG, "Unregistered continuous (duty-cycled) listener for ${sensorType.name}")
+        Log.i(TAG, "Unregistered continuous (duty-cycled) listener for ${sensorType.name}")
     }
 
     /**
@@ -523,7 +524,7 @@ public class SensorRuntimeController(
      */
     public fun onBatteryLevel(percent: Int) {
         if (percent <= BATTERY_CRITICAL_THRESHOLD && activeContinuous.isNotEmpty()) {
-            log.warn(TAG, "Battery at $percent% (<= $BATTERY_CRITICAL_THRESHOLD%), stopping collection")
+            Log.w(TAG, "Battery at $percent% (<= $BATTERY_CRITICAL_THRESHOLD%), stopping collection")
             activeContinuous.toList().forEach { stopCollecting(it) }
         }
     }
@@ -559,7 +560,7 @@ public class SensorRuntimeController(
             val dropped = samplesDropped.incrementAndGet()
             countLoss("LOCAL_BUFFER_OVERFLOW", 1)
             if (dropped == 1L || dropped % FLUSH_THRESHOLD == 0L) {
-                log.error(TAG, "Sensor sample buffer full; dropped $dropped sample(s) to protect app memory")
+                Log.e(TAG, "Sensor sample buffer full; dropped $dropped sample(s) to protect app memory")
             }
             return
         }
@@ -580,7 +581,7 @@ public class SensorRuntimeController(
         } catch (error: RuntimeException) {
             flushScheduled.set(false)
             if (!scheduler.isShutdown()) {
-                log.warn(TAG, "Unable to schedule sensor buffer flush", error)
+                Log.w(TAG, "Unable to schedule sensor buffer flush", error)
             }
         }
     }
@@ -608,7 +609,7 @@ public class SensorRuntimeController(
                 } catch (error: RuntimeException) {
                     flushScheduled.set(false)
                     if (!scheduler.isShutdown()) {
-                        log.warn(TAG, "Unable to schedule sensor storage retry", error)
+                        Log.w(TAG, "Unable to schedule sensor storage retry", error)
                     }
                 }
             } else {
@@ -629,16 +630,16 @@ public class SensorRuntimeController(
     ): SensorSampleEntry {
         val valueCount = SensorTypeMapping.valueCount(sensorType)
         val rawValues = values.toList()
-        val legacyValues = rawValues.take(valueCount)
+        val axisValues = rawValues.take(valueCount)
         return SensorSampleEntry(
             id = UUID.randomUUID().toString(),
             sensorType = sensorType.name,
             timestamp = timestamp.toString(),
             timezone = ZoneId.systemDefault().id,
-            x = legacyValues.getOrNull(0),
-            y = legacyValues.getOrNull(1),
-            z = legacyValues.getOrNull(2),
-            w = legacyValues.getOrNull(3),
+            x = axisValues.getOrNull(0),
+            y = axisValues.getOrNull(1),
+            z = axisValues.getOrNull(2),
+            w = axisValues.getOrNull(3),
             accuracy = accuracy,
             valuesJson = rawValues.joinToString(prefix = "[", postfix = "]"),
         )
@@ -650,7 +651,7 @@ public class SensorRuntimeController(
      * closure; retired enrollment/erasure tokens discard them. Failed writes requeue the
      * still-authorized samples for the next flush.
      */
-    public fun flushBuffer(): ModuleResult {
+    public override fun flushBuffer(): ModuleResult {
         var result: ModuleResult = ModuleResult.Retry("persistence lease unavailable")
         try {
             sampleLease {
@@ -673,7 +674,7 @@ public class SensorRuntimeController(
             inFlightIds.addAll(drained.map { it.id })
             discardGenerations.toMap()
         }
-        val validated = java.util.IdentityHashMap<CollectionPersistenceGuard, Boolean>()
+        val validated = IdentityHashMap<CollectionPersistenceGuard, Boolean>()
         val isCurrent: (SensorSampleEntry) -> Boolean = { entry ->
             val sameGeneration = synchronized(bufferLock) {
                 (discardGenerations[entry.sensorType] ?: 0L) == (generations[entry.sensorType] ?: 0L)
@@ -704,7 +705,7 @@ public class SensorRuntimeController(
             return lastFlushResult
         }
 
-        log.info(TAG, "Flushing ${keep.size} sensor samples to sensor_samples")
+        Log.i(TAG, "Flushing ${keep.size} sensor samples to sensor_samples")
         val result = sink.writeCurrent(keep, isCurrent)
         when (result) {
             is ModuleResult.Ok -> {
@@ -719,7 +720,7 @@ public class SensorRuntimeController(
                 }
             }
             is ModuleResult.Failed -> {
-                log.error(TAG, "Failed to flush ${keep.size} sensor samples, re-queuing for retry", result.error)
+                Log.e(TAG, "Failed to flush ${keep.size} sensor samples, re-queuing for retry", result.error)
                 requeueAfterFailedFlush(keep, isCurrent)
             }
             is ModuleResult.Retry -> requeueAfterFailedFlush(keep, isCurrent)

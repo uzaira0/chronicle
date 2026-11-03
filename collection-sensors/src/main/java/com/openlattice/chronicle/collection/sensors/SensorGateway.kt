@@ -118,8 +118,8 @@ public interface SensorGateway {
 
     /**
      * Unregisters a single **continuous** sensor's listener, leaving every other continuous
-     * and persistent sensor untouched. Each sensor now runs its own per-sensor duty cycle
-     * (per-sensor consent redesign, 2026-06-11), so the active phase of one sensor must be
+     * and persistent sensor untouched. Each sensor runs its own duty cycle,
+     * so the active phase of one sensor must be
      * able to end without disturbing the others. A no-op if [sensorType] is not registered.
      */
     public fun unregisterContinuousSensor(sensorType: AndroidSensorType)
@@ -220,11 +220,6 @@ public class AndroidSensorGateway(
     ): Boolean = registerIfPermitted(sensorType) {
         val androidType = SensorTypeMapping.toAndroidType(sensorType)
         val sensor = sensorManager.getDefaultSensor(androidType) ?: return@registerIfPermitted false
-        val highSamplingRate = samplingPeriodUs < 5_000 &&
-            androidType in setOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE, Sensor.TYPE_MAGNETIC_FIELD)
-        if (Build.VERSION.SDK_INT >= 31 && highSamplingRate &&
-            appContext.checkSelfPermission(android.Manifest.permission.HIGH_SAMPLING_RATE_SENSORS) !=
-            PackageManager.PERMISSION_GRANTED) return@registerIfPermitted false
         val effectiveReportLatencyUs = dutyCycledReportLatencyUs(
             requestedLatencyUs = maxReportLatencyUs,
             samplingPeriodUs = samplingPeriodUs,

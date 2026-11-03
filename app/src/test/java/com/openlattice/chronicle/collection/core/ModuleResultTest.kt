@@ -1,7 +1,5 @@
 package com.openlattice.chronicle.collection.core
 
-import com.openlattice.chronicle.collection.CollectionModuleDiagnostics
-import com.openlattice.chronicle.collection.CollectionModuleId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -51,16 +49,4 @@ class ModuleResultTest {
         assertEquals("explicit cause", withMessage.redactedMessage)
     }
 
-    @Test
-    fun resultLabelFeedsDiagnosticsLastResult() {
-        // The Ok/Skipped/etc. label is what a module reports as diagnostics.lastResult.
-        val diagnostics = CollectionModuleDiagnostics(
-            moduleId = CollectionModuleId.USAGE_EVENTS,
-            privacyClass = CollectionModuleId.USAGE_EVENTS.privacyClass,
-            lastResult = ModuleResult.Ok(7).label,
-            itemsCollected = 7,
-        )
-        assertEquals("OK", diagnostics.lastResult)
-        assertEquals(7, diagnostics.itemsCollected)
-    }
 }

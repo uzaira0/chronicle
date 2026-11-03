@@ -6,8 +6,6 @@ import com.openlattice.chronicle.android.AndroidSensorType
 object SensorTypeMapping {
     private const val TYPE_TILT_DETECTOR = 22
     private const val TYPE_SCREEN_ORIENTATION = 27
-    private const val TYPE_SAMSUNG_MOTION = 65559
-    private const val TYPE_SAMSUNG_GRIP_WIFI = 65575
 
     private val TYPE_MAP = mapOf(
         AndroidSensorType.accelerometer to Sensor.TYPE_ACCELEROMETER,
@@ -22,8 +20,6 @@ object SensorTypeMapping {
         AndroidSensorType.significantMotion to Sensor.TYPE_SIGNIFICANT_MOTION,
         AndroidSensorType.tiltDetector to TYPE_TILT_DETECTOR,
         AndroidSensorType.screenOrientation to TYPE_SCREEN_ORIENTATION,
-        AndroidSensorType.samsungGripWifi to TYPE_SAMSUNG_GRIP_WIFI,
-        AndroidSensorType.samsungMotion to TYPE_SAMSUNG_MOTION
     )
 
     private val VALUE_COUNT = mapOf(
@@ -39,8 +35,6 @@ object SensorTypeMapping {
         AndroidSensorType.significantMotion to 1,
         AndroidSensorType.tiltDetector to 1,
         AndroidSensorType.screenOrientation to 1,
-        AndroidSensorType.samsungGripWifi to 16,
-        AndroidSensorType.samsungMotion to 4
     )
 
     fun toAndroidType(sensorType: AndroidSensorType): Int {

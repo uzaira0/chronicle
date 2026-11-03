@@ -19,9 +19,9 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.os.Build
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.openlattice.chronicle.BuildConfig
+import com.openlattice.chronicle.WorkManagerRule
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.batteryOptimizationSettingsIntent
 import com.openlattice.chronicle.collection.state.onPersistenceWorker
@@ -29,6 +29,7 @@ import com.openlattice.chronicle.services.notifications.CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.ExactAlarmPermissionReceiver
 import com.openlattice.chronicle.services.notifications.NOTIFICATIONS_WORK_NAME
 import com.openlattice.chronicle.services.notifications.NotificationPermissionActivity
+import com.openlattice.chronicle.services.notifications.alarmOperation
 import com.openlattice.chronicle.services.notifications.postNotificationIfPermitted
 import com.openlattice.chronicle.services.notifications.scheduleReminderAlarm
 import org.junit.Assert.assertArrayEquals
@@ -38,6 +39,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -48,12 +50,12 @@ import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowAlarmManager
 import org.robolectric.util.ReflectionHelpers
-import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class PlatformGateTest {
+    @get:Rule val workManagerRule = WorkManagerRule()
     private val app = ApplicationProvider.getApplicationContext<Application>()
     private val manager = requireNotNull(app.getSystemService(NotificationManager::class.java)) { "notification manager available" }
     private val alarmManager = requireNotNull(app.getSystemService(AlarmManager::class.java)) { "alarm manager available" }
@@ -203,12 +205,13 @@ class PlatformGateTest {
     fun exactAlarmGrantSelectsExactOrInexactWithoutAssumingDelivery() {
         ShadowAlarmManager.setCanScheduleExactAlarms(false)
         scheduleReminderAlarm(app, System.currentTimeMillis() + 60_000, pending())
-        val inexactAlarm = requireNotNull(shadowOf(alarmManager).peekNextScheduledAlarm()) { "alarm scheduled" }
-        assertNotEquals(ShadowAlarmManager.WINDOW_EXACT, inexactAlarm.windowLengthMs)
+        val ungranted = requireNotNull(shadowOf(alarmManager).peekNextScheduledAlarm()) { "alarm scheduled" }
+        // Below Android 12 exact alarms need no grant.
+        assertEquals(Build.VERSION.SDK_INT < Build.VERSION_CODES.S, ungranted.windowLengthMs == ShadowAlarmManager.WINDOW_EXACT)
         ShadowAlarmManager.setCanScheduleExactAlarms(true)
         scheduleReminderAlarm(app, System.currentTimeMillis() + 60_000, pending())
         val alarm = requireNotNull(shadowOf(alarmManager).peekNextScheduledAlarm()) { "alarm scheduled" }
-        assertEquals(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S, alarm.windowLengthMs == ShadowAlarmManager.WINDOW_EXACT)
+        assertEquals(ShadowAlarmManager.WINDOW_EXACT, alarm.windowLengthMs)
         assertTrue(alarm.isAllowWhileIdle)
     }
 
@@ -219,7 +222,11 @@ class PlatformGateTest {
                 if (name == android.content.Context.ALARM_SERVICE) null else super.getSystemService(name)
         }
         assertFalse(scheduleReminderAlarm(context, System.currentTimeMillis() + 60_000, pending()))
-        assertTrue(shadowOf(alarmManager).scheduledAlarms.isEmpty())
+        // Only this call's alarm: below Android 11 WorkManager's initialization arms its own (ReminderAlarmsTest).
+        assertTrue(shadowOf(alarmManager).scheduledAlarms.none {
+            alarmOperation(it)?.let { operation -> shadowOf(operation).savedIntent.component?.className } ==
+                ExactAlarmPermissionReceiver::class.java.name
+        })
     }
 
     @Implements(AlarmManager::class)
@@ -239,10 +246,7 @@ class PlatformGateTest {
 
     @Test @Config(sdk = [30, Build.VERSION_CODES.S, 36])
     fun exactAlarmGrantBroadcastRechecksAccessBeforeSchedulingWork() = onPersistenceWorker {
-        if (!WorkManager.isInitialized()) WorkManager.initialize(app, Configuration.Builder().setExecutor(Executor { }).build())
         val workManager = WorkManager.getInstance(app)
-        workManager.cancelUniqueWork(NOTIFICATIONS_WORK_NAME).result.get(5, TimeUnit.SECONDS)
-        workManager.pruneWork().result.get(5, TimeUnit.SECONDS)
         val receiver = ExactAlarmPermissionReceiver()
         val intent = Intent(AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED)
         ShadowAlarmManager.setCanScheduleExactAlarms(false)

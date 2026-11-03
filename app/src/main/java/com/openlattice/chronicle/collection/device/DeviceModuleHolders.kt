@@ -6,7 +6,7 @@ import com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink
 import com.openlattice.chronicle.collection.sink.ConnectivityStateSampleSink
 import com.openlattice.chronicle.collection.sink.DeviceSettingsSampleSink
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
-import com.openlattice.chronicle.services.upload.recordAbandonedGateBatch
+import com.openlattice.chronicle.services.upload.gateBatchAccounting
 import com.openlattice.chronicle.collection.state.CollectionGate
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.data.ParticipationStatus
@@ -44,10 +44,7 @@ public object ConnectivityStateModuleHolder {
             ),
             source = AndroidConnectivityStateSource(appContext),
             enrolled = enrolledAndConsented(appContext, CollectionModuleId.CONNECTIVITY_STATE),
-            ownerForSample = { ResearchPersistenceGate.captureOwner(appContext) },
-            accountWriteResult = { owner, result, count ->
-                recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.CONNECTIVITY, result, count)
-            },
+            accounting = gateBatchAccounting(appContext, LocalUploadModuleFamily.CONNECTIVITY),
         )
     }
 }
@@ -71,10 +68,7 @@ public object DeviceSettingsModuleHolder {
             ),
             source = AndroidDeviceSettingsSource(appContext),
             enrolled = enrolledAndConsented(appContext, CollectionModuleId.DEVICE_SETTINGS),
-            ownerForSample = { ResearchPersistenceGate.captureOwner(appContext) },
-            accountWriteResult = { owner, result, count ->
-                recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.DEVICE_SETTINGS, result, count)
-            },
+            accounting = gateBatchAccounting(appContext, LocalUploadModuleFamily.DEVICE_SETTINGS),
         )
     }
 }

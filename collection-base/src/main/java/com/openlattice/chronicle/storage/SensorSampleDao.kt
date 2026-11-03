@@ -12,75 +12,37 @@ data class SensorSampleTypeCount(
 )
 
 @Dao
-interface SensorSampleDao {
+interface SensorSampleDao : BoundedQueueWriter {
     @Query("SELECT * FROM sensor_samples WHERE id IN (:ids)")
     fun getByIds(ids: List<String>): List<SensorSampleEntry>
 
     @Query("SELECT * FROM sensor_samples ORDER BY timestamp ASC, id ASC LIMIT :limit")
     fun getOldest(limit: Int): List<SensorSampleEntry>
 
-    @Query(
-        "SELECT * FROM sensor_samples WHERE sensorType NOT IN (:excludedTypes) AND NOT EXISTS (SELECT 1 FROM upload_queue_evidence evidence " +
-        "WHERE evidence.payloadType = 'SENSOR' AND evidence.rowId = sensor_samples.id AND evidence.heldVersion >= COALESCE((SELECT " +
-        "MAX(appliedVersion) FROM collection_module_state), 0)) ORDER BY timestamp ASC, id ASC LIMIT :limit")
+    @Query("SELECT * FROM sensor_samples WHERE sensorType NOT IN (:excludedTypes) ORDER BY timestamp ASC, id ASC LIMIT :limit")
     fun getOldestExcludingTypes(limit: Int, excludedTypes: List<String>): List<SensorSampleEntry>
 
+    @Transaction
+    fun insertAll(samples: List<SensorSampleEntry>) = insertAllUnchecked(
+        boundedRows(
+            UploadQueueTable.SENSOR, samples, SensorSampleEntry::persistedPayloadBytes,
+        ) { it.id },
+    )
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    fun insertAll(samples: List<SensorSampleEntry>)
+    fun insertAllUnchecked(samples: List<SensorSampleEntry>)
 
     @Query("DELETE FROM sensor_samples WHERE id IN (:ids)")
     fun deleteByIds(ids: List<String>)
+
+    @Query("DELETE FROM sensor_samples")
+    fun deleteAll(): Int
 
     @Query("SELECT COUNT(*) FROM sensor_samples")
     fun count(): Int
 
     @Query("SELECT sensorType, COUNT(*) AS count FROM sensor_samples GROUP BY sensorType ORDER BY count DESC, sensorType ASC")
     fun countBySensorType(): List<SensorSampleTypeCount>
-
-    @Query(
-        "SELECT COUNT(*) FROM sensor_sample_deliveries " +
-            "WHERE serverId = :serverId AND serverGeneration = :serverGeneration " +
-            "AND sampleId IN (:sampleIds)",
-    )
-    fun countDeliveriesForServer(
-        serverId: Long,
-        serverGeneration: Long,
-        sampleIds: List<String>,
-    ): Int
-
-    // REPLACE is intentional: re-enrollment increments the server generation, so the new
-    // destination must be able to supersede the old generation's receipt for this sample.
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    fun insertDeliveries(deliveries: List<SensorSampleDeliveryEntity>)
-
-    @Query(
-        """
-        DELETE FROM sensor_samples
-        WHERE id IN (:sampleIds)
-          AND NOT EXISTS (
-              SELECT 1
-              FROM upload_servers AS server
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM sensor_sample_deliveries AS delivery
-                  WHERE delivery.sampleId = sensor_samples.id
-                    AND delivery.serverId = server.id
-                    AND delivery.serverGeneration = server.sensorDeliveryGeneration
-              )
-          )
-        """,
-    )
-    fun deleteFullyDeliveredByIds(sampleIds: List<String>): Int
-
-    /** Atomically records a complete successful batch and trims only fully-acknowledged IDs. */
-    @Transaction
-    fun acknowledgeAndDeleteFullyDelivered(
-        deliveries: List<SensorSampleDeliveryEntity>,
-        sampleIds: List<String>,
-    ): Int {
-        insertDeliveries(deliveries)
-        return deleteFullyDeliveredByIds(sampleIds)
-    }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun insertDeadLetters(deadLetters: List<SensorSampleDeadLetterEntity>)
@@ -100,11 +62,4 @@ interface SensorSampleDao {
 
     @Query("DELETE FROM sensor_sample_dead_letters WHERE sensorType = :sensorType")
     fun deleteDeadLettersBySensorType(sensorType: String): Int
-
-    /** Drops only one consent module's tagged pending and quarantined sensor rows. */
-    @Transaction
-    fun deleteBySensorType(sensorType: String) {
-        deleteSamplesBySensorType(sensorType)
-        deleteDeadLettersBySensorType(sensorType)
-    }
 }

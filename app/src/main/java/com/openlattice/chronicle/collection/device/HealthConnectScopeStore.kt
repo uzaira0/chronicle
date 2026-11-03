@@ -3,6 +3,10 @@ package com.openlattice.chronicle.collection.device
 import android.content.Context
 import com.openlattice.chronicle.collection.HealthConnectRecordType
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
+
+/** Health Connect read checkpoints, one per record type. */
+internal const val HEALTH_CONNECT_PREFS = "chronicle_health_connect"
 
 /** Encrypted, fail-closed snapshot of the active study's approved Health Connect record types. */
 public class HealthConnectScopeStore private constructor(context: Context) {
@@ -16,7 +20,7 @@ public class HealthConnectScopeStore private constructor(context: Context) {
             }
 
     public fun replace(recordTypes: Set<HealthConnectRecordType>) {
-        com.openlattice.chronicle.storage.checkLocalStoreWrite(
+        checkLocalStoreWrite(
             prefs.edit()
                 .putStringSet(KEY_RECORD_TYPES, recordTypes.mapTo(LinkedHashSet()) { it.id })
                 .commit(),
@@ -24,7 +28,7 @@ public class HealthConnectScopeStore private constructor(context: Context) {
     }
 
     public fun clear() {
-        com.openlattice.chronicle.storage.checkLocalStoreWrite(prefs.edit().remove(KEY_RECORD_TYPES).commit()) {
+        checkLocalStoreWrite(prefs.edit().remove(KEY_RECORD_TYPES).commit()) {
             "Failed to clear the Health Connect study scope"
         }
     }

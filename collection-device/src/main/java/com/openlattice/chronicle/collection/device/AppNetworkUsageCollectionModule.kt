@@ -1,10 +1,8 @@
 package com.openlattice.chronicle.collection.device
 
+import android.util.Log
 import com.openlattice.chronicle.collection.AndroidAppNetworkUsageEvent
-import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.NetworkUsageType
-import com.openlattice.chronicle.collection.core.CollectionClock
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.PullCollectionModule
 import com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink
@@ -27,21 +25,19 @@ private const val TAG = "AppNetworkUsageCollectionModule"
 public class AppNetworkUsageCollectionModule(
     private val sink: AppNetworkUsageSampleSink,
     private val source: AppNetworkUsageSource,
-    private val enrolled: () -> Boolean,
-    clock: CollectionClock = CollectionClock.SYSTEM,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
+    enrolled: () -> Boolean,
+    now: () -> Long = System::currentTimeMillis,
     private val sampleLease: (() -> ModuleResult) -> ModuleResult = { it() },
-) : PullCollectionModule(CollectionModuleId.APP_NETWORK_USAGE, clock, sink::queueDepth) {
+) : PullCollectionModule(enrolled, now) {
 
     override fun sample(): ModuleResult = sampleLease { synchronized(this) { super.sample() } }
 
     override fun runSample(now: Long): ModuleResult {
-        if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
 
         val readings: List<AppNetworkUsageReading> = try {
             source.read()
         } catch (e: Exception) {
-            log.error(TAG, "App-network-usage source threw while reading", e)
+            Log.e(TAG, "App-network-usage source threw while reading", e)
             return ModuleResult.Failed(e, redactedMessage = "app network usage source read failed: ${e.javaClass.simpleName}")
         }
         if (readings.isEmpty()) {
@@ -66,7 +62,7 @@ public class AppNetworkUsageCollectionModule(
             }
         } catch (e: Exception) {
             rejectSourceRead()
-            log.error(TAG, "Failed to map app-network-usage readings", e)
+            Log.e(TAG, "Failed to map app-network-usage readings", e)
             return ModuleResult.Failed(
                 e,
                 redactedMessage = "app network usage mapping failed: ${e.javaClass.simpleName}",
@@ -77,7 +73,7 @@ public class AppNetworkUsageCollectionModule(
             is ModuleResult.Ok -> {
                 when (val acknowledged = acknowledgeSourceRead(entries.size)) {
                     is ModuleResult.Ok -> {
-                        log.info(TAG, "Persisted ${entries.size} app-network-usage bucket(s)")
+                        Log.i(TAG, "Persisted ${entries.size} app-network-usage bucket(s)")
                         acknowledged
                     }
                     else -> acknowledged
@@ -85,7 +81,7 @@ public class AppNetworkUsageCollectionModule(
             }
             is ModuleResult.Failed -> {
                 rejectSourceRead()
-                log.error(TAG, "Failed to persist app-network-usage buckets", writeResult.error)
+                Log.e(TAG, "Failed to persist app-network-usage buckets", writeResult.error)
                 writeResult
             }
             else -> {
@@ -99,7 +95,7 @@ public class AppNetworkUsageCollectionModule(
         source.acknowledgeRead()
         ModuleResult.Ok(items)
     } catch (e: Exception) {
-        log.error(TAG, "Failed to persist app-network-usage read checkpoint", e)
+        Log.e(TAG, "Failed to persist app-network-usage read checkpoint", e)
         rejectSourceRead()
         ModuleResult.Failed(
             e,
@@ -109,7 +105,7 @@ public class AppNetworkUsageCollectionModule(
 
     private fun rejectSourceRead() {
         runCatching { source.rejectRead() }
-            .onFailure { log.error(TAG, "Failed to reject app-network-usage read window", it) }
+            .onFailure { Log.e(TAG, "Failed to reject app-network-usage read window", it) }
     }
 
 }

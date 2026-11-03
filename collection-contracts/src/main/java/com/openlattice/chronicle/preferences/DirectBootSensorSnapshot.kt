@@ -2,61 +2,33 @@ package com.openlattice.chronicle.preferences
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.os.Build
 import com.openlattice.chronicle.android.AndroidSensorType
-import com.openlattice.chronicle.collection.CollectionUploadEvidence
 
 private const val DIRECT_BOOT_PREFS_FILE = "chronicle_direct_boot_snapshot"
 private const val KEY_WRITTEN_AT = "db_written_at"
 private const val KEY_SENSORS = "db_sensors"
-private const val KEY_SETTINGS_VERSION = "db_settings_version"
+private const val KEY_OWNER = "db_owner"
 private const val KEY_RATE_HZ_PREFIX = "db_rate_hz_"
 private const val KEY_DUTY_ACTIVE_PREFIX = "db_duty_active_"
 private const val KEY_DUTY_PERIOD_PREFIX = "db_duty_period_"
 
-// Mirrors SensorSettings' defaults (per-sensor consent redesign, 2026-06-11).
+// Mirrors SensorSettings' defaults.
 private const val DEFAULT_RATE_HZ = 5
 private const val DEFAULT_DUTY_ACTIVE = 30
 private const val DEFAULT_DUTY_PERIOD = 300
 
-private fun directBootSensorPrefs(context: Context): SharedPreferences {
-    // Device-protected storage exists from API 24; below that there is no
-    // file-based-encryption direct-boot window, so plain app storage is equivalent.
-    val storageContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        context.createDeviceProtectedStorageContext()
-    } else {
-        context
-    }
-    return storageContext.getSharedPreferences(DIRECT_BOOT_PREFS_FILE, Context.MODE_PRIVATE)
-}
+private fun directBootSensorPrefs(context: Context): SharedPreferences =
+    context.createDeviceProtectedStorageContext().getSharedPreferences(DIRECT_BOOT_PREFS_FILE, Context.MODE_PRIVATE)
 
-/**
- * Clears legacy direct-boot sensor configuration without retaining the research snapshot class.
- * The Play update path calls this neutral erasure seam even though locked-boot sensor collection
- * itself is removed from the Play artifact.
- */
+/** Removes the snapshot, so a locked boot starts nothing; withdrawal and module retirement call this. */
 fun clearDirectBootSensorSnapshot(context: Context): Boolean =
     directBootSensorPrefs(context).edit().clear().commit()
 
 /**
- * A device-protected-storage (direct-boot) mirror of the currently *collectable* sensor set —
- * the sensors whose per-sensor module is server-enabled AND participant-acknowledged — plus
- * each sensor's sampling rate and duty cycle.
- *
- * After a reboot, Android holds `BOOT_COMPLETED` (and credential-encrypted storage — the
- * encrypted prefs and the SQLCipher Room DB) until the user first unlocks the device. This
- * snapshot is the only collection state readable in that window: `LockedBootReceiver` uses it
- * to decide whether to start sensor collection before first unlock, and the direct-boot
- * runtime uses it in place of `SensorSettings`/`CollectionGate`.
- *
- * **Contents are configuration only — never identity, consent text, or collected data.** No
- * study id, participant id, or sample ever lands here; device-protected storage is encrypted
- * with a boot-time key rather than the user credential, so it is held to config-only use.
- *
- * The snapshot is rewritten from live gate reads every time the sensor service starts or
- * reconciles in normal (unlocked) mode, and cleared on withdrawal / participation change —
- * so a locked-boot start can never collect for a withdrawn participant. A staleness bound
- * ([isUsableFor]) fails closed if the device somehow boots months after the last rewrite.
+ * Device-protected mirror of the consented sensor set and each sensor's rate and duty cycle: the only
+ * collection state readable between reboot and first unlock. Rewritten from live consent while unlocked,
+ * cleared on withdrawal, and bounded by [isUsableFor], so a locked boot never collects for a withdrawn
+ * participant. It holds configuration and a one-way enrollment key, never identity or samples.
  */
 class DirectBootSensorSnapshot(
     private val prefs: SharedPreferences,
@@ -71,24 +43,16 @@ class DirectBootSensorSnapshot(
         val dutyCyclePeriodSeconds: Int = DEFAULT_DUTY_PERIOD,
     )
 
-    /**
-     * Replaces the snapshot with [collectable]. An empty map is a valid snapshot meaning
-     * "nothing may collect before unlock". Synchronous commit so callers can trust the
-     * locked-boot view once this returns.
-     */
-    fun write(collectable: Map<AndroidSensorType, SensorConfig>, consentStamps: Map<AndroidSensorType, String> = emptyMap(),
-              settingsVersion: Int? = null): Boolean {
-        val editor = prefs.edit()
-        if (settingsVersion == null) editor.remove(KEY_SETTINGS_VERSION) else editor.putInt(KEY_SETTINGS_VERSION, settingsVersion)
+    /** Replaces the snapshot; an empty map means nothing collects before unlock. Commits synchronously. */
+    fun write(collectable: Map<AndroidSensorType, SensorConfig>, owner: String? = null): Boolean {
+        val editor = prefs.edit().putString(KEY_OWNER, owner)
         AndroidSensorType.entries.forEach { sensor ->
-            editor.remove("db_consent_stamp_" + sensor.name)
-                .remove(KEY_RATE_HZ_PREFIX + sensor.name)
+            editor.remove(KEY_RATE_HZ_PREFIX + sensor.name)
                 .remove(KEY_DUTY_ACTIVE_PREFIX + sensor.name)
                 .remove(KEY_DUTY_PERIOD_PREFIX + sensor.name)
         }
         editor.putStringSet(KEY_SENSORS, collectable.keys.map { it.name }.toSet())
         collectable.forEach { (sensor, config) ->
-            editor.putString("db_consent_stamp_" + sensor.name, consentStamps[sensor])
             editor.putInt(KEY_RATE_HZ_PREFIX + sensor.name, config.samplingRateHz)
                 .putInt(KEY_DUTY_ACTIVE_PREFIX + sensor.name, config.dutyCycleActiveSeconds)
                 .putInt(KEY_DUTY_PERIOD_PREFIX + sensor.name, config.dutyCyclePeriodSeconds)
@@ -97,27 +61,17 @@ class DirectBootSensorSnapshot(
         return editor.commit()
     }
 
-    fun writtenAt(): Long? = prefs.getLong(KEY_WRITTEN_AT, -1L).takeIf { it >= 0 }
-
-    fun settingsVersion(): Int? = prefs.getInt(KEY_SETTINGS_VERSION, CollectionUploadEvidence.UNKNOWN_SETTINGS_VERSION)
-        .takeIf { it > CollectionUploadEvidence.UNKNOWN_SETTINGS_VERSION }
-
-    fun consentStamp(sensor: AndroidSensorType): String? = prefs.getString("db_consent_stamp_" + sensor.name, null)
+    /** The opaque key of the enrollment whose buffer a locked boot writes; never an identifier. */
+    fun owner(): String? = prefs.getString(KEY_OWNER, null)
 
     /** Removes the snapshot entirely; a locked boot then starts nothing. */
     fun clear(): Boolean = prefs.edit().clear().commit()
 
     /** The sensors that may collect before first unlock. Unknown persisted names are ignored. */
-    fun collectableSensors(): Set<AndroidSensorType> =
-        (prefs.getStringSet(KEY_SENSORS, emptySet()) ?: emptySet())
-            .mapNotNull { name ->
-                try {
-                    AndroidSensorType.valueOf(name)
-                } catch (_: IllegalArgumentException) {
-                    null
-                }
-            }
-            .toSet()
+    fun collectableSensors(): Set<AndroidSensorType> {
+        val names = prefs.getStringSet(KEY_SENSORS, emptySet()).orEmpty()
+        return AndroidSensorType.entries.filterTo(mutableSetOf()) { it.name in names }
+    }
 
     /** [sensor]'s snapshotted rate/duty, or the shared defaults if never written. */
     fun config(sensor: AndroidSensorType): SensorConfig = SensorConfig(
@@ -133,18 +87,14 @@ class DirectBootSensorSnapshot(
         return (clock() - writtenAt).coerceAtLeast(0L)
     }
 
-    /**
-     * Whether a locked boot may start collection from this snapshot: written, no older than
-     * [maxAgeMillis], and naming at least one collectable sensor. Fails closed on all three.
-     */
+    /** Written, no older than [maxAgeMillis], bound to an enrollment, and naming a collectable sensor. */
     fun isUsableFor(maxAgeMillis: Long): Boolean {
         val age = ageMillis() ?: return false
-        return age <= maxAgeMillis && collectableSensors().isNotEmpty()
+        return age <= maxAgeMillis && owner() != null && collectableSensors().isNotEmpty()
     }
 
     companion object {
         /** Snapshots older than this never start locked-boot collection (fail closed). */
         const val MAX_SNAPSHOT_AGE_MILLIS: Long = 14L * 24 * 60 * 60 * 1000
-
     }
 }

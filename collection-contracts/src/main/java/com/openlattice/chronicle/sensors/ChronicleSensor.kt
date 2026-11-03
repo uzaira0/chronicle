@@ -10,8 +10,6 @@ import java.util.NavigableMap
  * The interface is R/BuildConfig-free and lives in `:collection-contracts` (moved from
  * `:collection-base` in the tranche 7 storage/contract split) so collection library
  * modules (e.g. `:collection-usage`) can implement it without a `:app` dependency.
- * The legacy olingo `FullQualifiedName` property-type constants that used to
- * share this file remain in `:app` (`sensors/ChronicleSensorPropertyTypes.kt`).
  */
 interface ChronicleSensor {
     fun poll(currentPollTimestamp: Long, users: NavigableMap<Long, String>): ChronicleData

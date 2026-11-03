@@ -1,12 +1,12 @@
 package com.openlattice.chronicle.collection.device
 
 import com.openlattice.chronicle.collection.NetworkUsageType
-import com.openlattice.chronicle.collection.core.FixedCollectionClock
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink
 import com.openlattice.chronicle.storage.AppNetworkUsageSampleDao
 import com.openlattice.chronicle.storage.AppNetworkUsageSampleEntry
+import com.openlattice.chronicle.storage.LocalDataQuarantineEntity
+import com.openlattice.chronicle.storage.QueueRowOwner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,8 +66,7 @@ class AppNetworkUsageCollectionModuleTest {
             sink = sink,
             source = source,
             enrolled = { true },
-            clock = FixedCollectionClock(10_000L),
-            log = NoOpCollectionLog,
+            now = { 10_000L },
         )
 
     private fun reading(endMillis: Long = 2_000L) = AppNetworkUsageReading(
@@ -108,12 +107,15 @@ class AppNetworkUsageCollectionModuleTest {
     }
 
     private class FakeDao : AppNetworkUsageSampleDao {
+        override fun queueRowOwner(): QueueRowOwner? = null
+        override fun insertOversizedQuarantine(row: LocalDataQuarantineEntity): Long = error("unexpected oversized test row")
+        override fun insertAllUnchecked(samples: List<AppNetworkUsageSampleEntry>) = insertAll(samples)
+
         override fun getByIds(ids: List<String>): List<AppNetworkUsageSampleEntry> = emptyList()
         override fun getOldest(limit: Int): List<AppNetworkUsageSampleEntry> = emptyList()
         override fun insertAll(samples: List<AppNetworkUsageSampleEntry>) = Unit
         override fun deleteByIds(ids: List<String>) = Unit
         override fun count(): Int = 0
-        override fun deleteOlderThan(cutoffTimestamp: String): Int = 0
-        override fun deleteAll() = Unit
+        override fun deleteAll(): Int = 0
     }
 }

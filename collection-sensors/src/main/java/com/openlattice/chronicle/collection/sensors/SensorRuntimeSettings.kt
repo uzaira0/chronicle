@@ -15,15 +15,14 @@ import com.openlattice.chronicle.preferences.SensorSettings
  * production [SensorSettingsRuntimeSettings] wraps [SensorSettings], and JVM tests supply
  * a fake.
  *
- * The values exposed here mirror the four legacy `SensorSettings` getters byte-for-byte —
- * Phase 6 changes no collected value, only where the read happens.
+ * The values exposed here mirror the four legacy `SensorSettings` getters byte-for-byte.
  *
  */
 public interface SensorRuntimeSettings {
     /**
      * The sensor types the study configures (server-enabled). The controller attempts each
      * of these; its per-sensor collection gate decides which actually collect. Each sensor
-     * carries its own sampling rate + duty cycle (per-sensor consent redesign, 2026-06-11).
+     * carries its own sampling rate + duty cycle.
      */
     public fun enabledSensors(): Set<AndroidSensorType>
 

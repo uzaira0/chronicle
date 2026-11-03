@@ -1,24 +1,19 @@
 package com.openlattice.chronicle.collection.device
 
 import com.openlattice.chronicle.collection.AndroidDeviceSettingsEvent
-import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.RingerMode
 import com.openlattice.chronicle.collection.ThermalStatus
-import com.openlattice.chronicle.collection.core.CollectionClock
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.PullCollectionModule
-import com.openlattice.chronicle.collection.state.writeObservation
+import com.openlattice.chronicle.collection.core.PullAccounting
+import com.openlattice.chronicle.collection.core.SnapshotCollectionModule
 import com.openlattice.chronicle.collection.sink.DeviceSettingsSampleSink
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.storage.DeviceSettingsSampleEntry
-import com.openlattice.chronicle.storage.UploadServerEntity
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.TimeZone
 import java.util.UUID
-
-private const val TAG = "DeviceSettingsCollectionModule"
 
 /**
  * The `device_settings` collection module — a **pull-style** module mirroring
@@ -28,30 +23,16 @@ private const val TAG = "DeviceSettingsCollectionModule"
 public class DeviceSettingsCollectionModule(
     private val sink: DeviceSettingsSampleSink,
     private val source: DeviceSettingsSource,
-    private val enrolled: () -> Boolean,
-    private val ownerForSample: () -> UploadServerEntity? = { null },
-    private val accountWriteResult: (UploadServerEntity?, ModuleResult, Int) -> Unit = { _, _, _ -> },
-    clock: CollectionClock = CollectionClock.SYSTEM,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
-) : PullCollectionModule(CollectionModuleId.DEVICE_SETTINGS, clock, sink::queueDepth) {
+    enrolled: () -> Boolean,
+    accounting: PullAccounting = PullAccounting(),
+    now: () -> Long = System::currentTimeMillis,
+) : SnapshotCollectionModule<DeviceSettingsReading>("device settings", enrolled, accounting, now) {
+    override fun captureAdmission(): CollectionPersistenceGuard = sink.captureAdmission()
 
-    override fun runSample(now: Long): ModuleResult {
-        if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
-        val observation = sink.captureAdmission()
-        val owner = ownerForSample()
+    override fun read(): DeviceSettingsReading? = source.read()
 
-        val reading: DeviceSettingsReading? = try {
-            source.read()
-        } catch (e: Exception) {
-            log.error(TAG, "Device-settings source threw while reading state", e)
-            return ModuleResult.Failed(e, redactedMessage = "device settings source read failed: ${e.javaClass.simpleName}")
-        }
-        if (reading == null) {
-            log.warn(TAG, "Device settings unavailable; will retry on the next poll")
-            return ModuleResult.Retry("device settings unavailable")
-        }
-
-        val entry = DeviceSettingsSampleEntry(
+    override fun persist(reading: DeviceSettingsReading, now: Long): ModuleResult = sink.write(listOf(
+        DeviceSettingsSampleEntry(
             id = UUID.randomUUID().toString(),
             timestamp = OffsetDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneOffset.UTC).toString(),
             timezone = TimeZone.getDefault().id,
@@ -76,23 +57,8 @@ public class DeviceSettingsCollectionModule(
             alarmVolume = reading.alarmVolume,
             alarmVolumeMax = reading.alarmVolumeMax,
             ringerMode = reading.ringerMode?.name,
-        )
-
-        return when (val writeResult = observation.writeObservation { sink.write(listOf(entry)) }.also {
-            accountWriteResult(owner, it, 1)
-        }) {
-            is ModuleResult.Ok -> {
-                log.info(TAG, "Persisted 1 device-settings snapshot")
-                ModuleResult.Ok(1)
-            }
-            is ModuleResult.Failed -> {
-                log.error(TAG, "Failed to persist device-settings snapshot", writeResult.error)
-                writeResult
-            }
-            else -> writeResult
-        }
-    }
-
+        ),
+    ))
 }
 
 /**

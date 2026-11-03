@@ -1,5 +1,8 @@
 package com.openlattice.chronicle.collection.device
 
+import com.openlattice.chronicle.collection.core.ObservationScope
+import java.util.WeakHashMap
+
 import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import com.openlattice.chronicle.utils.UsageAccess
 import android.app.usage.NetworkStats
@@ -49,11 +52,11 @@ public fun interface AppNetworkUsageSource {
  */
 public class AndroidAppNetworkUsageSource(
     context: Context,
-    private val consentEpoch: () -> Pair<String, Long>? = { null },
+    private val consentEpoch: () -> ObservationScope? = { null },
 ) : AppNetworkUsageSource {
 
     public companion object {
-        private val sources = java.util.WeakHashMap<AndroidAppNetworkUsageSource, Unit>()
+        private val sources = WeakHashMap<AndroidAppNetworkUsageSource, Unit>()
 
         public fun clearCheckpoint(context: Context) {
             val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -76,27 +79,16 @@ public class AndroidAppNetworkUsageSource(
 
     init { synchronized(sources) { sources[this] = Unit } }
 
-    private fun enrollment(): Pair<String, Long> {
+    private fun enrollment(): ObservationScope {
         val server = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
             ?: error("app network enrollment unavailable")
         val start = OffsetDateTime.parse(server.createdAt).toInstant().toEpochMilli()
         val consent = consentEpoch()
-        return (consent?.first ?: "${server.id}:${server.createdAt}:${server.studyId}:${server.participantId}:${server.sourceDeviceId}") to maxOf(
-            start, consent?.second ?: 0)
-    }
-
-    private fun adoptLegacyScope(scope: String) {
-        val server = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer() ?: return
-        val legacy = "${server.id}:${server.createdAt}:${server.studyId}:${server.participantId}:${server.sourceDeviceId}"
-        val consent = consentEpoch()
-        val initial = consent == null || (consent.second == 0L && consent.first.substringAfterLast(':').toLongOrNull() in 0L..1L)
-        val recorded = prefs.getString(KEY_ENROLLMENT, null)
-        if (initial && (recorded == legacy || (recorded == null && prefs.contains(KEY_LAST_END)))) {
-            // Preserve both successful and unacknowledged endpoints for this immutable owner.
-            checkLocalStoreWrite(prefs.edit().putString(KEY_ENROLLMENT, scope).commit()) {
-                "app network enrollment checkpoint commit failed"
-            }
-        }
+        return ObservationScope(
+            consent?.key ?: "${server.id}:${server.createdAt}:${server.studyId}:${server.participantId}:${server.sourceRandomDeviceId}",
+            maxOf(start, consent?.floorMillis ?: 0),
+            consent?.suspended.orEmpty(),
+        )
     }
 
     @Suppress("DEPRECATION") // ConnectivityManager.TYPE_* are the args NetworkStatsManager.querySummary takes.
@@ -109,8 +101,8 @@ public class AndroidAppNetworkUsageSource(
             pendingEnrollment = null
             return emptyList()
         }
-        val (scope, enrollmentStart) = enrollment()
-        adoptLegacyScope(scope)
+        val enrollment = enrollment()
+        val (scope, enrollmentStart) = enrollment
         if (prefs.getString(KEY_ENROLLMENT, null) != scope) {
             checkLocalStoreWrite(prefs.edit().remove(KEY_LAST_END).remove(KEY_PENDING_END).putString(KEY_ENROLLMENT, scope).commit()) {
                 "app network enrollment checkpoint commit failed"
@@ -141,8 +133,19 @@ public class AndroidAppNetworkUsageSource(
         if (start >= now) return emptyList()
 
         val out = mutableListOf<AppNetworkUsageReading>()
-        out += querySummary(nsm, ConnectivityManager.TYPE_WIFI, NetworkUsageType.WIFI, start, now)
-        out += querySummary(nsm, ConnectivityManager.TYPE_MOBILE, NetworkUsageType.CELLULAR, start, now)
+        // Traffic inside a collection pause is not queried; the checkpoint still advances past it. Window edges
+        // rely on Android's bucket interpolation: Android 11+ prorates a bucket that straddles a window edge, while
+        // API 26-29 adds the active (open) bucket in full to every window it intersects. No API-level fix exists.
+        for ((from, to) in enrollment.admittedWindows(start, now)) {
+            out += querySummary(nsm, ConnectivityManager.TYPE_WIFI, NetworkUsageType.WIFI, from, to)
+            out += querySummary(nsm, ConnectivityManager.TYPE_MOBILE, NetworkUsageType.CELLULAR, from, to)
+        }
+
+        if (!UsageAccess.isGranted(appContext)) {
+            pendingEndMillis = null
+            pendingEnrollment = null
+            return emptyList()
+        }
 
         // The module advances this only after every returned row is durably queued.
         pendingEndMillis = now
@@ -152,7 +155,7 @@ public class AndroidAppNetworkUsageSource(
     @Synchronized
     override fun acknowledgeRead() {
         val end = pendingEndMillis ?: return
-        if (pendingEnrollment != prefs.getString(KEY_ENROLLMENT, null) || pendingEnrollment != enrollment().first) {
+        if (pendingEnrollment != prefs.getString(KEY_ENROLLMENT, null) || pendingEnrollment != enrollment().key) {
             pendingEndMillis = null
             pendingEnrollment = null
             return

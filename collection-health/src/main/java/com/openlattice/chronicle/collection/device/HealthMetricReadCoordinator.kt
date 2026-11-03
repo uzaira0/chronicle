@@ -1,6 +1,9 @@
 package com.openlattice.chronicle.collection.device
 
+import com.openlattice.chronicle.collection.core.ObservationScope
+
 private const val DEFAULT_HEALTH_BACKFILL_MILLIS = 24L * 60 * 60 * 1000
+public const val MAX_HEALTH_READ_WINDOW_MILLIS = 2 * DEFAULT_HEALTH_BACKFILL_MILLIS
 
 /** Durable timestamp used to resume Health Connect reads without skipping failed windows. */
 public interface HealthMetricCheckpoint {
@@ -15,11 +18,14 @@ public interface HealthMetricCheckpoint {
 public class HealthMetricReadCoordinator(
     private val checkpoint: HealthMetricCheckpoint,
     private val defaultBackfillMillis: Long = DEFAULT_HEALTH_BACKFILL_MILLIS,
-    private val consentScope: () -> Pair<String, Long>? = { null },
+    private val consentScope: () -> ObservationScope? = { null },
     private val overlapMillis: Long = DEFAULT_HEALTH_BACKFILL_MILLIS,
+    private val maximumWindowMillis: Long = MAX_HEALTH_READ_WINDOW_MILLIS,
 ) {
+    init { require(maximumWindowMillis > overlapMillis) }
+
     private var pendingEndMillis: Long? = null
-    private var pendingScope: Pair<String, Long>? = null
+    private var pendingScope: ObservationScope? = null
     private var pendingCheckpoint: Long? = null
 
     private var readVersion = 0L
@@ -35,17 +41,19 @@ public class HealthMetricReadCoordinator(
             val scope = consentScope()
             val previous = checkpoint.read()
             if (previous != null && previous >= nowMillis) return emptyList()
-            val startMillis = maxOf(scope?.second ?: Long.MIN_VALUE,
+            val startMillis = maxOf(scope?.floorMillis ?: Long.MIN_VALUE,
                 previous?.minus(overlapMillis) ?: (nowMillis - defaultBackfillMillis))
             if (startMillis >= nowMillis) return emptyList()
-            val records = readWindow(startMillis, nowMillis)
+            val endMillis = if (startMillis > Long.MAX_VALUE - maximumWindowMillis) nowMillis
+                else minOf(nowMillis, startMillis + maximumWindowMillis)
+            val records = readWindow(startMillis, endMillis)
             val current = consentScope()
             return synchronized(this) {
                 if (version != readVersion || scope != current) emptyList()
                 else {
                     pendingScope = scope
                     pendingCheckpoint = previous
-                    pendingEndMillis = nowMillis
+                    pendingEndMillis = endMillis
                     records
                 }
             }

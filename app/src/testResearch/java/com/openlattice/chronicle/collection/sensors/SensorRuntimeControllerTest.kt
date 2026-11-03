@@ -2,7 +2,6 @@ package com.openlattice.chronicle.collection.sensors
 
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.FakeSensorSampleDao
 import com.openlattice.chronicle.collection.sink.SensorSampleSink
 import org.junit.Assert.assertEquals
@@ -38,7 +37,7 @@ class SensorRuntimeControllerTest {
             override fun shutdown() = Unit
         }
         val runtime = SensorRuntimeController(FakeSensorGateway(), FakeSensorRuntimeSettings(),
-            SensorSampleSink(FakeSensorSampleDao(), NoOpCollectionLog), scheduler, log = NoOpCollectionLog)
+            SensorSampleSink(FakeSensorSampleDao()), scheduler)
         runtime.start()
         reject = true
         runtime.reconcile()
@@ -75,10 +74,9 @@ class SensorRuntimeControllerTest {
         val controller = SensorRuntimeController(
             gateway = FakeSensorGateway(),
             settings = FakeSensorRuntimeSettings(),
-            sink = SensorSampleSink(FakeSensorSampleDao(), NoOpCollectionLog),
+            sink = SensorSampleSink(FakeSensorSampleDao()),
             scheduler = ManualSensorRuntimeScheduler(executeImmediately = false),
             collectionGate = { true },
-            log = NoOpCollectionLog,
             reportLoss = { code, count -> losses += code to count },
         )
         repeat(SensorRuntimeController.MAX_BUFFERED_SAMPLES + 1) {
@@ -89,50 +87,6 @@ class SensorRuntimeControllerTest {
 
         assertEquals(1, losses.count { it == ("LOCAL_BUFFER_OVERFLOW" to 1) })
         assertEquals(listOf("LOCAL_BUFFER_OVERFLOW" to 1), losses)
-    }
-
-    private fun controller(
-        gateway: FakeSensorGateway = FakeSensorGateway(),
-        settings: FakeSensorRuntimeSettings = FakeSensorRuntimeSettings(),
-        scheduler: ManualSensorRuntimeScheduler = ManualSensorRuntimeScheduler(),
-        dao: FakeSensorSampleDao = FakeSensorSampleDao(),
-        collectionGate: (AndroidSensorType) -> Boolean = { true },
-        collectionAdmission: () -> Boolean = { true },
-    ): SensorRuntimeController {
-        val c = SensorRuntimeController(
-            gateway = gateway,
-            settings = settings,
-            sink = SensorSampleSink(dao, NoOpCollectionLog),
-            scheduler = scheduler,
-            collectionGate = collectionGate,
-            collectionAdmission = collectionAdmission,
-            log = NoOpCollectionLog,
-        )
-        gateway.attach(
-            object : SensorGateway.SampleListener {
-                override fun onSample(
-                    sensorType: AndroidSensorType,
-                    values: FloatArray,
-                    accuracy: Int,
-                    timestamp: OffsetDateTime,
-                ) {
-                    c.recordSample(sensorType, values, accuracy, timestamp)
-                }
-
-                override fun onTrigger(
-                    sensorType: AndroidSensorType,
-                    values: FloatArray,
-                    timestamp: OffsetDateTime,
-                ) {
-                    c.recordSample(sensorType, values, null, timestamp)
-                }
-
-                override fun onPersistentRegistrationLost(sensorType: AndroidSensorType) {
-                    c.onPersistentRegistrationLost(sensorType)
-                }
-            },
-        )
-        return c
     }
 
     private fun sample() = floatArrayOf(1.0f, 2.0f, 3.0f)
@@ -863,5 +817,68 @@ class SensorRuntimeControllerTest {
         // Accelerometer registered; gyroscope skipped silently.
         assertEquals(listOf(AndroidSensorType.accelerometer), gateway.registeredContinuous)
         assertTrue(c.isCollecting)
+    }
+}
+
+private fun controller(
+    gateway: FakeSensorGateway = FakeSensorGateway(),
+    settings: FakeSensorRuntimeSettings = FakeSensorRuntimeSettings(),
+    scheduler: ManualSensorRuntimeScheduler = ManualSensorRuntimeScheduler(),
+    dao: FakeSensorSampleDao = FakeSensorSampleDao(),
+    collectionGate: (AndroidSensorType) -> Boolean = { true },
+    collectionAdmission: () -> Boolean = { true },
+): SensorRuntimeController {
+    val c = SensorRuntimeController(
+        gateway = gateway,
+        settings = settings,
+        sink = SensorSampleSink(dao),
+        scheduler = scheduler,
+        collectionGate = collectionGate,
+        collectionAdmission = collectionAdmission,
+    )
+    gateway.attach(
+        object : SensorGateway.SampleListener {
+            override fun onSample(
+                sensorType: AndroidSensorType,
+                values: FloatArray,
+                accuracy: Int,
+                timestamp: OffsetDateTime,
+            ) {
+                c.recordSample(sensorType, values, accuracy, timestamp)
+            }
+
+            override fun onTrigger(
+                sensorType: AndroidSensorType,
+                values: FloatArray,
+                timestamp: OffsetDateTime,
+            ) {
+                c.recordSample(sensorType, values, null, timestamp)
+            }
+
+            override fun onPersistentRegistrationLost(sensorType: AndroidSensorType) {
+                c.onPersistentRegistrationLost(sensorType)
+            }
+        },
+    )
+    return c
+}
+
+class FullDutySensorRetryTest {
+    @Test
+    fun blockedFullDutySensorRetriesAfterAPositivePeriodAndResumes() {
+        val gateway = FakeSensorGateway().apply { batteryPercent = 10 }
+        val scheduler = ManualSensorRuntimeScheduler()
+        val c = controller(gateway = gateway, scheduler = scheduler,
+            settings = FakeSensorRuntimeSettings(dutyActive = 30, dutyPeriod = 30))
+        c.start()
+        repeat(3) {
+            assertEquals(30L, scheduler.runNext())
+            assertFalse(c.isCollecting)
+            assertTrue(gateway.registeredContinuous.isEmpty())
+        }
+        gateway.batteryPercent = 100
+        assertEquals(30L, scheduler.runNext())
+        assertTrue(c.isCollecting)
+        c.stop()
     }
 }

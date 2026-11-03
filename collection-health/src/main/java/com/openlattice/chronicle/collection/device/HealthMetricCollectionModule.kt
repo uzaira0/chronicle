@@ -1,14 +1,12 @@
 package com.openlattice.chronicle.collection.device
 
+import android.util.Log
 import com.openlattice.chronicle.collection.AndroidHealthMetricEvent
-import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.HealthMetricType
-import com.openlattice.chronicle.collection.core.CollectionClock
-import com.openlattice.chronicle.collection.core.CollectionLog
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.core.PullCollectionModule
-import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.collection.sink.HealthMetricSampleSink
+import com.openlattice.chronicle.collection.state.writeObservation
 import com.openlattice.chronicle.storage.HealthMetricSampleEntry
 import java.nio.charset.StandardCharsets
 import java.time.Instant
@@ -16,6 +14,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.TimeZone
 import java.util.UUID
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 
 private const val TAG = "HealthMetricCollectionModule"
 
@@ -28,26 +27,33 @@ private const val TAG = "HealthMetricCollectionModule"
 public class HealthMetricCollectionModule(
     private val sink: HealthMetricSampleSink,
     private val source: HealthMetricSource,
-    private val enrolled: () -> Boolean,
-    clock: CollectionClock = CollectionClock.SYSTEM,
-    private val log: CollectionLog = CollectionLog.LOGCAT,
-) : PullCollectionModule(CollectionModuleId.HEALTH_CONNECT, clock, sink::queueDepth) {
+    enrolled: () -> Boolean,
+    now: () -> Long = System::currentTimeMillis,
+    /**
+     * Holds one persistence read lease from the write through the read acknowledgement, so a stop cannot land
+     * between them. The Health Connect read stays outside it: that read can wait on a main-thread binding, and
+     * stops must not queue behind it (HealthConnectUploadLeaseRegressionTest).
+     */
+    private val persistLease: (() -> ModuleResult) -> ModuleResult,
+) : PullCollectionModule(enrolled, now) {
+
+    /**
+     * The source holds one pending read window, so samples from the periodic collector and the upload worker run
+     * one at a time. The monitor is outermost and is never taken under a lease or a stop: order is this monitor, then
+     * the source read (its own monitor, no lease), then [persistLease]; a rejection runs after the lease is released.
+     */
+    override fun sample(): ModuleResult = synchronized(this) { super.sample() }
 
     override fun runSample(now: Long): ModuleResult {
-        if (!enrolled()) return ModuleResult.Skipped("participant not enrolled")
 
         val observation = sink.captureAdmission()
         val readings: List<HealthMetricReading> = try {
             source.read()
         } catch (e: Exception) {
-            log.error(TAG, "Health-metric source threw while reading", e)
+            Log.e(TAG, "Health-metric source threw while reading", e)
             return ModuleResult.Failed(e, redactedMessage = "health metric source read failed: ${e.javaClass.simpleName}")
         }
-        if (readings.isEmpty()) {
-            val result = writeSourceObservation(observation) { ModuleResult.Ok(0) }
-            if (result !is ModuleResult.Ok) rejectSourceRead()
-            return if (result is ModuleResult.Ok) acknowledgeSourceRead(items = 0) else result
-        }
+        if (readings.isEmpty()) return commit(observation) { ModuleResult.Ok(0) }
 
         val tsString = OffsetDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneOffset.UTC).toString()
         val tz = TimeZone.getDefault().id
@@ -67,51 +73,47 @@ public class HealthMetricCollectionModule(
             }
         } catch (e: Exception) {
             rejectSourceRead()
-            log.error(TAG, "Failed to map Health Connect readings", e)
+            Log.e(TAG, "Failed to map Health Connect readings", e)
             return ModuleResult.Failed(e, redactedMessage = "health metric mapping failed: ${e.javaClass.simpleName}")
         }
 
-        val result = writeSourceObservation(observation) { sink.write(entries) }
-        return when (val writeResult = result) {
-            is ModuleResult.Ok -> {
-                log.info(TAG, "Persisted ${entries.size} health metric record(s)")
-                // The admission guard has committed the outer queue transaction before this checkpoint.
-                acknowledgeSourceRead(entries.size)
-            }
-            is ModuleResult.Failed -> {
-                rejectSourceRead()
-                log.error(TAG, "Failed to persist health metric records", writeResult.error)
-                writeResult
-            }
-            else -> {
-                rejectSourceRead()
-                writeResult
-            }
-        }
+        val result = commit(observation) { sink.write(entries) }
+        if (result is ModuleResult.Ok) Log.i(TAG, "Persisted ${entries.size} health metric record(s)")
+        else if (result is ModuleResult.Failed) Log.e(TAG, "Failed to persist health metric records", result.error)
+        return result
     }
 
-    private fun writeSourceObservation(
-        observation: com.openlattice.chronicle.collection.state.CollectionPersistenceGuard,
-        write: () -> ModuleResult,
-    ): ModuleResult = try {
-        observation.writeObservation(write = write)
-    } catch (e: Exception) {
-        log.error(TAG, "Health-metric storage admission failed", e)
-        ModuleResult.Failed(e, redactedMessage = "health metric admission failed: ${e.javaClass.simpleName}")
+    /**
+     * Writes and then acknowledges the read inside one [persistLease]; the admission guard has committed the
+     * queue transaction before the checkpoint. A refused or failed step rejects the window after the lease.
+     */
+    private fun commit(observation: CollectionPersistenceGuard, write: () -> ModuleResult): ModuleResult {
+        val result = try {
+            persistLease {
+                when (val written = observation.writeObservation(write = write)) {
+                    is ModuleResult.Ok -> acknowledgeSourceRead(written.items)
+                    else -> written
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Health-metric persistence lease failed", e)
+            ModuleResult.Failed(e, redactedMessage = "health metric lease failed: ${e.javaClass.simpleName}")
+        }
+        if (result !is ModuleResult.Ok) rejectSourceRead()
+        return result
     }
 
     private fun acknowledgeSourceRead(items: Int): ModuleResult = try {
         source.acknowledgeRead()
         ModuleResult.Ok(items)
     } catch (e: Exception) {
-        log.error(TAG, "Failed to persist Health Connect read checkpoint", e)
-        rejectSourceRead()
+        Log.e(TAG, "Failed to persist Health Connect read checkpoint", e)
         ModuleResult.Failed(e, redactedMessage = "health metric checkpoint failed: ${e.javaClass.simpleName}")
     }
 
     private fun rejectSourceRead() {
         runCatching { source.rejectRead() }
-            .onFailure { log.error(TAG, "Failed to reject Health Connect read window", it) }
+            .onFailure { Log.e(TAG, "Failed to reject Health Connect read window", it) }
     }
 
 }

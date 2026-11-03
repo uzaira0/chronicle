@@ -1,22 +1,39 @@
 package com.openlattice.chronicle.collection.device
 
+import com.openlattice.chronicle.collection.core.ObservationScope
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HealthMetricReadCoordinatorTest {
+    @Test fun backlogReadsStayBoundedAndAdvanceBeyondTheOverlap() {
+        val checkpoint = FakeCheckpoint(0)
+        val coordinator = HealthMetricReadCoordinator(checkpoint)
+        var previousEnd = requireNotNull(checkpoint.value)
+        repeat(3) {
+            coordinator.read<String>(MAX_HEALTH_READ_WINDOW_MILLIS * 4) { start, end ->
+                assertTrue(end - start <= MAX_HEALTH_READ_WINDOW_MILLIS)
+                assertTrue(end > previousEnd)
+                emptyList()
+            }
+            coordinator.acknowledge()
+            previousEnd = requireNotNull(checkpoint.value)
+        }
+    }
+
     @Test
     fun consentFloorPreventsBackfillAndRetiredAcknowledgementCannotAdvanceCursor() {
         val checkpoint = FakeCheckpoint(2_000)
-        var scope = "enrollment-A:1" to 3_000L
+        var scope = ObservationScope("enrollment-A:1", 3_000L)
         val coordinator = HealthMetricReadCoordinator(checkpoint, consentScope = { scope })
         coordinator.read<String>(5_000) { start, _ ->
             assertEquals(3_000L, start)
             listOf("accepted-A")
         }
-        scope = "enrollment-B:2" to 7_000L
+        scope = ObservationScope("enrollment-B:2", 7_000L)
         coordinator.acknowledge()
         assertEquals(2_000L, checkpoint.value)
         coordinator.read<String>(9_000) { start, _ ->

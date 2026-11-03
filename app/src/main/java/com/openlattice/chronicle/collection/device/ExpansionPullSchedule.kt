@@ -1,9 +1,11 @@
 package com.openlattice.chronicle.collection.device
 
+import com.openlattice.chronicle.generated.CollectionDefaultValues
 import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import android.content.Context
 import com.openlattice.chronicle.collection.CollectionCadenceModules
 import com.openlattice.chronicle.collection.CollectionModuleId
+import kotlin.math.abs
 
 /**
  * Per-module collection-interval schedule for the pull-style collection modules whose periodic
@@ -30,9 +32,9 @@ public class ExpansionPullSchedule(context: Context) {
         prefs.edit().putLong(intervalKey(moduleId), seconds).apply()
     }
 
-    /** The configured interval for [moduleId], or [DEFAULT_INTERVAL_SECONDS] until a sync sets one. */
+    /** The configured interval for [moduleId], or the model default until a sync sets one. */
     public fun intervalSeconds(moduleId: CollectionModuleId): Long =
-        prefs.getLong(intervalKey(moduleId), DEFAULT_INTERVAL_SECONDS)
+        prefs.getLong(intervalKey(moduleId), CollectionDefaultValues.INTERVAL_SECONDS)
 
     /** Whether [moduleId] is due to sample at [nowMs] given its interval and last successful run. */
     public fun isDue(moduleId: CollectionModuleId, nowMs: Long): Boolean =
@@ -53,7 +55,7 @@ public class ExpansionPullSchedule(context: Context) {
     public fun claimIfDue(moduleId: CollectionModuleId): Long? = synchronized(ExpansionPullSchedule::class.java) {
         val nowMs = System.currentTimeMillis()
         val claimedMs = prefs.getLong(claimKey(moduleId), 0L)
-        if (claimedMs > 0L && kotlin.math.abs(nowMs - claimedMs) < CLAIM_ABANDONED_MS) return@synchronized null
+        if (claimedMs > 0L && abs(nowMs - claimedMs) < CLAIM_ABANDONED_MS) return@synchronized null
         if (!isDue(moduleId, nowMs)) return@synchronized null
         checkLocalStoreWrite(prefs.edit().putLong(claimKey(moduleId), nowMs).commit()) { "Unable to claim $moduleId run" }
         nowMs
@@ -91,9 +93,6 @@ public class ExpansionPullSchedule(context: Context) {
         internal fun erase(context: Context): Boolean = synchronized(ExpansionPullSchedule::class.java) {
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit()
         }
-
-        /** Default interval until the first settings sync populates one — the model default (900s). */
-        public const val DEFAULT_INTERVAL_SECONDS: Long = 900L
 
         /** Drift tolerance so a worker firing slightly early still fires an N-tick interval on tick N. */
         public const val DUE_TOLERANCE_MS: Long = 120_000L

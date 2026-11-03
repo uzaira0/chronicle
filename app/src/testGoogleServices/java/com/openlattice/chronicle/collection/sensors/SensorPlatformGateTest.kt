@@ -41,18 +41,13 @@ class SensorPlatformGateTest {
     }
 
     @Test @Config(sdk = [30, Build.VERSION_CODES.S, 36])
-    fun highRateRegistrationChecksPermissionAndAllowsThe200HzBoundary() {
+    fun the200HzStudyCeilingRegistersWithoutHighRatePermission() {
         shadowOf(manager).addSensor(SensorBuilder.newBuilder().setType(Sensor.TYPE_ACCELEROMETER).build())
         val gateway = gateway()
         try {
-            shadowOf(app).denyPermissions(Manifest.permission.HIGH_SAMPLING_RATE_SENSORS)
-            assertEquals(Build.VERSION.SDK_INT < Build.VERSION_CODES.S,
-                gateway.registerContinuousSensor(AndroidSensorType.accelerometer, 1_000, 0))
             assertTrue(gateway.registerContinuousSensor(AndroidSensorType.accelerometer, 5_000, 0))
-            shadowOf(app).grantPermissions(Manifest.permission.HIGH_SAMPLING_RATE_SENSORS)
-            assertTrue(gateway.registerContinuousSensor(AndroidSensorType.accelerometer, 1_000, 0))
             shadowOf(manager).setForceListenersToFail(true)
-            assertFalse(gateway.registerContinuousSensor(AndroidSensorType.accelerometer, 1_000, 0))
+            assertFalse(gateway.registerContinuousSensor(AndroidSensorType.accelerometer, 5_000, 0))
         } finally { gateway.unregisterAll() }
     }
 }

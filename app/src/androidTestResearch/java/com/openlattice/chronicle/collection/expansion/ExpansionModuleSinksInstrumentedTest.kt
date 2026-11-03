@@ -3,7 +3,6 @@ package com.openlattice.chronicle.collection.expansion
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.openlattice.chronicle.IsolatedChronicleTestDb
 import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.ActivityRecognitionSampleSink
 import com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink
 import com.openlattice.chronicle.collection.sink.ConnectivityStateSampleSink
@@ -82,7 +81,7 @@ class ExpansionModuleSinksInstrumentedTest {
 
     @Test
     fun sleepSinkRoundTripsThroughSqlCipherAndDeDupesById() {
-        val sink = SleepSampleSink(db.sleepSampleDao(), NoOpCollectionLog)
+        val sink = SleepSampleSink(db.sleepSampleDao())
         val before = sink.queueDepth()
         val sample = SleepSampleEntry(
             id = id("sleep", 0),
@@ -112,7 +111,7 @@ class ExpansionModuleSinksInstrumentedTest {
 
     @Test
     fun activityRecognitionSinkRoundTripsThroughSqlCipher() {
-        val sink = ActivityRecognitionSampleSink(db.activityRecognitionSampleDao(), NoOpCollectionLog)
+        val sink = ActivityRecognitionSampleSink(db.activityRecognitionSampleDao())
         val before = sink.queueDepth()
         val sample = ActivityRecognitionSampleEntry(
             id = id("activity", 0),
@@ -135,7 +134,7 @@ class ExpansionModuleSinksInstrumentedTest {
 
     @Test
     fun healthMetricSinkRoundTripsDoubleValueThroughSqlCipher() {
-        val sink = HealthMetricSampleSink(db.healthMetricSampleDao(), NoOpCollectionLog)
+        val sink = HealthMetricSampleSink(db.healthMetricSampleDao())
         val before = sink.queueDepth()
         val sample = HealthMetricSampleEntry(
             id = id("health", 0),
@@ -159,7 +158,7 @@ class ExpansionModuleSinksInstrumentedTest {
 
     @Test
     fun connectivityStateSinkRoundTripsNullableBooleansThroughSqlCipher() {
-        val sink = ConnectivityStateSampleSink(db.connectivityStateSampleDao(), NoOpCollectionLog)
+        val sink = ConnectivityStateSampleSink(db.connectivityStateSampleDao())
         val before = sink.queueDepth()
         val sample = ConnectivityStateSampleEntry(
             id = id("connectivity", 0),
@@ -188,7 +187,7 @@ class ExpansionModuleSinksInstrumentedTest {
 
     @Test
     fun appNetworkUsageSinkRoundTripsLongCountersThroughSqlCipher() {
-        val sink = AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao(), NoOpCollectionLog)
+        val sink = AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao())
         val before = sink.queueDepth()
         val sample = AppNetworkUsageSampleEntry(
             id = id("network", 0),
@@ -213,7 +212,7 @@ class ExpansionModuleSinksInstrumentedTest {
 
     @Test
     fun deviceSettingsSinkRoundTripsFloatAndPartialSnapshotThroughSqlCipher() {
-        val sink = DeviceSettingsSampleSink(db.deviceSettingsSampleDao(), NoOpCollectionLog)
+        val sink = DeviceSettingsSampleSink(db.deviceSettingsSampleDao())
         val before = sink.queueDepth()
         val full = DeviceSettingsSampleEntry(
             id = id("settings", 0),
@@ -263,26 +262,26 @@ class ExpansionModuleSinksInstrumentedTest {
 
     @Test
     fun emptyWritesAreOkNoOpsAcrossAllSixSinks() {
-        assertEquals(ModuleResult.Ok(0), SleepSampleSink(db.sleepSampleDao(), NoOpCollectionLog).write(emptyList()))
+        assertEquals(ModuleResult.Ok(0), SleepSampleSink(db.sleepSampleDao()).write(emptyList()))
         assertEquals(
             ModuleResult.Ok(0),
-            ActivityRecognitionSampleSink(db.activityRecognitionSampleDao(), NoOpCollectionLog).write(emptyList()),
+            ActivityRecognitionSampleSink(db.activityRecognitionSampleDao()).write(emptyList()),
         )
         assertEquals(
             ModuleResult.Ok(0),
-            HealthMetricSampleSink(db.healthMetricSampleDao(), NoOpCollectionLog).write(emptyList()),
+            HealthMetricSampleSink(db.healthMetricSampleDao()).write(emptyList()),
         )
         assertEquals(
             ModuleResult.Ok(0),
-            ConnectivityStateSampleSink(db.connectivityStateSampleDao(), NoOpCollectionLog).write(emptyList()),
+            ConnectivityStateSampleSink(db.connectivityStateSampleDao()).write(emptyList()),
         )
         assertEquals(
             ModuleResult.Ok(0),
-            AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao(), NoOpCollectionLog).write(emptyList()),
+            AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao()).write(emptyList()),
         )
         assertEquals(
             ModuleResult.Ok(0),
-            DeviceSettingsSampleSink(db.deviceSettingsSampleDao(), NoOpCollectionLog).write(emptyList()),
+            DeviceSettingsSampleSink(db.deviceSettingsSampleDao()).write(emptyList()),
         )
     }
 }

@@ -1,7 +1,7 @@
 package com.openlattice.chronicle.collection.core
 
 /**
- * Outcome of a single [DataCollectionModule] or [com.openlattice.chronicle.collection.sink.CollectionSink]
+ * Outcome of a single collection module or [com.openlattice.chronicle.collection.sink.CollectionSink]
  * operation (design §1C.1).
  *
  * Every collection operation returns an explicit [ModuleResult] — a persistent failure
@@ -18,7 +18,7 @@ package com.openlattice.chronicle.collection.core
  */
 public sealed class ModuleResult {
 
-    /** A short, redaction-safe label for diagnostics ([CollectionModuleDiagnostics.lastResult]). */
+    /** A short, redaction-safe label for logs. */
     public abstract val label: String
 
     /** Whether this result represents a successful operation. */
@@ -54,10 +54,3 @@ public sealed class ModuleResult {
         override val label: String get() = "FAILED"
     }
 }
-
-public val ModuleResult.collectionStatus: CollectionModuleStatus
-    get() = when (this) {
-        is ModuleResult.Failed -> CollectionModuleStatus.FAILED
-        is ModuleResult.Retry -> CollectionModuleStatus.DEGRADED
-        is ModuleResult.Ok, is ModuleResult.Skipped -> CollectionModuleStatus.IDLE
-    }

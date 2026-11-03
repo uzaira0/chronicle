@@ -1,7 +1,6 @@
 package com.openlattice.chronicle.collection.sensors
 
 import com.openlattice.chronicle.android.AndroidSensorType
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.FakeSensorSampleDao
 import com.openlattice.chronicle.collection.sink.SensorSampleSink
 import com.openlattice.chronicle.sensors.SensorTypeMapping
@@ -43,8 +42,6 @@ class SensorDataContractTest {
         AndroidSensorType.significantMotion to 1,
         AndroidSensorType.tiltDetector to 1,
         AndroidSensorType.screenOrientation to 1,
-        AndroidSensorType.samsungGripWifi to 16,
-        AndroidSensorType.samsungMotion to 4,
     )
 
     @Test
@@ -80,9 +77,8 @@ class SensorDataContractTest {
         controller = SensorRuntimeController(
             gateway = gateway,
             settings = FakeSensorRuntimeSettings(sensors = AndroidSensorType.values().toSet()),
-            sink = SensorSampleSink(dao, NoOpCollectionLog),
+            sink = SensorSampleSink(dao),
             scheduler = scheduler,
-            log = NoOpCollectionLog,
         )
         gateway.attach(object : SensorGateway.SampleListener {
             override fun onSample(

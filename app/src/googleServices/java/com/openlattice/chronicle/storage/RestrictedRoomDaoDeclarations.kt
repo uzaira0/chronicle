@@ -12,6 +12,8 @@ import java.util.WeakHashMap
  */
 @Database(
     entities = [
+        UploadServerEntity::class,
+        LocalDataQuarantineEntity::class,
         InteractionSampleEntry::class,
         AudioActivitySampleEntry::class,
         AudioContentSampleEntry::class,

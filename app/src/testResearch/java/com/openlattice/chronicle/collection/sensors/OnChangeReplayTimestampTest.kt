@@ -5,8 +5,6 @@ package com.openlattice.chronicle.collection.sensors
 import android.app.Application
 import android.content.Context
 import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
@@ -20,7 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSensor
-import org.robolectric.util.ReflectionHelpers
+import org.robolectric.shadows.SensorEventBuilder
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
@@ -43,15 +41,9 @@ class OnChangeReplayTimestampTest {
     })
 
     private fun deliver(eventNanos: Long) {
-        @Suppress("UNCHECKED_CAST")
-        val listeners = gateway.javaClass.getDeclaredField("persistentListeners").apply { isAccessible = true }
-            .get(gateway) as Map<AndroidSensorType, SensorEventListener>
-        val event = ReflectionHelpers.callConstructor(SensorEvent::class.java,
-            ReflectionHelpers.ClassParameter.from(Int::class.javaPrimitiveType, 1))
-        ReflectionHelpers.setField(event, "sensor", manager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER))
-        ReflectionHelpers.setField(event, "timestamp", eventNanos)
-        event.values[0] = 54f
-        listeners.getValue(AndroidSensorType.stepCounter).onSensorChanged(event)
+        val event = SensorEventBuilder.newBuilder(manager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER), floatArrayOf(54f))
+            .setTimestamp(eventNanos).build()
+        shadowOf(manager).sendSensorEventToListeners(event)
     }
 
     @Test

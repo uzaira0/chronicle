@@ -13,25 +13,25 @@ public data class InteractionNodeBounds(
     }
 }
 
-/** Required legacy grid values derived deterministically from authoritative [bounds]. */
-public data class LegacyInteractionGridPosition(
+/** Required wire grid values derived deterministically from authoritative [bounds]. */
+public data class InteractionGridPosition(
     val gridRow: Int,
     val gridCol: Int,
 )
 
 /**
- * Derives the required legacy grid representation from raw node bounds.
+ * Derives the required wire grid representation from raw node bounds.
  *
  * Chronicle stores [bounds] as the observation. The center is used only transiently to choose a
  * grid cell; it is intentionally not returned or persisted as a misleading "raw" coordinate.
  */
-public fun deriveLegacyInteractionGridPosition(
+public fun deriveInteractionGridPosition(
     bounds: InteractionNodeBounds,
     displayWidth: Int,
     displayHeight: Int,
     gridRows: Int,
     gridCols: Int,
-): LegacyInteractionGridPosition {
+): InteractionGridPosition {
     require(displayWidth >= 1) { "displayWidth must be positive" }
     require(displayHeight >= 1) { "displayHeight must be positive" }
     val centerX = ((bounds.left.toLong() + bounds.right.toLong()) / 2L)
@@ -48,7 +48,7 @@ public fun deriveLegacyInteractionGridPosition(
         gridRows = gridRows,
         gridCols = gridCols,
     )
-    return LegacyInteractionGridPosition(
+    return InteractionGridPosition(
         gridRow = gridRow,
         gridCol = gridCol,
     )
