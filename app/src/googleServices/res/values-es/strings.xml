@@ -1,0 +1,5 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="sensor_notification_title">Recopilación de datos de sensores</string>
+    <string name="sensor_notification_message">La recopilación de sensores sigue la configuración de su estudio y de datos compartidos.</string>
+</resources>

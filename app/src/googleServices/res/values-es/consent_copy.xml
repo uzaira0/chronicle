@@ -1,0 +1,152 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="consent_activity_recognition_label">Actividad física</string>
+    <string name="consent_activity_recognition_privacy_class">Metadatos de comportamiento</string>
+    <string-array name="consent_activity_recognition_collects">
+        <item>Su tipo de actividad general: en reposo, caminando, corriendo, en bicicleta o en un vehículo</item>
+        <item>Un nivel de confianza para cada actividad</item>
+    </string-array>
+    <string-array name="consent_activity_recognition_not_collects">
+        <item>Su ubicación o GPS</item>
+        <item>Audio, micrófono o cámara</item>
+        <item>Cualquier contenido que escriba o envíe por mensaje</item>
+    </string-array>
+    <string name="consent_app_network_usage_label">Uso de red de las aplicaciones</string>
+    <string name="consent_app_network_usage_privacy_class">Metadatos de comportamiento</string>
+    <string-array name="consent_app_network_usage_collects">
+        <item>Cuántos datos envía y recibe cada aplicación (cantidad de bytes)</item>
+        <item>Si se utilizaron redes Wi-Fi o móviles, y el período correspondiente</item>
+    </string-array>
+    <string-array name="consent_app_network_usage_not_collects">
+        <item>El contenido de los datos, los sitios web o las personas con las que se conecta</item>
+        <item>Su ubicación</item>
+        <item>Cualquier cosa que escriba, lea o envíe por mensaje</item>
+    </string-array>
+    <string name="consent_audio_activity_label">Estado del audio</string>
+    <string name="consent_audio_activity_privacy_class">Metadatos de comportamiento</string>
+    <string-array name="consent_audio_activity_collects">
+        <item>Qué aplicación reproduce audio y si se está reproduciendo</item>
+        <item>Conexión de audífonos, Bluetooth o parlantes y nivel de volumen multimedia</item>
+        <item>Si hay una llamada telefónica en curso (no la llamada, su audio ni las personas que participan)</item>
+    </string-array>
+    <string-array name="consent_audio_activity_not_collects">
+        <item>El micrófono o los sonidos a su alrededor</item>
+        <item>El audio mismo o cualquier cosa que se diga</item>
+        <item>Lo que escribe, busca o envía por mensaje</item>
+    </string-array>
+    <string name="consent_audio_content_label">Metadatos de audio</string>
+    <string name="consent_audio_content_privacy_class">Contenido multimedia</string>
+    <string-array name="consent_audio_content_collects">
+        <item>El título, artista y álbum del contenido multimedia que reproduce</item>
+        <item>Posición y duración de la reproducción</item>
+    </string-array>
+    <string-array name="consent_audio_content_not_collects">
+        <item>El micrófono o cualquier grabación</item>
+        <item>El audio mismo</item>
+        <item>Cualquier contenido que escriba o envíe por mensaje</item>
+    </string-array>
+    <string name="consent_health_connect_label">Health Connect</string>
+    <string name="consent_health_connect_privacy_class">Indicadores de salud</string>
+    <string-array name="consent_health_connect_collects">
+        <item>Los tipos de registros de Health Connect enumerados para el estudio activo</item>
+        <item>Cuándo se registró cada dato autorizado</item>
+    </string-array>
+    <string-array name="consent_health_connect_not_collects">
+        <item>Cualquier tipo de registro de Health Connect no enumerado para el estudio activo o sin autorización en Android</item>
+        <item>Audio, micrófono o cámara</item>
+        <item>Cualquier contenido que escriba o envíe por mensaje</item>
+    </string-array>
+    <string-array name="consent_health_connect_caveats">
+        <item>Active esta opción únicamente en un dispositivo cuyos datos de Health Connect sean exclusivamente suyos. Health Connect recopila lo que sus aplicaciones y dispositivos escriben en él; por lo tanto, si comparte una balanza inteligente, reloj, pulsera de actividad o aplicación de salud con otra persona, las mediciones de esa persona podrían registrarse como si fueran de usted. Si comparte sus dispositivos de salud, deje esta opción desactivada.</item>
+    </string-array>
+    <string name="consent_health_connect_collects_trailer">Cuándo se registró cada dato autorizado</string>
+    <string name="consent_interaction_events_label">Eventos de interacción</string>
+    <string name="consent_interaction_events_privacy_class">Metadatos de interacción</string>
+    <string-array name="consent_interaction_events_collects">
+        <item>Dónde toca, desplaza o cambia el enfoque en la pantalla: los límites en pantalla del elemento con el que interactúa y una región de pantalla derivada</item>
+        <item>El tipo de elemento con el que interactúa y qué aplicación está abierta</item>
+        <item>Cuánto y qué tan rápido se desplaza por la pantalla, y el tiempo entre interacciones</item>
+    </string-array>
+    <string-array name="consent_interaction_events_not_collects">
+        <item>El texto o contenido de lo que toca o lee</item>
+        <item>Lo que escribe, busca o envía por mensaje</item>
+        <item>La posición exacta de sus dedos, las capturas de pantalla o el contenido de la pantalla</item>
+    </string-array>
+    <string name="consent_notification_activity_label">Actividad de notificaciones</string>
+    <string name="consent_notification_activity_privacy_class">Metadatos de comportamiento</string>
+    <string-array name="consent_notification_activity_collects">
+        <item>Cuántas notificaciones recibe y de qué aplicación provienen</item>
+        <item>La categoría de la notificación (mensaje, llamada, alarma) y el momento en que llega</item>
+    </string-array>
+    <string-array name="consent_notification_activity_not_collects">
+        <item>El texto o contenido de las notificaciones</item>
+        <item>Quién las envió o qué dicen</item>
+        <item>Los mensajes, nombres o cualquier contenido que escriba</item>
+    </string-array>
+    <string name="consent_sensor_privacy_class">Datos físicos del dispositivo</string>
+    <string-array name="consent_sensor_not_collects">
+        <item>Su ubicación o GPS</item>
+        <item>Audio, micrófono o cámara</item>
+        <item>Contenido de las aplicaciones o cualquier cosa que escriba</item>
+    </string-array>
+    <string name="consent_sensor_accelerometer_label">Acelerómetro</string>
+    <string-array name="consent_sensor_accelerometer_collects">
+        <item>Movimiento y aceleración del dispositivo en tres ejes</item>
+    </string-array>
+    <string name="consent_sensor_gravity_label">Sensor de gravedad</string>
+    <string-array name="consent_sensor_gravity_collects">
+        <item>Dirección y magnitud de la gravedad</item>
+    </string-array>
+    <string name="consent_sensor_gyroscope_label">Giroscopio</string>
+    <string-array name="consent_sensor_gyroscope_collects">
+        <item>Rotación y velocidad angular</item>
+    </string-array>
+    <string name="consent_sensor_light_label">Sensor de luz</string>
+    <string-array name="consent_sensor_light_collects">
+        <item>Nivel de luz ambiental alrededor del dispositivo</item>
+    </string-array>
+    <string name="consent_sensor_linear_acceleration_label">Aceleración lineal</string>
+    <string-array name="consent_sensor_linear_acceleration_collects">
+        <item>Aceleración sin el componente de gravedad</item>
+    </string-array>
+    <string name="consent_sensor_magnetometer_label">Magnetómetro</string>
+    <string-array name="consent_sensor_magnetometer_collects">
+        <item>Campo magnético y orientación de la brújula</item>
+    </string-array>
+    <string name="consent_sensor_proximity_label">Sensor de proximidad</string>
+    <string-array name="consent_sensor_proximity_collects">
+        <item>Si hay algo cerca de la pantalla</item>
+    </string-array>
+    <string name="consent_sensor_rotation_vector_label">Vector de rotación</string>
+    <string-array name="consent_sensor_rotation_vector_collects">
+        <item>Orientación del dispositivo en el espacio</item>
+    </string-array>
+    <string name="consent_sensor_screen_orientation_label">Orientación de pantalla</string>
+    <string-array name="consent_sensor_screen_orientation_collects">
+        <item>Orientación de la pantalla (vertical u horizontal)</item>
+    </string-array>
+    <string name="consent_sensor_significant_motion_label">Movimiento significativo</string>
+    <string-array name="consent_sensor_significant_motion_collects">
+        <item>Cuándo el dispositivo experimenta un movimiento significativo</item>
+    </string-array>
+    <string name="consent_sensor_step_counter_label">Contador de pasos</string>
+    <string-array name="consent_sensor_step_counter_collects">
+        <item>Cantidad de pasos dados</item>
+    </string-array>
+    <string name="consent_sensor_tilt_detector_label">Detector de inclinación</string>
+    <string-array name="consent_sensor_tilt_detector_collects">
+        <item>Cuándo se inclina el dispositivo</item>
+    </string-array>
+    <string name="consent_sleep_label">Sueño</string>
+    <string name="consent_sleep_privacy_class">Indicadores de salud</string>
+    <string-array name="consent_sleep_collects">
+        <item>Cuándo parece estar dormido o despierto (segmentos de sueño de la API de sueño de Android)</item>
+        <item>Un nivel de confianza para cada segmento</item>
+        <item>Niveles aproximados de luz y movimiento que informa el clasificador de sueño</item>
+    </string-array>
+    <string-array name="consent_sleep_not_collects">
+        <item>Audio, micrófono o cámara</item>
+        <item>Su ubicación</item>
+        <item>Cualquier cosa que escriba, lea o envíe por mensaje</item>
+    </string-array>
+</resources>

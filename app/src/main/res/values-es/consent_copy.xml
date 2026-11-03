@@ -1,0 +1,111 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="consent_battery_telemetry_label">Datos de batería del dispositivo</string>
+    <string name="consent_battery_telemetry_privacy_class">Metadatos del estado del dispositivo</string>
+    <string name="consent_battery_telemetry_collects_1">Nivel de batería, estado de carga y eventos de energía</string>
+    <string-array name="consent_battery_telemetry_collects">
+        <item>@string/consent_battery_telemetry_collects_1</item>
+    </string-array>
+    <string name="consent_battery_telemetry_not_collects_1">Cualquier acción que realice en el dispositivo</string>
+    <string name="consent_battery_telemetry_not_collects_2">Contenido de aplicaciones o datos personales</string>
+    <string-array name="consent_battery_telemetry_not_collects">
+        <item>@string/consent_battery_telemetry_not_collects_1</item>
+        <item>@string/consent_battery_telemetry_not_collects_2</item>
+    </string-array>
+    <string name="consent_connectivity_state_label">Estado de conectividad</string>
+    <string name="consent_connectivity_state_privacy_class">Metadatos del estado del dispositivo</string>
+    <string name="consent_connectivity_state_collects_1">Su tipo de conexión (Wi-Fi, datos móviles o sin conexión) y cuándo cambia</string>
+    <string name="consent_connectivity_state_collects_2">Si la conexión es de uso medido o está validada</string>
+    <string-array name="consent_connectivity_state_collects">
+        <item>@string/consent_connectivity_state_collects_1</item>
+        <item>@string/consent_connectivity_state_collects_2</item>
+    </string-array>
+    <string name="consent_connectivity_state_not_collects_1">Nombres de redes Wi-Fi ni los sitios y aplicaciones a los que se conecta</string>
+    <string name="consent_connectivity_state_not_collects_2">Su ubicación</string>
+    <string name="consent_connectivity_state_not_collects_3">Cualquier cosa que escriba, lea o envíe por mensaje</string>
+    <string-array name="consent_connectivity_state_not_collects">
+        <item>@string/consent_connectivity_state_not_collects_1</item>
+        <item>@string/consent_connectivity_state_not_collects_2</item>
+        <item>@string/consent_connectivity_state_not_collects_3</item>
+    </string-array>
+    <string name="consent_device_lifecycle_label">Ciclo de vida del dispositivo</string>
+    <string name="consent_device_lifecycle_privacy_class">Metadatos del estado del dispositivo</string>
+    <string name="consent_device_lifecycle_collects_1">Cambios complementarios en el estado de la batería, carga, ahorro de energía, red y memoria baja</string>
+    <string-array name="consent_device_lifecycle_collects">
+        <item>@string/consent_device_lifecycle_collects_1</item>
+    </string-array>
+    <string name="consent_device_lifecycle_not_collects_1">Cualquier acción que realice en la pantalla</string>
+    <string-array name="consent_device_lifecycle_not_collects">
+        <item>@string/consent_device_lifecycle_not_collects_1</item>
+        <item>@string/consent_battery_telemetry_not_collects_2</item>
+    </string-array>
+    <string name="consent_device_settings_label">Configuración del dispositivo</string>
+    <string name="consent_device_settings_privacy_class">Metadatos del estado del dispositivo</string>
+    <string name="consent_device_settings_collects_1">Una captura del estado de la configuración del dispositivo — modo oscuro, tamaño de fuente, No molestar, ahorro de batería, rotación automática y opciones similares</string>
+    <string name="consent_device_settings_collects_2">Almacenamiento libre y si los servicios de ubicación están activados</string>
+    <string-array name="consent_device_settings_collects">
+        <item>@string/consent_device_settings_collects_1</item>
+        <item>@string/consent_device_settings_collects_2</item>
+    </string-array>
+    <string name="consent_device_settings_not_collects_1">Cualquier acción que realice en el dispositivo o cualquier contenido de aplicaciones</string>
+    <string name="consent_device_settings_not_collects_2">Las coordenadas de su ubicación</string>
+    <string-array name="consent_device_settings_not_collects">
+        <item>@string/consent_device_settings_not_collects_1</item>
+        <item>@string/consent_device_settings_not_collects_2</item>
+        <item>@string/consent_connectivity_state_not_collects_3</item>
+    </string-array>
+    <string name="consent_in_app_activity_class_label">Actividad dentro de aplicaciones</string>
+    <string name="consent_in_app_activity_class_privacy_class">Metadatos de comportamiento</string>
+    <string name="consent_in_app_activity_class_collects_1">Qué pantalla está abierta dentro de una aplicación (nombre de la pantalla/actividad de la aplicación), junto con el uso de la aplicación</string>
+    <string name="consent_in_app_activity_class_collects_2">La misma información de tiempo y detalle que el registro de uso de aplicaciones al que se agrega</string>
+    <string-array name="consent_in_app_activity_class_collects">
+        <item>@string/consent_in_app_activity_class_collects_1</item>
+        <item>@string/consent_in_app_activity_class_collects_2</item>
+    </string-array>
+    <string name="consent_in_app_activity_class_not_collects_1">El texto o contenido mostrado en la pantalla</string>
+    <string name="consent_in_app_activity_class_not_collects_2">Lo que escribe, busca o envía por mensaje</string>
+    <string name="consent_in_app_activity_class_not_collects_3">Capturas de pantalla o contenido de la pantalla</string>
+    <string-array name="consent_in_app_activity_class_not_collects">
+        <item>@string/consent_in_app_activity_class_not_collects_1</item>
+        <item>@string/consent_in_app_activity_class_not_collects_2</item>
+        <item>@string/consent_in_app_activity_class_not_collects_3</item>
+    </string-array>
+    <string name="consent_usage_events_label">Eventos de uso de aplicaciones</string>
+    <string name="consent_usage_events_privacy_class">Metadatos de comportamiento</string>
+    <string name="consent_usage_events_collects_1">Qué aplicaciones abre y cierra, y cuándo</string>
+    <string name="consent_usage_events_collects_2">Cuánto tiempo permanecen las aplicaciones en primer plano</string>
+    <string name="consent_usage_events_collects_3">Cada evento que Android guarda en ese historial de uso, con su nombre de Android: Activity Resumed, Activity Paused, Activity Stopped, Screen Interactive, Screen Non-interactive, Keyguard Shown, Keyguard Hidden, Device Startup, Device Shutdown, Configuration Change, User Interaction, Shortcut Invocation, Foreground Service Start, Foreground Service Stop, Notification Seen, Notification Interruption y Standby Bucket Changed, y cualquier otro tipo de evento por su número (qué aplicación y cuándo, nunca el texto de las notificaciones)</string>
+    <string-array name="consent_usage_events_collects">
+        <item>@string/consent_usage_events_collects_1</item>
+        <item>@string/consent_usage_events_collects_2</item>
+        <item>@string/consent_usage_events_collects_3</item>
+    </string-array>
+    <string name="consent_usage_events_not_collects_1">El contenido dentro de las aplicaciones — mensajes, fotos o videos</string>
+    <string name="consent_usage_events_not_collects_2">Lo que escribe</string>
+    <string name="consent_usage_events_not_collects_3">Páginas web o términos de búsqueda</string>
+    <string-array name="consent_usage_events_not_collects">
+        <item>@string/consent_usage_events_not_collects_1</item>
+        <item>@string/consent_usage_events_not_collects_2</item>
+        <item>@string/consent_usage_events_not_collects_3</item>
+    </string-array>
+    <string name="consent_user_identification_label">Identificación de usuario al desbloquear</string>
+    <string name="consent_user_identification_privacy_class">Etiqueta de comportamiento proporcionada por el participante</string>
+    <string name="consent_user_identification_collects_1">Después de desbloquear el dispositivo, si la persona que lo utiliza es el participante del estudio u otra persona</string>
+    <string name="consent_user_identification_collects_2">Cuándo se realizó esa selección, para que los eventos posteriores de uso de aplicaciones puedan llevar la misma selección</string>
+    <string-array name="consent_user_identification_collects">
+        <item>@string/consent_user_identification_collects_1</item>
+        <item>@string/consent_user_identification_collects_2</item>
+    </string-array>
+    <string name="consent_user_identification_not_collects_1">El nombre, rostro, huella digital, voz u otro identificador biométrico de una persona</string>
+    <string name="consent_user_identification_not_collects_2">El PIN, contraseña o método de desbloqueo del dispositivo</string>
+    <string name="consent_user_identification_not_collects_3">Contenido de notificaciones, mensajes, fotos o contenido de la pantalla</string>
+    <string-array name="consent_user_identification_not_collects">
+        <item>@string/consent_user_identification_not_collects_1</item>
+        <item>@string/consent_user_identification_not_collects_2</item>
+        <item>@string/consent_user_identification_not_collects_3</item>
+    </string-array>
+    <string name="consent_upload_telemetry_label">Diagnósticos de envío</string>
+    <string name="consent_upload_telemetry_privacy_class">Diagnósticos operativos</string>
+    <string name="consent_sensor_availability_label">Disponibilidad de sensores</string>
+    <string name="consent_sensor_availability_privacy_class">Capacidades del dispositivo</string>
+</resources>
