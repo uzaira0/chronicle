@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!-- Debug-only emulator tests install a one-run CA in Android's user trust
-         store. Release variants do not reference this resource or trust user
-         certificates. -->
+         store. Release variants do not reference this resource; openRelease trusts
+         user CAs through open_network_security_config.xml. -->
     <debug-overrides>
         <trust-anchors>
             <certificates src="user" />

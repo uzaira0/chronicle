@@ -1,24 +1,18 @@
 package com.openlattice.chronicle.collection
 
 import android.content.Context
-import android.util.Log
-import com.openlattice.chronicle.BuildConfig
-import com.openlattice.chronicle.collection.activity.ActivityRecognitionIntegration
-import com.openlattice.chronicle.collection.activity.ActivityRecognitionModuleHolder
-import com.openlattice.chronicle.collection.activity.SleepModuleHolder
-import com.openlattice.chronicle.collection.activity.toAndroidActivityRecognitionEvent
-import com.openlattice.chronicle.collection.activity.toAndroidSleepEvent
-import com.openlattice.chronicle.collection.core.DataCollectionModule
+import com.openlattice.chronicle.R
+import com.openlattice.chronicle.android.AndroidSensorType
+import com.openlattice.chronicle.collection.device.AppNetworkUsageModuleHolder
 import com.openlattice.chronicle.collection.device.ExpansionPullSchedule
 import com.openlattice.chronicle.collection.device.ExpansionUploadWorkerDelegate
-import com.openlattice.chronicle.collection.device.AppNetworkUsageModuleHolder
-import com.openlattice.chronicle.collection.device.HealthMetricModuleHolder
 import com.openlattice.chronicle.collection.device.pullExpansionModule
-import com.openlattice.chronicle.collection.device.toAndroidHealthMetricEvent
 import com.openlattice.chronicle.collection.device.toAndroidAppNetworkUsageEvent
-import com.openlattice.chronicle.crypto.EncryptedPayloadType
-import com.openlattice.chronicle.services.upload.RestrictedUploadApiFactory
+import com.openlattice.chronicle.collection.state.CollectionConsentCopy
+import com.openlattice.chronicle.storage.UploadQueueTable
+import com.openlattice.chronicle.services.upload.DedicatedUploadSource
 import com.openlattice.chronicle.services.upload.RestrictedPendingUploadCounts
+import com.openlattice.chronicle.services.upload.RestrictedUploadApiFactory
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.activityRecognitionSampleDao
@@ -29,21 +23,83 @@ import com.openlattice.chronicle.storage.interactionSampleDao
 import com.openlattice.chronicle.storage.notificationActivitySampleDao
 import com.openlattice.chronicle.storage.sleepSampleDao
 
-/** Research/Open-only operational contributions, excluded from minimal public source sets. */
+/** Research and open operational contributions; the Amazon build has its own. */
 internal object DistributionCollectionContributions {
-    private const val TAG = "DistributionModules"
-
-    val moduleSuppliers: Map<CollectionModuleId, (Context) -> DataCollectionModule> = buildMap {
-        put(CollectionModuleId.APP_NETWORK_USAGE) { context -> AppNetworkUsageModuleHolder.get(context) }
-        if (BuildConfig.HAS_HEALTH_CONNECT) {
-            put(CollectionModuleId.HEALTH_CONNECT) { context -> HealthMetricModuleHolder.get(context) }
-        }
-        if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
-            put(CollectionModuleId.SLEEP) { context -> SleepModuleHolder.get(context) }
-            put(CollectionModuleId.ACTIVITY_RECOGNITION) { context ->
-                ActivityRecognitionModuleHolder.get(context)
-            }
-        }
+    /** Consent copy for the restricted modules; their wording lives in `googleServices/res/values/consent_copy.xml`. */
+    val consentResources: Map<CollectionModuleId, CollectionConsentCopy.Resources> = mapOf(
+        CollectionModuleId.APP_NETWORK_USAGE to CollectionConsentCopy.Resources(
+            R.string.consent_app_network_usage_label,
+            R.string.consent_app_network_usage_privacy_class,
+            R.array.consent_app_network_usage_collects,
+            R.array.consent_app_network_usage_not_collects,
+        ),
+        CollectionModuleId.INTERACTION_EVENTS to CollectionConsentCopy.Resources(
+            R.string.consent_interaction_events_label,
+            R.string.consent_interaction_events_privacy_class,
+            R.array.consent_interaction_events_collects,
+            R.array.consent_interaction_events_not_collects,
+        ),
+        CollectionModuleId.AUDIO_ACTIVITY to CollectionConsentCopy.Resources(
+            R.string.consent_audio_activity_label,
+            R.string.consent_audio_activity_privacy_class,
+            R.array.consent_audio_activity_collects,
+            R.array.consent_audio_activity_not_collects,
+        ),
+        CollectionModuleId.AUDIO_CONTENT to CollectionConsentCopy.Resources(
+            R.string.consent_audio_content_label,
+            R.string.consent_audio_content_privacy_class,
+            R.array.consent_audio_content_collects,
+            R.array.consent_audio_content_not_collects,
+        ),
+        CollectionModuleId.NOTIFICATION_ACTIVITY to CollectionConsentCopy.Resources(
+            R.string.consent_notification_activity_label,
+            R.string.consent_notification_activity_privacy_class,
+            R.array.consent_notification_activity_collects,
+            R.array.consent_notification_activity_not_collects,
+        ),
+        CollectionModuleId.SLEEP to CollectionConsentCopy.Resources(
+            R.string.consent_sleep_label,
+            R.string.consent_sleep_privacy_class,
+            R.array.consent_sleep_collects,
+            R.array.consent_sleep_not_collects,
+        ),
+        CollectionModuleId.ACTIVITY_RECOGNITION to CollectionConsentCopy.Resources(
+            R.string.consent_activity_recognition_label,
+            R.string.consent_activity_recognition_privacy_class,
+            R.array.consent_activity_recognition_collects,
+            R.array.consent_activity_recognition_not_collects,
+        ),
+        CollectionModuleId.HEALTH_CONNECT to CollectionConsentCopy.Resources(
+            R.string.consent_health_connect_label,
+            R.string.consent_health_connect_privacy_class,
+            R.array.consent_health_connect_collects,
+            R.array.consent_health_connect_not_collects,
+            R.array.consent_health_connect_caveats,
+            R.string.consent_health_connect_collects_trailer,
+        ),
+    ) + mapOf(
+        AndroidSensorType.accelerometer to (R.string.consent_sensor_accelerometer_label to R.array.consent_sensor_accelerometer_collects),
+        AndroidSensorType.gyroscope to (R.string.consent_sensor_gyroscope_label to R.array.consent_sensor_gyroscope_collects),
+        AndroidSensorType.magnetometer to (R.string.consent_sensor_magnetometer_label to R.array.consent_sensor_magnetometer_collects),
+        AndroidSensorType.gravity to (R.string.consent_sensor_gravity_label to R.array.consent_sensor_gravity_collects),
+        AndroidSensorType.linearAcceleration to
+            (R.string.consent_sensor_linear_acceleration_label to R.array.consent_sensor_linear_acceleration_collects),
+        AndroidSensorType.rotationVector to (R.string.consent_sensor_rotation_vector_label to R.array.consent_sensor_rotation_vector_collects),
+        AndroidSensorType.stepCounter to (R.string.consent_sensor_step_counter_label to R.array.consent_sensor_step_counter_collects),
+        AndroidSensorType.light to (R.string.consent_sensor_light_label to R.array.consent_sensor_light_collects),
+        AndroidSensorType.proximity to (R.string.consent_sensor_proximity_label to R.array.consent_sensor_proximity_collects),
+        AndroidSensorType.significantMotion to
+            (R.string.consent_sensor_significant_motion_label to R.array.consent_sensor_significant_motion_collects),
+        AndroidSensorType.tiltDetector to (R.string.consent_sensor_tilt_detector_label to R.array.consent_sensor_tilt_detector_collects),
+        AndroidSensorType.screenOrientation to
+            (R.string.consent_sensor_screen_orientation_label to R.array.consent_sensor_screen_orientation_collects),
+    ).entries.associate { (sensor, copy) ->
+        SensorCollectionModules.moduleFor(sensor) to CollectionConsentCopy.Resources(
+            copy.first,
+            R.string.consent_sensor_privacy_class,
+            copy.second,
+            R.array.consent_sensor_not_collects,
+        )
     }
 
     fun collectAdditionalSamples(
@@ -54,124 +110,36 @@ internal object DistributionCollectionContributions {
         val network = pullExpansionModule(CollectionModuleId.APP_NETWORK_USAGE, schedule, nowMs) {
             AppNetworkUsageModuleHolder.get(context).sample()
         }
-        val health = if (BuildConfig.HAS_HEALTH_CONNECT) {
-            pullExpansionModule(CollectionModuleId.HEALTH_CONNECT, schedule, nowMs) {
-                HealthMetricModuleHolder.get(context).sample()
-            }
-        } else true
-        if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
-            runCatching { ActivityRecognitionIntegration.ensureRegistration(context) }
-                .onFailure { Log.w(TAG, "Sleep/activity registration refresh failed", it) }
-        }
-        return network && health
+        val activityHealth = ActivityHealthCollectors.collect(context, schedule, nowMs)
+        return network && activityHealth
     }
 
     fun uploadAdditionalStreams(
         delegate: ExpansionUploadWorkerDelegate,
         servers: List<UploadServerEntity>,
-    ): Int {
-        var failures = 0
-        failures += delegate.uploadStream(
-            servers,
-            getOldest = { delegate.db.appNetworkUsageSampleDao().getOldest(it) },
-            getByIds = { delegate.db.appNetworkUsageSampleDao().getByIds(it) },
-            idOf = { it.id },
-            toDto = { it.toAndroidAppNetworkUsageEvent() },
-            payloadType = EncryptedPayloadType.APP_NETWORK_USAGE,
-            deleteByIds = { delegate.db.appNetworkUsageSampleDao().deleteByIds(it) },
-            plainUpload = { studyId, server, events, version ->
-                RestrictedUploadApiFactory.get(
-                    server.url,
-                    server.mobileSigningSecretOverride,
-                ).uploadAndroidAppNetworkUsageData(
-                    studyId,
-                    server.participantId,
-                    server.sourceDeviceId,
-                    server.apiKey,
-                    events,
-                    version,
-                )
-            },
-            label = "app_network_usage",
-        )
-        if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
-            failures += delegate.uploadStream(
+    ): Map<UploadQueueTable, () -> Int> {
+        val streams = linkedMapOf<UploadQueueTable, () -> Int>()
+        streams[UploadQueueTable.APP_NETWORK_USAGE] = {
+            delegate.uploadStream(
                 servers,
-                getOldest = { delegate.db.sleepSampleDao().getOldest(it) },
-                getByIds = { delegate.db.sleepSampleDao().getByIds(it) },
-                idOf = { it.id },
-                toDto = { it.toAndroidSleepEvent() },
-                payloadType = EncryptedPayloadType.SLEEP,
-                deleteByIds = { delegate.db.sleepSampleDao().deleteByIds(it) },
-                plainUpload = { studyId, server, events, version ->
-                    RestrictedUploadApiFactory.get(
-                        server.url,
-                        server.mobileSigningSecretOverride,
-                    ).uploadAndroidSleepData(
-                        studyId,
-                        server.participantId,
-                        server.sourceDeviceId,
-                        server.apiKey,
-                        events,
-                        version,
-                    )
-                },
-                label = "sleep",
-            )
-            failures += delegate.uploadStream(
-                servers,
-                getOldest = { delegate.db.activityRecognitionSampleDao().getOldest(it) },
-                getByIds = { delegate.db.activityRecognitionSampleDao().getByIds(it) },
-                idOf = { it.id },
-                toDto = { it.toAndroidActivityRecognitionEvent() },
-                payloadType = EncryptedPayloadType.ACTIVITY_RECOGNITION,
-                deleteByIds = { delegate.db.activityRecognitionSampleDao().deleteByIds(it) },
-                plainUpload = { studyId, server, events, version ->
-                    RestrictedUploadApiFactory.get(
-                        server.url,
-                        server.mobileSigningSecretOverride,
-                    ).uploadAndroidActivityRecognitionData(
-                        studyId,
-                        server.participantId,
-                        server.sourceDeviceId,
-                        server.apiKey,
-                        events,
-                        version,
-                    )
-                },
-                label = "activity_recognition",
+                source = DedicatedUploadSource(
+                    elementType = AndroidAppNetworkUsageEvent::class.java,
+                    getOldest = { delegate.db.appNetworkUsageSampleDao().getOldest(it) },
+                    idOf = { it.id },
+                    toDto = { it.toAndroidAppNetworkUsageEvent() },
+                    table = UploadQueueTable.APP_NETWORK_USAGE,
+                    deleteByIds = { delegate.db.appNetworkUsageSampleDao().deleteByIds(it) },
+                    plainUpload = { studyId, server, headers, body ->
+                        RestrictedUploadApiFactory.get(
+                            server.url,
+                        ).uploadAndroidAppNetworkUsageData(studyId, server.participantId, headers, body)
+                    },
+                ),
             )
         }
-        if (BuildConfig.HAS_HEALTH_CONNECT) {
-            failures += delegate.uploadStream(
-                servers,
-                getOldest = { delegate.db.healthMetricSampleDao().getOldest(it) },
-                getByIds = { delegate.db.healthMetricSampleDao().getByIds(it) },
-                idOf = { it.id },
-                toDto = { it.toAndroidHealthMetricEvent() },
-                payloadType = EncryptedPayloadType.HEALTH_CONNECT,
-                deleteByIds = { delegate.db.healthMetricSampleDao().deleteByIds(it) },
-                plainUpload = { studyId, server, events, version ->
-                    RestrictedUploadApiFactory.get(
-                        server.url,
-                        server.mobileSigningSecretOverride,
-                    ).uploadAndroidHealthMetricData(
-                        studyId,
-                        server.participantId,
-                        server.sourceDeviceId,
-                        server.apiKey,
-                        events,
-                        version,
-                    )
-                },
-                label = "health_connect",
-            )
-        }
-        return failures
+        streams.putAll(ActivityHealthCollectors.uploadStreams(delegate, servers))
+        return streams
     }
-
-    @Suppress("UNUSED_PARAMETER")
-    fun purgeAdditionalSamples(db: ChronicleDb, cutoff: String): Int = 0
 
     fun pendingUploadCounts(db: ChronicleDb): RestrictedPendingUploadCounts =
         RestrictedPendingUploadCounts(
@@ -181,10 +149,6 @@ internal object DistributionCollectionContributions {
             notificationActivity = db.notificationActivitySampleDao().count(),
             sleep = db.sleepSampleDao().count(),
             activityRecognition = db.activityRecognitionSampleDao().count(),
-            healthMetrics = if (BuildConfig.HAS_HEALTH_CONNECT) {
-                db.healthMetricSampleDao().count()
-            } else {
-                0
-            },
+            healthMetrics = db.healthMetricSampleDao().count(),
         )
 }

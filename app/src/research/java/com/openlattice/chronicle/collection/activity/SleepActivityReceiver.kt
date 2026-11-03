@@ -1,0 +1,215 @@
+package com.openlattice.chronicle.collection.activity
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.os.SystemClock
+import android.util.Log
+import com.google.android.gms.location.ActivityTransitionResult
+import com.google.android.gms.location.SleepClassifyEvent
+import com.google.android.gms.location.SleepSegmentEvent
+import com.openlattice.chronicle.collection.ActivityTransitionType
+import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.SleepEventType
+import com.openlattice.chronicle.collection.sink.ActivityRecognitionSampleSink
+import com.openlattice.chronicle.collection.sink.SleepSampleSink
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.CollectionGate
+import com.openlattice.chronicle.storage.ActivityRecognitionSampleEntry
+import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.SleepSampleEntry
+import com.openlattice.chronicle.storage.activityRecognitionSampleDao
+import com.openlattice.chronicle.storage.sleepSampleDao
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
+import com.openlattice.chronicle.services.upload.recordAbandonedGateBatch
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.util.TimeZone
+import java.util.UUID
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.recordForExpectedOwner
+import com.openlattice.chronicle.storage.UploadServerEntity
+
+/**
+ * Receives Play Services Sleep API and Activity Transition deliveries and persists them into the
+ * `sleep_samples` / `activity_recognition_samples` buffers via the sanctioned sinks. Registered by
+ * [SleepActivityCaptureController]; one shared PendingIntent feeds this receiver, which inspects
+ * the intent for each event kind.
+ *
+ * Content-free: an activity label/transition (confidence is the API's high-confidence transition,
+ * recorded as 100) and a sleep label/segment + coarse light/motion. Writes are gated again on
+ * per-module consent so a stale registration can never persist data the participant declined.
+ */
+public class SleepActivityReceiver : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        val appContext = context.applicationContext
+        val module = CollectionModuleId.fromIdOrNull(intent.getStringExtra(ACTIVITY_REGISTRATION_MODULE_EXTRA) ?: "") ?: return
+        if (module !in setOf(CollectionModuleId.SLEEP, CollectionModuleId.ACTIVITY_RECOGNITION)) return
+        val observedAt = System.currentTimeMillis()
+        val observedElapsed = SystemClock.elapsedRealtimeNanos()
+        val pending = goAsync()
+        Thread {
+            var owner: UploadServerEntity? = null
+            var observedCount = 0
+            try {
+                ResearchPersistenceGate.initialize(appContext)
+                val origin = ResearchPersistenceGate.guardForRegistration(appContext, module, intent.getStringExtra(
+                    ACTIVITY_REGISTRATION_SCOPE_EXTRA))
+                if (!origin.isCurrent()) return@Thread
+                owner = ResearchPersistenceGate.captureOwner(appContext)
+                val scope = ResearchPersistenceGate.observationScope(appContext, module)
+                val admits = { at: Long -> scope?.admits(at) == true }
+                observedCount = if (module == CollectionModuleId.SLEEP) {
+                    SleepSegmentEvent.extractEvents(intent).count { admits(it.startTimeMillis) } +
+                        SleepClassifyEvent.extractEvents(intent).count { admits(it.timestampMillis) }
+                } else {
+                    ActivityTransitionResult.extractResult(intent)?.transitionEvents?.count {
+                        admits(observedAt - (observedElapsed - it.elapsedRealTimeNanos) / 1_000_000L)
+                    } ?: 0
+                }
+                handle(appContext, intent, origin, owner, admits, observedAt, observedElapsed)
+            } catch (e: Exception) {
+                // The broadcast is not redelivered: whatever it carried is lost.
+                Log.e(TAG, "Sleep/activity receive failed: ${e.javaClass.simpleName}")
+                recordForExpectedOwner(
+                    appContext, owner,
+                    if (module == CollectionModuleId.SLEEP) LocalUploadModuleFamily.SLEEP else LocalUploadModuleFamily.ACTIVITY_RECOGNITION,
+                    LocalOperationalIssue.LOCAL_WRITE_FAILED, observedCount,
+                )
+            } finally {
+                pending.finish()
+            }
+        }.start()
+    }
+
+    private fun handle(appContext: Context, intent: Intent,
+                       origin: CollectionPersistenceGuard,
+                       owner: UploadServerEntity?, admits: (Long) -> Boolean,
+                       nowMillis: Long, elapsedNowNanos: Long) {
+        val delivery = Delivery(appContext, ChronicleDb.getInstance(appContext), intent, owner, origin, admits)
+
+        if (SleepSegmentEvent.hasEvents(intent) || SleepClassifyEvent.hasEvents(intent)) {
+            if (CollectionGate.collects(appContext, CollectionModuleId.SLEEP)) {
+                persistSleep(delivery)
+            }
+        }
+        if (ActivityTransitionResult.hasResult(intent)) {
+            if (CollectionGate.collects(appContext, CollectionModuleId.ACTIVITY_RECOGNITION)) {
+                persistActivity(delivery, nowMillis, elapsedNowNanos)
+            }
+        }
+    }
+
+    /** One broadcast's write context: who it belongs to, the gate it was admitted under, and its consent scope. */
+    private class Delivery(
+        val appContext: Context,
+        val db: ChronicleDb,
+        val intent: Intent,
+        val owner: UploadServerEntity?,
+        val origin: CollectionPersistenceGuard,
+        val admits: (Long) -> Boolean,
+    )
+
+    private fun persistSleep(delivery: Delivery): Unit = with(delivery) {
+        val rows = mutableListOf<SleepSampleEntry>()
+        if (SleepSegmentEvent.hasEvents(intent)) {
+            for (e in SleepSegmentEvent.extractEvents(intent)) {
+                rows += SleepSampleEntry(
+                    id = UUID.randomUUID().toString(),
+                    timestamp = isoUtc(e.startTimeMillis),
+                    timezone = TimeZone.getDefault().id,
+                    eventType = SleepEventType.SEGMENT.name,
+                    segmentStartMillis = e.startTimeMillis,
+                    segmentEndMillis = e.endTimeMillis,
+                    segmentStatus = sleepSegmentStatusFor(e.status).name,
+                    confidence = null,
+                    light = null,
+                    motion = null,
+                )
+            }
+        }
+        if (SleepClassifyEvent.hasEvents(intent)) {
+            for (e in SleepClassifyEvent.extractEvents(intent)) {
+                rows += SleepSampleEntry(
+                    id = UUID.randomUUID().toString(),
+                    timestamp = isoUtc(e.timestampMillis),
+                    timezone = TimeZone.getDefault().id,
+                    eventType = SleepEventType.CLASSIFY.name,
+                    segmentStartMillis = null,
+                    segmentEndMillis = null,
+                    segmentStatus = null,
+                    confidence = e.confidence,
+                    light = e.light,
+                    motion = e.motion,
+                )
+            }
+        }
+        if (rows.isNotEmpty()) {
+            val result = SleepSampleSink(
+                db.sleepSampleDao(),
+                persistenceGuard = origin,
+            ).write(rows.filter { admits(Instant.parse(it.timestamp).toEpochMilli()) })
+            recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.SLEEP, result, rows.size)
+            logWrite(writeOutcome("sleep sample(s)", rows.size, result))
+        }
+    }
+
+    private fun persistActivity(delivery: Delivery, nowMillis: Long, elapsedNowNanos: Long): Unit = with(delivery) {
+        val result = ActivityTransitionResult.extractResult(intent) ?: return
+        val rows = result.transitionEvents.map { ev ->
+            val wallMillis = nowMillis - (elapsedNowNanos - ev.elapsedRealTimeNanos) / 1_000_000L
+            ActivityRecognitionSampleEntry(
+                id = UUID.randomUUID().toString(),
+                timestamp = isoUtc(wallMillis),
+                timezone = TimeZone.getDefault().id,
+                activityType = detectedActivityTypeFor(ev.activityType).name,
+                // The Activity Transition API only delivers high-confidence transitions; it carries
+                // no per-event confidence, so a confirmed transition is recorded at 100.
+                confidence = 100,
+                transitionType = transitionTypeFor(ev.transitionType).name,
+            )
+        }
+        if (rows.isNotEmpty()) {
+            val result = ActivityRecognitionSampleSink(
+                db.activityRecognitionSampleDao(),
+                persistenceGuard = origin,
+            ).write(rows.filter { admits(Instant.parse(it.timestamp).toEpochMilli()) })
+            recordAbandonedGateBatch(appContext, owner, LocalUploadModuleFamily.ACTIVITY_RECOGNITION, result, rows.size)
+            logWrite(writeOutcome("activity transition(s)", rows.size, result))
+        }
+    }
+
+    private fun logWrite(outcome: Pair<Int, String>) {
+        Log.println(outcome.first, TAG, outcome.second)
+    }
+
+    private fun isoUtc(epochMillis: Long): String =
+        OffsetDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneOffset.UTC).toString()
+
+    internal companion object {
+        private const val TAG = "SleepActivityReceiver"
+
+        /** Action the capture controller's PendingIntent targets; matched by the manifest receiver. */
+        public const val ACTION_SLEEP_ACTIVITY: String = "com.openlattice.chronicle.SLEEP_ACTIVITY_UPDATE"
+
+        /**
+         * Log priority and text for one sink write. Only [ModuleResult.Ok] reports rows as persisted;
+         * a failed or retry result is an error because a broadcast is never redelivered.
+         */
+        internal fun writeOutcome(kind: String, attempted: Int, result: ModuleResult): Pair<Int, String> =
+            when (result) {
+                is ModuleResult.Ok -> Log.INFO to "Persisted $attempted $kind"
+                is ModuleResult.Skipped -> Log.INFO to "Skipped $attempted $kind: ${result.reason}"
+                is ModuleResult.Retry -> Log.ERROR to "Dropped $attempted $kind: ${result.reason}"
+                is ModuleResult.Failed -> Log.ERROR to "Failed to persist $attempted $kind: ${result.redactedMessage}"
+            }
+
+        // GMS ActivityTransition.ACTIVITY_TRANSITION_ENTER = 0 / _EXIT = 1 (stable API contract).
+        private fun transitionTypeFor(gmsTransition: Int): ActivityTransitionType =
+            if (gmsTransition == 0) ActivityTransitionType.ENTER else ActivityTransitionType.EXIT
+    }
+}

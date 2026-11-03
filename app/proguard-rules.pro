@@ -62,7 +62,6 @@
 # chronicle-models DTO packages used by Retrofit and local queue persistence.
 -keep interface com.openlattice.chronicle.android.ChronicleSample
 -keep class com.openlattice.chronicle.android.ChronicleData { *; }
--keep class com.openlattice.chronicle.android.LegacyChronicleData { *; }
 -keep class com.openlattice.chronicle.android.ChronicleUsageEvent** { *; }
 -keep class com.openlattice.chronicle.android.AndroidDeviceSensorAvailability { *; }
 -keep class com.openlattice.chronicle.android.AndroidSensorSetting** { *; }
@@ -72,7 +71,6 @@
 -keep class com.openlattice.chronicle.data.** { *; }
 -keep class com.openlattice.chronicle.base.** { *; }
 -keep class com.openlattice.chronicle.study.** { *; }
--keep class com.openlattice.chronicle.crypto.** { *; }
 -keep class com.openlattice.chronicle.notifications.StudyNotificationSettings { *; }
 -keep class com.openlattice.chronicle.participantaccess.MobileReminderConfiguration { *; }
 -keep class com.openlattice.chronicle.participantaccess.MobileReminderForm { *; }
@@ -84,8 +82,6 @@
 -keep class com.openlattice.chronicle.collection.AndroidConnectivityStateEvent { *; }
 -keep class com.openlattice.chronicle.collection.AndroidDeviceSettingsEvent { *; }
 -keep class com.openlattice.chronicle.collection.BatterySample { *; }
--keep class com.openlattice.chronicle.collection.BatteryPolicy { *; }
--keep class com.openlattice.chronicle.collection.NetworkPolicy { *; }
 -keep class com.openlattice.chronicle.collection.InteractionPolicy { *; }
 -keep class com.openlattice.chronicle.collection.Collection* { *; }
 
@@ -96,8 +92,8 @@
 -keep class com.openlattice.chronicle.collection.Android<1>Event { *; }
 -if class com.openlattice.chronicle.android.AndroidSensorSample
 -keep class com.openlattice.chronicle.android.AndroidSensorSample { *; }
--if class com.openlattice.chronicle.android.SensorUploadReceipt
--keep class com.openlattice.chronicle.android.SensorUploadReceipt { *; }
+-if class com.openlattice.chronicle.android.UploadReceipt
+-keep class com.openlattice.chronicle.android.UploadReceipt { *; }
 
 # Moshi's Kotlin adapter loads each property type by its source name from kotlin.Metadata, so an
 # enum field of a kept wire class must keep its class name (BatterySample.chargingState broke every
@@ -112,21 +108,13 @@
 
 # App-owned DTOs persisted or transported through reflective Moshi adapters.
 -keep class com.openlattice.chronicle.models.ExtractedUsageEvent { *; }
--keep class com.openlattice.chronicle.models.ExtractedActivities { *; }
--keep class com.openlattice.chronicle.models.ExtractUsageStat { *; }
 -keep class com.openlattice.chronicle.collection.state.PendingCollectionAckRecord { *; }
--keep class com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry { *; }
+# ResearchErasureFence keeps a module's pending erasure state as reflective JSON in preferences.
+-keep class com.openlattice.chronicle.collection.state.CollectionModuleState { *; }
 
 # Durable reflective JSON needs stable fields, constructors and the Kotlin metadata attributes above.
--if class com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer$Batch
--keep class com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer$Batch { *; }
--if class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Owner
--keep class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Owner { *; }
--if class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Event
--keep class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$Event { *; }
--if class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$State
--keep class com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal$State { *; }
 -keep class com.openlattice.chronicle.services.upload.LocalUploadIssueBucket { *; }
+-keep class com.openlattice.chronicle.storage.UploadDiagnosticEntity { *; }
 -keep class com.openlattice.chronicle.preferences.InteractionPolicySnapshot { *; }
 -if class com.openlattice.chronicle.storage.*SampleEntry
 -keep class com.openlattice.chronicle.storage.<1>SampleEntry { *; }

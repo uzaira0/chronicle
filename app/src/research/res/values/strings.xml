@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Health Connect permissions rationale (shown by Health Connect / Play) -->
+    <string name="platform_privacy_policy_title">Chronicle Privacy Policy</string>
+    <string name="platform_privacy_policy_url" translatable="false">https://www.bcm.edu/about-us/our-campus/compliance</string>
+    <string name="open_public_privacy_policy">Open the public policy</string>
+    <string name="interaction_accessibility_service_label">Chronicle Interaction Events</string>
+    <string name="interaction_accessibility_service_description">Lets this study record interaction events, the raw on-screen bounds and type of the interacted accessibility element, and derived screen regions. Element bounds are not your exact finger coordinates. Chronicle never reads the text of what you tap, type, or read, never captures screen contents, and does not intercept touch input. Collection only happens while you are enrolled and have agreed to share Interaction Events; you can turn it off here at any time.</string>
+    <string name="accessibility_disclosure_title">Allow interaction event access?</string>
+    <string name="accessibility_disclosure_body">Chronicle is not an accessibility tool. If you continue and enable its service in Android Accessibility settings, Chronicle can record tap, scroll, focus, and element-type events, including the raw on-screen bounds of the interacted accessibility element, derived screen regions, and the foreground app package. These research records are encrypted on this device and uploaded to the enrolled study server shown during enrollment for the authorized research team. The bounds are not your exact finger coordinates. Chronicle does not intercept touch input or collect typed text, visible text, content descriptions, or screenshots, and does not sell or use this data for advertising. You can cancel now or turn the service off later. Android will show the Accessibility settings screen next.</string>
+</resources>

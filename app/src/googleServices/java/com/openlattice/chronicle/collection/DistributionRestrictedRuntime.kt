@@ -1,217 +1,82 @@
 package com.openlattice.chronicle.collection
 
-import android.app.NotificationManager
-import android.content.ComponentName
+import androidx.work.ExistingWorkPolicy
+import androidx.annotation.CheckResult
 import android.content.Context
-import android.os.Build
 import androidx.activity.result.contract.ActivityResultContract
-import androidx.appcompat.app.AlertDialog
-import androidx.core.app.NotificationManagerCompat
 import androidx.fragment.app.Fragment
-import com.openlattice.chronicle.R
-import com.openlattice.chronicle.android.AndroidSensorType
-import com.openlattice.chronicle.collection.activity.ActivityRecognitionIntegration
 import com.openlattice.chronicle.collection.directboot.DirectBootDrainWorker
-import com.openlattice.chronicle.collection.directboot.DIRECT_BOOT_BUFFER_LOCK
-import com.openlattice.chronicle.collection.directboot.DirectBootDiagnosticsJournal
-import com.openlattice.chronicle.collection.directboot.DirectBootSampleBuffer
-import com.openlattice.chronicle.collection.directboot.DirectBootProcessInit
-import com.openlattice.chronicle.collection.directboot.DirectBootStorageAdmission
-import com.openlattice.chronicle.collection.device.HealthConnectPermissions
-import com.openlattice.chronicle.collection.interaction.InteractionAccessibilityOnboarding
-import com.openlattice.chronicle.collection.sensors.SensorUploadMigration
-import com.openlattice.chronicle.services.sensors.HardwareSensorService
-import com.openlattice.chronicle.services.sensors.SensorAvailabilityReporter
-import com.openlattice.chronicle.services.sensors.SensorUploadWorkerDelegate
-import com.openlattice.chronicle.services.notifications.NotificationListener
-import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
+import com.openlattice.chronicle.collection.directboot.clearCorruptDirectBootSensorBuffers
 import com.openlattice.chronicle.preferences.clearDirectBootSensorSnapshot
+import com.openlattice.chronicle.services.sensors.HardwareSensorService
+import com.openlattice.chronicle.services.sensors.SensorUploadWorkerDelegate
+import com.openlattice.chronicle.services.sensors.SENSOR_SETTINGS_REFRESH_WORK_NAME
+import com.openlattice.chronicle.services.sensors.SENSOR_SETTINGS_REFRESH_PERIODIC_WORK_NAME
 import com.openlattice.chronicle.services.sensors.enqueueSensorSettingsRefresh as enqueueRestrictedSensorSettingsRefresh
 import com.openlattice.chronicle.services.sensors.scheduleSensorSettingsRefreshWork as scheduleRestrictedSensorSettingsRefresh
-import com.openlattice.chronicle.storage.ActivityRecognitionSampleEntry
-import com.openlattice.chronicle.storage.AudioActivitySampleEntry
-import com.openlattice.chronicle.storage.AudioContentSampleEntry
 import com.openlattice.chronicle.storage.ChronicleDb
-import com.openlattice.chronicle.storage.HealthMetricSampleEntry
-import com.openlattice.chronicle.storage.InteractionSampleEntry
-import com.openlattice.chronicle.storage.NotificationActivitySampleEntry
-import com.openlattice.chronicle.storage.SleepSampleEntry
-import com.openlattice.chronicle.storage.activityRecognitionSampleDao
-import com.openlattice.chronicle.storage.audioActivitySampleDao
-import com.openlattice.chronicle.storage.audioContentSampleDao
 import com.openlattice.chronicle.storage.checkLocalStoreWrite
-import com.openlattice.chronicle.storage.healthMetricSampleDao
-import com.openlattice.chronicle.storage.interactionSampleDao
-import com.openlattice.chronicle.storage.notificationActivitySampleDao
-import com.openlattice.chronicle.storage.sleepSampleDao
 import com.openlattice.chronicle.utils.Utils
-import java.util.UUID
-import com.openlattice.chronicle.storage.checkLocalStoreWrite
 
 /** Operational restricted collectors linked only into controlled research/open builds. */
 internal object DistributionRestrictedRuntime {
-    fun startHardwareSensors(context: Context) = HardwareSensorService.startService(context)
+    val sensorSettingsWorkNames = setOf(SENSOR_SETTINGS_REFRESH_WORK_NAME, SENSOR_SETTINGS_REFRESH_PERIODIC_WORK_NAME)
+    @CheckResult
     fun tryStartHardwareSensors(context: Context): Boolean = HardwareSensorService.tryStartService(context)
     fun stopHardwareSensors(context: Context) = HardwareSensorService.stopService(context)
     fun hardwareSensorsRunning(context: Context): Boolean =
         Utils.isServiceRunning(context, HardwareSensorService::class.java)
 
-    fun enqueueSensorSettingsRefresh(context: Context) = enqueueRestrictedSensorSettingsRefresh(context)
+    fun enqueueSensorSettingsRefresh(context: Context, policy: ExistingWorkPolicy) = enqueueRestrictedSensorSettingsRefresh(context, policy)
     fun scheduleSensorSettingsRefresh(context: Context) = scheduleRestrictedSensorSettingsRefresh(context)
-    fun reinitializeDirectBootProcess(context: Context) =
-        DirectBootProcessInit.reinitializeAfterUnlock(context)
 
     fun drainDirectBootSamples(context: Context) = DirectBootDrainWorker.enqueue(context)
 
-    private fun erasurePrefs(context: Context) =
-        (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) context.createDeviceProtectedStorageContext() else context)
-            .getSharedPreferences("direct_boot_pending_sensor_erasures", Context.MODE_PRIVATE)
-
-    fun pendingDirectBootSensorErasures(context: Context): Set<String> =
-        synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-            erasurePrefs(context).getStringSet("sensor_types", emptySet()).orEmpty().toSet()
-        }
-
-    fun directBootCollectableSensors(context: Context): Set<AndroidSensorType> {
-        val pending = pendingDirectBootSensorErasures(context)
-        return DirectBootSensorSnapshot(context).collectableSensors().filterNot { it.name in pending }.toSet()
-    }
-
-    fun markDirectBootSensorErasures(context: Context, sensorTypes: Set<String>) {
-        if (sensorTypes.isEmpty()) return
-        synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-            checkLocalStoreWrite(erasurePrefs(context).edit().putStringSet("sensor_types",
-                pendingDirectBootSensorErasures(context) + sensorTypes).commit()) {
-                "Unable to persist direct-boot sensor erasure intent"
-            }
-            // Retire the boot permission before consent is saved, even if other sensors stay active.
-            checkLocalStoreWrite(clearDirectBootSensorSnapshot(context)) {
-                "Unable to retire direct-boot sensor snapshot"
-            }
+    /**
+     * A discarded sensor retires the locked-boot snapshot; the next normal start rewrites it. Its
+     * buffered pre-unlock samples stay with the other sensors' until the drain, which drops them by
+     * the module's erasure floor.
+     */
+    fun retireDirectBootSensors(context: Context, sensorTypes: Set<String>) {
+        if (sensorTypes.isNotEmpty()) {
+            checkLocalStoreWrite(clearDirectBootSensorSnapshot(context)) { "Unable to retire direct-boot sensor snapshot" }
+            checkLocalStoreWrite(clearCorruptDirectBootSensorBuffers(context)) { "Unable to erase unreadable direct-boot archives" }
         }
     }
 
-    fun eraseDirectBootStorageAdmission(context: Context) = DirectBootStorageAdmission.clear(context)
+    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) =
+        ActivityHealthCollectors.eraseActivityRegistration(context, module)
 
-    fun eraseDirectBootSensorSamples(
-        context: Context,
-        sensorType: String,
-        buffer: DirectBootSampleBuffer = DirectBootSampleBuffer(context),
-        journal: DirectBootDiagnosticsJournal = DirectBootDiagnosticsJournal(context),
-        enqueueDrain: (Context) -> Unit = DirectBootDrainWorker::enqueue,
-    ) {
-        markDirectBootSensorErasures(context, setOf(sensorType))
-        eraseDirectBootStorageAdmission(context)
-        val owner = DirectBootDiagnosticsJournal.configuredOwner(context)
-        journal.quarantineCorruptJournal()
-        journal.recordQuarantinedIncidents(context)
-        val erased = buffer.eraseSensorType(
-            sensorType, owner?.let { DirectBootSampleBuffer.ownerKey(it) },
-            // One journal event per file rewrite (a per-sample event rewrites the journal per sample). The
-            // id comes from the erased ids, so a rewrite retried after a crash is not counted twice.
-            beforeErase = { ids ->
-                if (ids.isNotEmpty()) journal.record("MODULE_POLICY_ERASED", ids.size, "module-policy-erased:" +
-                    java.security.MessageDigest.getInstance("SHA-256")
-                        .digest(ids.sorted().joinToString(",").toByteArray()).joinToString("") { "%02x".format(it) })
-            },
-        )
-        synchronized(DIRECT_BOOT_BUFFER_LOCK) {
-            checkLocalStoreWrite(erasurePrefs(context).edit().putStringSet("sensor_types",
-                pendingDirectBootSensorErasures(context) - sensorType).commit()) {
-                "Unable to complete direct-boot sensor erasure intent"
-            }
-        }
-        if (erased > 0) enqueueDrain(context)
-    }
+    fun eraseHealthSource(context: Context) = ActivityHealthCollectors.eraseHealthSource(context)
 
-    fun eraseActivityRegistration(context: Context, module: CollectionModuleId) {
-        com.openlattice.chronicle.collection.activity.SleepActivityCaptureController.eraseRegistration(context, module) }
-
-    fun eraseHealthSource(context: Context) { com.openlattice.chronicle.collection.device.AndroidHealthMetricSource.clearCheckpoint(context) }
-
-    fun uploadSensors(context: Context, db: ChronicleDb): Int {
-        val worker = SensorUploadWorkerDelegate(context, db)
-        return if (SensorUploadMigration.USE_MODULE_MANAGER_SENSOR_UPLOAD_PATH) {
-            worker.asModule().upload().serverFailureCount
-        } else {
-            worker.execute()
-        }
-    }
-
-    /** Restricted Room implementations stay outside the Play/Amazon source graph. */
-    fun restoreRejectedSample(db: ChronicleDb, sample: Any): Boolean {
-        when (sample) {
-            is InteractionSampleEntry -> db.interactionSampleDao().insertAll(listOf(sample))
-            is AudioActivitySampleEntry -> db.audioActivitySampleDao().insertAll(listOf(sample))
-            is AudioContentSampleEntry -> db.audioContentSampleDao().insertAll(listOf(sample))
-            is NotificationActivitySampleEntry -> db.notificationActivitySampleDao().insertAll(listOf(sample))
-            is SleepSampleEntry -> db.sleepSampleDao().insertAll(listOf(sample))
-            is ActivityRecognitionSampleEntry -> db.activityRecognitionSampleDao().insertAll(listOf(sample))
-            is HealthMetricSampleEntry -> db.healthMetricSampleDao().insertAll(listOf(sample))
-            else -> return false
-        }
-        return true
-    }
-
-    fun reportSensorAvailability(
-        context: Context,
-        studyId: UUID,
-        participantId: String,
-        deviceId: String,
-        apiKey: String?,
-        requestedSensors: Set<AndroidSensorType>,
-        serverUrl: String,
-        mobileSigningSecretOverride: String?,
-    ): Boolean = SensorAvailabilityReporter.checkAndReport(
-        context,
-        studyId,
-        participantId,
-        deviceId,
-        apiKey,
-        requestedSensors,
-        serverUrl,
-        mobileSigningSecretOverride,
-    )
+    fun uploadSensors(context: Context, db: ChronicleDb, stopped: () -> Boolean): Int =
+        SensorUploadWorkerDelegate(context, db, stopped).execute()
 
     fun activityRecognitionAvailable(context: Context): Boolean =
-        ActivityRecognitionIntegration.isAvailable(context)
+        ActivityHealthCollectors.activityRecognitionAvailable(context)
 
     fun unregisterActivityRecognition(context: Context) =
-        ActivityRecognitionIntegration.unregisterAll(context)
+        ActivityHealthCollectors.unregisterActivityRecognition(context)
 
     fun interactionAccessibilityEnabled(context: Context): Boolean =
-        InteractionAccessibilityOnboarding.isServiceEnabled(context)
+        DistributionSpecialAccess.interactionAccessibilityEnabled(context)
 
     fun notificationListenerAccessGranted(context: Context): Boolean =
-        // Component-specific grants start at API 27: https://developer.android.com/reference/android/app/NotificationManager#isNotificationListenerAccessGranted(android.content.ComponentName)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            context.getSystemService(NotificationManager::class.java)?.isNotificationListenerAccessGranted(
-                ComponentName(context, NotificationListener::class.java)) == true
-        } else {
-            NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
-        }
+        DistributionSpecialAccess.notificationListenerAccessGranted(context)
 
     fun openInteractionAccessibilitySettings(context: Context) =
-        InteractionAccessibilityOnboarding.openAccessibilitySettings(context)
+        DistributionSpecialAccess.openInteractionAccessibilitySettings(context)
 
-    fun showInteractionAccessibilityDisclosure(fragment: Fragment) {
-        AlertDialog.Builder(fragment.requireContext())
-            .setTitle(R.string.accessibility_disclosure_title)
-            .setMessage(R.string.accessibility_disclosure_body)
-            .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(R.string.continue_action) { _, _ ->
-                openInteractionAccessibilitySettings(fragment.requireContext())
-            }
-            .show()
-    }
+    fun showInteractionAccessibilityDisclosure(fragment: Fragment) =
+        DistributionSpecialAccess.showInteractionAccessibilityDisclosure(fragment)
 
-    fun healthConnectAvailable(context: Context): Boolean = HealthConnectPermissions.isAvailable(context)
-    fun healthConnectGranted(context: Context): Boolean = HealthConnectPermissions.allGranted(context)
+    fun healthConnectAvailable(context: Context): Boolean = ActivityHealthCollectors.healthConnectAvailable(context)
+    fun healthConnectGranted(context: Context): Boolean = ActivityHealthCollectors.healthConnectGranted(context)
     fun healthPermissionsToRequest(
         context: Context,
         configured: Set<HealthConnectRecordType>,
-    ): Set<String> = HealthConnectPermissions.permissionsToRequest(context, configured)
+    ): Set<String> = ActivityHealthCollectors.healthPermissionsToRequest(context, configured)
 
     fun healthPermissionContract(): ActivityResultContract<Set<String>, Set<String>> =
-        HealthConnectPermissions.requestContract()
+        ActivityHealthCollectors.healthPermissionContract()
 }

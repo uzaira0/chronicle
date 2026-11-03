@@ -8,7 +8,6 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -27,6 +26,12 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
+        </intent>
+        <!-- Usage rows name apps by label; Android 11+ shows another app only to a declared query, and every app a
+             participant opens has a launcher entry (https://developer.android.com/training/package-visibility/declaring). -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 
@@ -121,6 +126,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
             </intent-filter>
         </receiver>
         <!-- Direct-boot bridge: starts sensor collection between reboot and first unlock,
@@ -137,17 +143,6 @@
             </intent-filter>
         </receiver>
         <receiver
-            android:name=".receivers.lifecycle.DeviceLifecycleReceiver"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
-                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
-                <action android:name="android.intent.action.BATTERY_LOW" />
-                <action android:name="android.intent.action.BATTERY_OKAY" />
-            </intent-filter>
-        </receiver>
-        <receiver
             android:name=".receivers.lifecycle.UsageCollectionAlarmReceiver"
             android:process=":remote" />
         <receiver
@@ -156,18 +151,6 @@
         <receiver android:name=".services.notifications.ExactAlarmPermissionReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
-            </intent-filter>
-        </receiver>
-        <receiver android:name=".receivers.lifecycle.PowerSaveModeReceiver" android:exported="false">
-            <intent-filter>
-                <action android:name="android.os.action.POWER_SAVE_MODE_CHANGED" />
-            </intent-filter>
-        </receiver>
-        <receiver android:name=".receivers.lifecycle.UnlockDeviceReceiver"
-            android:exported="false"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.USER_PRESENT" />
             </intent-filter>
         </receiver>
         <service android:name=".services.notifications.DeviceUnlockMonitoringService"
@@ -184,43 +167,21 @@ target user or other is using the device."/>
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Researchers collect onboard hardware sensor samples during an enrolled study."/>
         </service>
-        <service
-            android:name=".services.notifications.NotificationListener"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="false"
-            tools:ignore="MissingClass">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
-        <!-- WorkManager uses on-demand initialization (ChronicleApplication implements
-             Configuration.Provider) so it works in direct-boot-started processes, where
-             this provider is skipped and never instantiated later. Only the WorkManager
-             entry is removed; the other androidx.startup initializers keep auto-running
-             in normal processes and are re-initialized manually after a locked boot
-             (DirectBootProcessInit). -->
+        <!-- Lifecycle uses the native eager startup provider even in a locked process.
+             WorkManager remains on-demand so locked boot never opens its credential storage. -->
         <provider
             android:name="androidx.startup.InitializationProvider"
+            android:directBootAware="true"
             android:authorities="${applicationId}.androidx-startup"
             tools:node="merge">
             <meta-data
                 android:name="androidx.work.WorkManagerInitializer"
                 tools:node="remove" />
-        </provider>
-        <service
-            android:name=".collection.interaction.InteractionCollectionService"
-            android:label="@string/interaction_accessibility_service_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true"
-            tools:ignore="MissingClass">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
+            <!-- Profile installation reads credential storage; defer until the first resumed UI. -->
             <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/interaction_accessibility_service_config" />
-        </service>
+                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+                tools:node="remove" />
+        </provider>
     </application>
 
 </manifest>

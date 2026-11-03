@@ -2,6 +2,7 @@ package com.openlattice.chronicle.collection.capability
 
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.collection.CollectionModuleId
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,50 +15,66 @@ import org.junit.Test
  */
 class DistributionModulePolicyContractTest {
 
-    private val fullDistributions = listOf(DistributionChannel.OPEN, DistributionChannel.RESEARCH)
+    @Test
+    fun openBuildOmitsInteractionNotificationAndAudioCollectors() {
+        if (DistributionChannel.current() != DistributionChannel.OPEN) return
+        listOf(
+            CollectionModuleId.INTERACTION_EVENTS,
+            CollectionModuleId.NOTIFICATION_ACTIVITY,
+            CollectionModuleId.AUDIO_ACTIVITY,
+            CollectionModuleId.AUDIO_CONTENT,
+        ).forEach { moduleId ->
+            assertFalse(DistributionModulePolicy.supports(DistributionChannel.OPEN, moduleId))
+            assertTrue(DistributionModulePolicy.supports(DistributionChannel.RESEARCH, moduleId))
+        }
+        assertTrue(DistributionModulePolicy.supports(DistributionChannel.OPEN, CollectionModuleId.SENSOR_ACCELEROMETER))
+    }
 
     @Test
-    fun fullDistributionsSupportRestrictedModulesOnlyWhenTheCollectorsAreCompiledIn() {
-        fullDistributions.forEach { distribution ->
-            DistributionModulePolicy.restrictedResearchModules.forEach { moduleId ->
-                assertTrue(
-                    "${moduleId.id} must be supported on $distribution when compiled in",
-                    DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = true),
-                )
-                assertFalse(
-                    "${moduleId.id} must be rejected on $distribution when compiled out",
-                    DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = false),
-                )
-            }
+    fun researchSupportsRestrictedModulesOnlyWhenTheCollectorsAreCompiledIn() {
+        val distribution = DistributionChannel.RESEARCH
+        DistributionModulePolicy.restrictedResearchModules.forEach { moduleId ->
+            assertTrue(
+                "${moduleId.id} must be supported on $distribution when compiled in",
+                DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = true),
+            )
+            assertFalse(
+                "${moduleId.id} must be rejected on $distribution when compiled out",
+                DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = false),
+            )
         }
     }
 
     @Test
-    fun unrestrictedModulesAreSupportedOnFullDistributionsRegardlessOfTheFlag() {
+    fun unrestrictedModulesAreSupportedOnResearchRegardlessOfTheFlag() {
         val unrestricted = CollectionModuleId.entries.filter {
             it.active && it !in DistributionModulePolicy.restrictedResearchModules
         }
-        fullDistributions.forEach { distribution ->
-            unrestricted.forEach { moduleId ->
-                assertTrue(DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = false))
-                assertTrue(DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = true))
-            }
+        val distribution = DistributionChannel.RESEARCH
+        unrestricted.forEach { moduleId ->
+            assertTrue(DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = false))
+            assertTrue(DistributionModulePolicy.supports(distribution, moduleId, restrictedCollectorsCompiledIn = true))
         }
     }
 
     @Test
     fun thisArtifactCompilesInWhatItsChannelPromises() {
         val channel = DistributionChannel.current()
-        if (channel !in fullDistributions) return
+        if (channel.minimalPublic) return
         assertTrue(
-            "$channel is a full distribution: ALLOW_RESTRICTED_RESEARCH_PERMISSIONS must be true in app/build.gradle",
+            "$channel needs ALLOW_RESTRICTED_RESEARCH_PERMISSIONS to run its approved restricted collectors",
             BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS,
         )
         DistributionModulePolicy.restrictedResearchModules.forEach { moduleId ->
-            assertTrue(
-                "${moduleId.id} must be supported by the $channel artifact",
+            assertEquals(
+                "${moduleId.id} must follow the $channel artifact registry",
+                channel == DistributionChannel.RESEARCH ||
+                    moduleId.id in BuildConfig.DISTRIBUTION_APPROVED_MODULE_IDS.split(','),
                 DistributionModulePolicy.supports(channel, moduleId),
             )
+        }
+        if (channel == DistributionChannel.RESEARCH) {
+            assertEquals("Research must have no registry allowlist", "", BuildConfig.DISTRIBUTION_APPROVED_MODULE_IDS)
         }
     }
 }

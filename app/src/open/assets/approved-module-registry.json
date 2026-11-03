@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "distribution": "OPEN",
+  "destinationPolicy": "module_declared_destinations_only",
+  "modules": [
+    {
+      "id": "usage_events",
+      "fields": ["@class", "studyId", "participantId", "appPackageName", "interactionType", "eventType", "timestamp", "timezone", "user", "applicationLabel", "activityClass"],
+      "permissions": ["android.permission.PACKAGE_USAGE_STATS"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "usage", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "erase_only_module_events_in_shared_usage_queue", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "in_app_activity_class",
+      "fields": ["activityClass"],
+      "permissions": ["android.permission.PACKAGE_USAGE_STATS"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "usage", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "redact_activity_class_in_shared_usage_queue", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "device_lifecycle",
+      "fields": ["@class", "studyId", "participantId", "appPackageName", "interactionType", "eventType", "timestamp", "timezone", "user", "applicationLabel", "activityClass"],
+      "permissions": ["android.permission.RECEIVE_BOOT_COMPLETED"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "usage", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "erase_only_module_events_in_shared_usage_queue", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "user_identification",
+      "fields": ["user"],
+      "permissions": ["android.permission.POST_NOTIFICATIONS", "android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE", "android.permission.RECEIVE_BOOT_COMPLETED"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "usage", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "clear_user_queue_and_redact_shared_usage_attribution", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "upload_telemetry",
+      "fields": ["id", "day", "moduleFamily", "issueCode", "count", "firstOccurredAt", "lastOccurredAt", "httpStatus", "errorType"],
+      "permissions": [],
+      "retention": {"local": "study_retention_or_explicit_erasure", "server": "study_retention_or_explicit_erasure"},
+      "destinations": ["local_app_diagnostics_view", "exact_enrolled_study_server"],
+      "upload": {"family": "upload_diagnostics", "authentication": "device_api_key_and_optional_request_signature", "retry": "immutable_batches_with_retained_history_and_upgrade_replay"},
+      "deletion": {"disable": "preserve_scoped_local_history_until_study_retention_or_explicit_erasure", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_availability",
+      "fields": ["participantId", "randomDeviceId", "availableSensors", "screenWidthPixels", "screenHeightPixels", "screenDensityDpi", "displayRotation", "interactionPointerCaptureCapability", "reportedAt"],
+      "permissions": [],
+      "retention": {"local": "no_durable_upload_queue", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor_availability", "authentication": "per_device_api_key", "retry": "report_retried_on_collection_settings_refresh"},
+      "deletion": {"discard": "no_dedicated_queue", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "questionnaire",
+      "fields": [],
+      "permissions": ["android.permission.POST_NOTIFICATIONS", "android.permission.SCHEDULE_EXACT_ALARM"],
+      "retention": {"local": "scheduled_reminders_until_cancelled_erased_or_uninstall", "server": "no_android_response_upload"},
+      "destinations": ["local_questionnaire_reminders"],
+      "upload": {"family": "none", "authentication": "none", "retry": "none"},
+      "deletion": {"discard": "erase_survey_artifacts_and_cancel_alarms", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "battery_telemetry",
+      "fields": ["id", "timestamp", "timezone", "levelPercent", "chargingState", "plugType", "temperatureDeciC", "voltageMillivolts", "health"],
+      "permissions": [],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "battery", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "clear_module_queue_and_auxiliary_state", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_accelerometer",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_gyroscope",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_magnetometer",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_gravity",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_linear_acceleration",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_rotation_vector",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_light",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_proximity",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_significant_motion",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_tilt_detector",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "sensor_screen_orientation",
+      "fields": ["id", "sensor", "timestamp", "timezone", "x", "y", "z", "w", "accuracy", "values"],
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "sensor", "authentication": "per_device_api_key", "retry": "immutable_batches_with_per_sample_receipts"},
+      "deletion": {"discard": "clear_sensor_type_queue_ram_buffer_direct_boot_buffer_and_dead_letters", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "connectivity_state",
+      "fields": ["id", "connected", "eventType", "metered", "timestamp", "timezone", "transport", "validated"],
+      "permissions": ["android.permission.ACCESS_NETWORK_STATE"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "connectivity_state", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "clear_module_queue_and_auxiliary_state", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "app_network_usage",
+      "fields": ["id", "timestamp", "timezone", "packageName", "networkType", "rxBytes", "txBytes", "bucketStartMillis", "bucketEndMillis"],
+      "permissions": ["android.permission.PACKAGE_USAGE_STATS"],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "app_network_usage", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "clear_module_queue_and_auxiliary_state", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    },
+    {
+      "id": "device_settings",
+      "fields": ["id", "accessibilityEnabled", "alarmVolume", "alarmVolumeMax", "autoRotate", "batterySaver", "darkMode", "dndActive", "fontScale", "locationServicesEnabled", "mediaVolume", "mediaVolumeMax", "notificationVolume", "notificationVolumeMax", "ringVolume", "ringVolumeMax", "ringerMode", "screenBrightness", "screenBrightnessAuto", "storageFreeBytes", "storageTotalBytes", "thermalStatus", "timestamp", "timezone"],
+      "permissions": [],
+      "retention": {"local": "until_delivery_explicit_erasure_or_uninstall", "server": "study_policy"},
+      "destinations": ["active_enrollment_https_origin"],
+      "upload": {"family": "device_settings", "authentication": "per_device_api_key", "retry": "durable_at_least_once"},
+      "deletion": {"discard": "clear_module_queue_and_auxiliary_state", "hold": "retain_pending_queue_and_stop_collection", "uninstall": "android_removes_app_local_data", "server": "not_requested_by_uninstall"}
+    }
+  ]
+}

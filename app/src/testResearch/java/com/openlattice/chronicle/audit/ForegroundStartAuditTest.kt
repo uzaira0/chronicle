@@ -3,6 +3,7 @@ package com.openlattice.chronicle.audit
 import android.app.Service
 import android.app.Notification
 import android.content.Context
+import android.hardware.SensorManager
 import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
@@ -11,7 +12,6 @@ import com.openlattice.chronicle.collection.state.onPersistenceWorker
 import com.openlattice.chronicle.services.sensors.HardwareSensorService
 import com.openlattice.chronicle.storage.ChronicleDb
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,7 +36,7 @@ class ForegroundStartAuditTest {
         controller.create();val service=controller.get()
         try {
             assertTrue(shadowOf(service).isStoppedBySelf)
-            assertNull(service.javaClass.getDeclaredField("controller").apply{isAccessible=true}.get(service))
+            assertTrue(shadowOf(context.getSystemService(SensorManager::class.java)).listeners.isEmpty())
             assertEquals(Service.START_NOT_STICKY,service.onStartCommand(null,0,1))
             val db=ChronicleDb.getInstance(context)
             repeat(100){

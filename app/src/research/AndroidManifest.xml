@@ -4,6 +4,7 @@
 
     <uses-sdk tools:overrideLibrary="androidx.health.connect.client" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -56,5 +57,28 @@
                 <action android:name="com.openlattice.chronicle.SLEEP_ACTIVITY_UPDATE" />
             </intent-filter>
         </receiver>
+        <service
+            android:name=".services.notifications.NotificationListener"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".collection.interaction.InteractionCollectionService"
+            android:label="@string/interaction_accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/interaction_accessibility_service_config" />
+        </service>
     </application>
 </manifest>
