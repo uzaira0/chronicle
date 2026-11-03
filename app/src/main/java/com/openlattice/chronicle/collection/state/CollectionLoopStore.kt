@@ -2,8 +2,8 @@ package com.openlattice.chronicle.collection.state
 
 import android.content.Context
 import android.util.Log
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.capability.DistributionModulePolicy
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.CollectionModuleStateDao
 import com.openlattice.chronicle.storage.CollectionModuleStateEntity
@@ -14,7 +14,7 @@ import com.openlattice.chronicle.storage.CollectionModuleStateEntity
  * pure [CollectionModuleState] the [CollectionStateMachine] consumes.
  *
  * The mapping functions are pure and unit-tested; the DAO wrapper is the thin Android
- * seam. Unknown wire ids (a downgraded app reading a future module/disposition) are
+ * seam. Unknown wire ids (a downgraded app reading a future module) are
  * dropped tolerantly, mirroring the settings read path.
  */
 class CollectionLoopStore(private val dao: CollectionModuleStateDao) {
@@ -43,9 +43,9 @@ class CollectionLoopStore(private val dao: CollectionModuleStateDao) {
      * participant accepts or declines it.
      */
     fun collects(moduleId: CollectionModuleId): Boolean {
+        if (!DistributionModulePolicy.supports(moduleId)) return false
         if (haltedByDeclinedRequired()) return false
-        val e = dao.get(moduleId.id) ?: return false
-        return e.serverEnabled && e.decision == ParticipantDecision.ACCEPTED.name
+        return dao.get(moduleId.id)?.toStateOrNull()?.collectsWhenEnrolled == true
     }
 
     /**
@@ -53,7 +53,7 @@ class CollectionLoopStore(private val dao: CollectionModuleStateDao) {
      * study-required module. Surfaced to the Data Sharing UI to show the "paused" banner +
      * an Accept affordance to resume.
      */
-    fun haltedByDeclinedRequired(): Boolean = dao.countRequiredDeclined() > 0
+    fun haltedByDeclinedRequired(): Boolean = CollectionModuleState.collectionHalted(loadAll().values)
 
     companion object {
         fun CollectionModuleStateEntity.toStateOrNull(): CollectionModuleState? {
@@ -65,8 +65,6 @@ class CollectionLoopStore(private val dao: CollectionModuleStateDao) {
                 decidedAtEpochMillis = decidedAtEpochMillis,
                 requiredApplied = requiredApplied,
                 appliedVersion = appliedVersion,
-                appliedPolicySnapshot = appliedPolicySnapshot,
-                lastDisposition = lastDisposition?.let { CollectionDataDisposition.fromIdOrNull(it) },
             )
         }
 
@@ -78,8 +76,6 @@ class CollectionLoopStore(private val dao: CollectionModuleStateDao) {
                 decidedAtEpochMillis = decidedAtEpochMillis,
                 requiredApplied = requiredApplied,
                 appliedVersion = appliedVersion,
-                appliedPolicySnapshot = appliedPolicySnapshot,
-                lastDisposition = lastDisposition?.id,
             )
 
         /** Tolerant decode of the persisted decision string (unknown ⇒ UNDECIDED). */

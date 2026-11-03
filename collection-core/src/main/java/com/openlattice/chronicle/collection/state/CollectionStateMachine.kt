@@ -1,8 +1,10 @@
 package com.openlattice.chronicle.collection.state
 
-import com.openlattice.chronicle.collection.CollectionDataDisposition
+import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
+import com.openlattice.chronicle.collection.moduleDecisionSurvives
+import com.openlattice.chronicle.collection.requiredDeclineStands
+
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.settings.ResolvedModuleSetting
 
 /**
@@ -49,22 +51,17 @@ public enum class ModuleTransitionType {
     NOW_OPTIONAL_INFORM,
 
     /**
-     * The study no longer collects this module. Stop collecting and — when the module was
-     * ACTIVE — apply [ModuleTransition.disposition] to its on-device queue. Informational.
+     * The study no longer collects this module. Stop collecting; what it already captured
+     * still uploads (C5: a study disable flushes). Informational.
      */
     FORCIBLY_DISABLED,
 }
 
-/**
- * One module's computed transition: the [type], the [newState] to persist, and — for a
- * mid-study disable of an active module — the [disposition] the device must apply to
- * that module's pending on-device queue.
- */
+/** One module's computed transition: the [type] and the [newState] to persist. */
 public data class ModuleTransition(
     val moduleId: CollectionModuleId,
     val type: ModuleTransitionType,
     val newState: CollectionModuleState,
-    val disposition: CollectionDataDisposition? = null,
 ) {
     /** The participant must make a **mandatory** accept-or-leave decision before collection. */
     public val requiresMandatoryConsent: Boolean
@@ -107,9 +104,6 @@ public data class DecisionResult(
  */
 public object CollectionStateMachine {
 
-    /** The no-data-loss default applied when a disabled module carries no explicit disposition. */
-    public val DEFAULT_DISPOSITION: CollectionDataDisposition = CollectionDataDisposition.FLUSH_THEN_STOP
-
     /**
      * The modules whose on-device collection is consent-gated — i.e. exactly the modules
      * whose collection seam consults `CollectionGate`. Only these enter the consent
@@ -126,36 +120,15 @@ public object CollectionStateMachine {
      * collection decision controls whether unlock prompts and participant labels may run; the
      * local "Identify user" switch can only narrow that authorization, never expand it.
      *
-     * Each hardware sensor is its own consent-gated module (per-sensor consent redesign,
-     * 2026-06-11): every `sensor_*` id is included individually, so a participant decides
-     * each sensor on its own — there is no grouped `hardware_sensors` entry.
+     * Each hardware sensor is its own consent-gated module: every `sensor_*` id is included individually, so a participant decides
+     * each sensor on its own.
      *
      * **Invariant:** this set MUST equal the set of `CollectionGate.collects(...)` call
      * sites in the module holders.
      */
     @JvmStatic
-    public val ACK_GATED_MODULES: Set<CollectionModuleId> = setOf(
-        CollectionModuleId.USAGE_EVENTS,
-        CollectionModuleId.DEVICE_LIFECYCLE,
-        CollectionModuleId.USER_IDENTIFICATION,
-        CollectionModuleId.BATTERY_TELEMETRY,
-        CollectionModuleId.INTERACTION_EVENTS,
-        CollectionModuleId.IN_APP_ACTIVITY_CLASS,
-        CollectionModuleId.AUDIO_ACTIVITY,
-        CollectionModuleId.AUDIO_CONTENT,
-        CollectionModuleId.NOTIFICATION_ACTIVITY,
-        // Sensing-expansion modules (2026-06-19): each has a CollectionGate.collects(...) call
-        // site (device holders for the pull modules; SleepActivityCaptureController +
-        // SleepActivityReceiver for the GMS push modules), so the invariant below requires them
-        // here — otherwise reconcile() filters them out and they are inert (no consent state, no
-        // NEEDS_DECISION notification, never collect even when the study enables them).
-        CollectionModuleId.SLEEP,
-        CollectionModuleId.ACTIVITY_RECOGNITION,
-        CollectionModuleId.HEALTH_CONNECT,
-        CollectionModuleId.CONNECTIVITY_STATE,
-        CollectionModuleId.APP_NETWORK_USAGE,
-        CollectionModuleId.DEVICE_SETTINGS,
-    ) + SensorCollectionModules.sensorModuleIds
+    public val ACK_GATED_MODULES: Set<CollectionModuleId> =
+        AndroidDataCollectionSetting.androidSupportedModuleIds.filterTo(LinkedHashSet()) { it.consentGated }
 
     /**
      * Computes the transition for every **consent-gated** module in [resolved] (see
@@ -174,14 +147,19 @@ public object CollectionStateMachine {
     ): List<ModuleTransition> = resolved
         .filterKeys { it in ACK_GATED_MODULES }
         .map { (moduleId, resolvedSetting) ->
-            val prev = previous[moduleId] ?: CollectionModuleState.initial(moduleId)
-            val newEnabled = resolvedSetting.enabled
-            val newRequired = resolvedSetting.required
-            val policySnapshot = resolvedSetting.setting.consentPolicySnapshot()
+            val prior = previous[moduleId] ?: CollectionModuleState.initial(moduleId)
+            val declineStands = prior.decision == ParticipantDecision.DECLINED &&
+                requiredDeclineStands(prior.serverEnabled, resolvedSetting.setting)
+            // C3: a decision survives every edit of an enabled module; only a disable then re-enable (the server's
+            // consent epoch past the version this phone last applied) asks again.
+            val prev = if (resolvedSetting.enabled && !declineStands &&
+                !moduleDecisionSurvives(resolvedSetting.setting, prior.appliedVersion, prior.serverEnabled)) {
+                prior.toInactive(settingVersion)
+            } else prior
             when {
-                !newEnabled -> disableTransition(moduleId, prev, resolvedSetting, settingVersion, policySnapshot)
-                newRequired -> requiredTransition(moduleId, prev, settingVersion, policySnapshot)
-                else -> optionalTransition(moduleId, prev, settingVersion, policySnapshot)
+                !resolvedSetting.enabled -> disableTransition(moduleId, prev, settingVersion)
+                resolvedSetting.required -> requiredTransition(moduleId, prev, settingVersion)
+                else -> optionalTransition(moduleId, prev, settingVersion)
             }
         }
 
@@ -189,56 +167,28 @@ public object CollectionStateMachine {
     private fun disableTransition(
         moduleId: CollectionModuleId,
         prev: CollectionModuleState,
-        resolvedSetting: ResolvedModuleSetting,
         version: Int,
-        policySnapshot: String,
-    ): ModuleTransition = when (prev.phase) {
-        CollectionModulePhase.INACTIVE ->
-            transition(moduleId, ModuleTransitionType.UNCHANGED_INACTIVE, prev.toInactive(version, policySnapshot))
-        CollectionModulePhase.ACTIVE -> {
-            val disposition = resolvedSetting.setting.disableDisposition ?: DEFAULT_DISPOSITION
-            ModuleTransition(
-                moduleId = moduleId,
-                type = ModuleTransitionType.FORCIBLY_DISABLED,
-                newState = prev.toInactive(version, policySnapshot).copy(lastDisposition = disposition),
-                disposition = disposition,
-            )
-        }
-        // Enabled-but-never-collecting (awaiting a decision, or declined) → settle to
-        // INACTIVE. Nothing collected, so no disposition; the coordinator suppresses the
-        // "turned off" notice for these (prev was not ACTIVE).
-        CollectionModulePhase.AWAITING_DECISION, CollectionModulePhase.DECLINED ->
-            transition(moduleId, ModuleTransitionType.FORCIBLY_DISABLED, prev.toInactive(version, policySnapshot))
-    }
+    ): ModuleTransition = transition(moduleId,
+        // The coordinator suppresses the "turned off" notice when prev was not ACTIVE.
+        if (prev.phase == CollectionModulePhase.INACTIVE) ModuleTransitionType.UNCHANGED_INACTIVE
+        else ModuleTransitionType.FORCIBLY_DISABLED,
+        prev.toInactive(version))
 
     /** Study intent = REQUIRED. */
     private fun requiredTransition(
         moduleId: CollectionModuleId,
         prev: CollectionModuleState,
-        version: Int,
-        policySnapshot: String,
+        version: Int
     ): ModuleTransition = when (prev.decision) {
-        ParticipantDecision.ACCEPTED -> {
-            val policyChanged = prev.appliedPolicySnapshot != policySnapshot
-            val type = if (policyChanged) {
-                ModuleTransitionType.NEWLY_REQUIRED_NEEDS_CONSENT
-            } else if (!prev.requiredApplied) {
-                ModuleTransitionType.NOW_REQUIRED_INFORM
-            } else {
-                ModuleTransitionType.STILL_ACTIVE
-            }
-            val state = if (policyChanged) {
-                prev.toAwaiting(version, required = true, policySnapshot)
-            } else {
-                prev.toAccepted(version, required = true, policySnapshot)
-            }
-            transition(moduleId, type, state)
-        }
+        ParticipantDecision.ACCEPTED -> transition(moduleId,
+            if (!prev.requiredApplied) ModuleTransitionType.NOW_REQUIRED_INFORM else ModuleTransitionType.STILL_ACTIVE,
+            prev.toAccepted(version, required = true))
         // Already explicitly declined a required module → keep it DECLINED (the global halt
         // persists). Must NOT reset to UNDECIDED, or the next settings poll would silently
-        // lift the halt. No re-prompt; the participant resumes by re-accepting in Data Sharing.
+        // lift the halt. Notify once when the requirement changes; resume through Data Sharing.
         ParticipantDecision.DECLINED ->
-            transition(moduleId, ModuleTransitionType.STILL_DECLINED, prev.toRequiredDeclined(version, policySnapshot))
+            transition(moduleId, if (prev.requiredApplied) ModuleTransitionType.STILL_DECLINED
+                else ModuleTransitionType.NEWLY_REQUIRED_NEEDS_CONSENT, prev.toRequiredDeclined(version))
         // Undecided → grace window: prompt for a decision, do NOT halt (already-accepted
         // modules keep collecting). The module itself does not collect until accepted.
         // First time required-but-undecided → NEWLY_REQUIRED_NEEDS_CONSENT (notify once); a module
@@ -251,7 +201,7 @@ public object CollectionStateMachine {
             } else {
                 ModuleTransitionType.NEWLY_REQUIRED_NEEDS_CONSENT
             }
-            transition(moduleId, type, prev.toAwaiting(version, required = true, policySnapshot))
+            transition(moduleId, type, prev.toAwaiting(version, required = true))
         }
     }
 
@@ -259,27 +209,13 @@ public object CollectionStateMachine {
     private fun optionalTransition(
         moduleId: CollectionModuleId,
         prev: CollectionModuleState,
-        version: Int,
-        policySnapshot: String,
+        version: Int
     ): ModuleTransition = when (prev.decision) {
-        ParticipantDecision.ACCEPTED -> {
-            val policyChanged = prev.appliedPolicySnapshot != policySnapshot
-            val type = if (policyChanged) {
-                ModuleTransitionType.NEEDS_DECISION
-            } else if (prev.requiredApplied) {
-                ModuleTransitionType.NOW_OPTIONAL_INFORM
-            } else {
-                ModuleTransitionType.STILL_ACTIVE
-            }
-            val state = if (policyChanged) {
-                prev.toAwaiting(version, required = false, policySnapshot)
-            } else {
-                prev.toAccepted(version, required = false, policySnapshot)
-            }
-            transition(moduleId, type, state)
-        }
+        ParticipantDecision.ACCEPTED -> transition(moduleId,
+            if (prev.requiredApplied) ModuleTransitionType.NOW_OPTIONAL_INFORM else ModuleTransitionType.STILL_ACTIVE,
+            prev.toAccepted(version, required = false))
         ParticipantDecision.DECLINED ->
-            transition(moduleId, ModuleTransitionType.STILL_DECLINED, prev.toDeclined(version, policySnapshot))
+            transition(moduleId, ModuleTransitionType.STILL_DECLINED, prev.toDeclined(version))
         // First prompt → NEEDS_DECISION (notify once); a module already awaiting an OPTIONAL
         // decision from a prior sync → STILL_AWAITING_DECISION so the coordinator does NOT re-post
         // the "a data collection option was added" notification on every settings poll. "Same
@@ -291,7 +227,7 @@ public object CollectionStateMachine {
             } else {
                 ModuleTransitionType.NEEDS_DECISION
             }
-            transition(moduleId, type, prev.toAwaiting(version, required = false, policySnapshot))
+            transition(moduleId, type, prev.toAwaiting(version, required = false))
         }
     }
 
@@ -342,21 +278,19 @@ public object CollectionStateMachine {
     // ----- pure state transforms -----
 
     /** Settle to INACTIVE: cleared decision, required reset (a disabled module is not required). */
-    private fun CollectionModuleState.toInactive(version: Int, policySnapshot: String): CollectionModuleState =
+    private fun CollectionModuleState.toInactive(version: Int): CollectionModuleState =
         copy(
             serverEnabled = false,
             decision = ParticipantDecision.UNDECIDED,
             decidedAtEpochMillis = null,
             requiredApplied = false,
             appliedVersion = version,
-            appliedPolicySnapshot = policySnapshot,
         )
 
     /** Server-enabled but undecided (a fresh decision is required). */
     private fun CollectionModuleState.toAwaiting(
         version: Int,
-        required: Boolean,
-        policySnapshot: String,
+        required: Boolean
     ): CollectionModuleState =
         copy(
             serverEnabled = true,
@@ -364,31 +298,27 @@ public object CollectionStateMachine {
             decidedAtEpochMillis = null,
             requiredApplied = required,
             appliedVersion = version,
-            appliedPolicySnapshot = policySnapshot,
         )
 
     /** Server-enabled and accepted; preserves the original decision timestamp. */
     private fun CollectionModuleState.toAccepted(
         version: Int,
-        required: Boolean,
-        policySnapshot: String,
+        required: Boolean
     ): CollectionModuleState =
         copy(
             serverEnabled = true,
             decision = ParticipantDecision.ACCEPTED,
             requiredApplied = required,
             appliedVersion = version,
-            appliedPolicySnapshot = policySnapshot,
         )
 
     /** Server-enabled and declined (optional only); preserves the decision timestamp. */
-    private fun CollectionModuleState.toDeclined(version: Int, policySnapshot: String): CollectionModuleState =
+    private fun CollectionModuleState.toDeclined(version: Int): CollectionModuleState =
         copy(
             serverEnabled = true,
             decision = ParticipantDecision.DECLINED,
             requiredApplied = false,
             appliedVersion = version,
-            appliedPolicySnapshot = policySnapshot,
         )
 
     /**
@@ -397,15 +327,13 @@ public object CollectionStateMachine {
      * does not silently lift the halt on the next settings poll.
      */
     private fun CollectionModuleState.toRequiredDeclined(
-        version: Int,
-        policySnapshot: String,
+        version: Int
     ): CollectionModuleState =
         copy(
             serverEnabled = true,
             decision = ParticipantDecision.DECLINED,
             requiredApplied = true,
             appliedVersion = version,
-            appliedPolicySnapshot = policySnapshot,
         )
 
     private fun transition(

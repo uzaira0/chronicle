@@ -12,6 +12,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
+import com.openlattice.chronicle.security.LeaseBoundWorker
 
 /**
  * Drives [CollectionLoopCoordinator.sync] — fetches the server data-collection setting,
@@ -25,7 +26,7 @@ import java.util.concurrent.TimeUnit
 class CollectionSettingsSyncWorker(
     context: Context,
     params: WorkerParameters,
-) : com.openlattice.chronicle.security.LeaseBoundWorker(context, params) {
+) : LeaseBoundWorker(context, params) {
 
     override fun runWork(): Result =
         try {
@@ -38,8 +39,8 @@ class CollectionSettingsSyncWorker(
     companion object {
         private const val TAG = "CollectionSettingsSyncWorker"
         const val SYNC_INTERVAL_HOURS = 1L
-        private const val PERIODIC_NAME = "collection_settings_sync_periodic"
-        private const val ONESHOT_NAME = "collection_settings_sync"
+        internal const val PERIODIC_NAME = "collection_settings_sync_periodic"
+        internal const val ONESHOT_NAME = "collection_settings_sync"
 
         private val NETWORK_CONSTRAINT = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -58,13 +59,13 @@ class CollectionSettingsSyncWorker(
         }
 
         /** Fires an immediate sync (piggyback / enrollment / push). REPLACE coalesces bursts. */
-        fun enqueueNow(context: Context) {
+        fun enqueueNow(context: Context, policy: ExistingWorkPolicy) {
             val request = OneTimeWorkRequestBuilder<CollectionSettingsSyncWorker>()
                 .setConstraints(NETWORK_CONSTRAINT)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
-                ONESHOT_NAME, ExistingWorkPolicy.REPLACE, request,
+                ONESHOT_NAME, policy, request,
             )
         }
     }

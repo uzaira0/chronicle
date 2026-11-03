@@ -5,8 +5,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Source-level invariant guarding the bug that shipped the six sensing-expansion modules
- * gated-but-not-acked (2026-06-19).
+ * Source-level invariant: no sensing module may be consent-gated without being acknowledged.
  *
  * Every module that has a consent-gate call site — `CollectionGate.collects(..., CollectionModuleId.X)`
  * or the holder helper `enrolledAndConsented(..., CollectionModuleId.X)` — MUST be in
@@ -16,7 +15,7 @@ import java.io.File
  * when the study enables it.
  *
  * The sibling equality test in [CollectionStateMachineTest] only *snapshots* the set, so a new
- * call site that was never added to the set slips through (exactly what happened). This test reads
+ * call site that was never added to the set slips through. This test reads
  * the real call sites from source, so the two cannot drift apart unnoticed.
  */
 class CollectionGateCallSiteInvariantTest {
@@ -39,7 +38,7 @@ class CollectionGateCallSiteInvariantTest {
         private val SOURCE_ROOTS = listOf(
             "app/src/main",
             "app/src/googleServices",
-            "app/src/minimal",
+            "app/src/amazon",
             "collection-core/src/main",
             "collection-device/src/main",
         )

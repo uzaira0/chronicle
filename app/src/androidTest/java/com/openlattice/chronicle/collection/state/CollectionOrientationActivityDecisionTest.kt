@@ -63,10 +63,11 @@ class CollectionOrientationActivityDecisionTest {
     }
 
     @Test
-    fun playPolicyDoesNotOfferHealthConnectConsent() {
+    fun amazonPolicyDoesNotOfferHealthConnectConsent() {
         assertFalse(
-            DistributionModulePolicy.supports(DistributionChannel.PLAY, CollectionModuleId.HEALTH_CONNECT),
+            DistributionModulePolicy.supports(DistributionChannel.AMAZON, CollectionModuleId.HEALTH_CONNECT),
         )
-        assertTrue(CollectionConsentCopy.template(CollectionModuleId.HEALTH_CONNECT).whatItCollects.isEmpty())
+        assertTrue(CollectionConsentCopy.template(ApplicationProvider.getApplicationContext(), CollectionModuleId.HEALTH_CONNECT)
+            .whatItCollects.isEmpty())
     }
 }

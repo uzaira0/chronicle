@@ -11,24 +11,13 @@ import com.openlattice.chronicle.api.EnrollmentPreviewResponse
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.state.CollectionStateMachine
 import com.openlattice.chronicle.utils.ExternalLinks
+import com.openlattice.chronicle.utils.Utils
 import java.net.URI
-
-private val NON_CHOICE_MODULE_DISCLOSURES: Map<CollectionModuleId, String> = mapOf(
-    CollectionModuleId.UPLOAD_TELEMETRY to
-        "Upload delivery diagnostics — Chronicle keeps local queue counts and upload success, " +
-        "failure, retry, and scheduling status. This diagnostic view excludes app content, " +
-        "participant labels, server addresses, and credentials.",
-    CollectionModuleId.SENSOR_AVAILABILITY to
-        "Sensor availability — Chronicle tells this study which study-requested modeled sensors " +
-        "this device reports as available or unavailable. This report contains no sensor measurements.",
-    CollectionModuleId.QUESTIONNAIRE to
-        "Questionnaire reminders — Chronicle can schedule study reminders and open this study's " +
-        "public HTTPS questionnaire. Questionnaire responses are handled by that study page.",
-)
+import com.openlattice.chronicle.study.WithdrawalMode
 
 internal fun nonChoiceModuleDisclosureLines(
     preview: EnrollmentPreviewResponse,
-    disclosure: (CollectionModuleId) -> String? = NON_CHOICE_MODULE_DISCLOSURES::get,
+    disclosure: (CollectionModuleId) -> String?,
 ): List<String> {
     val enabledNonChoiceModules = preview.manifest.collectionSettings.effectiveEnabledModuleIds() -
         CollectionStateMachine.ACK_GATED_MODULES
@@ -54,28 +43,26 @@ data class StudyDisclosureCopy(
     val consentDocumentUrl: String?,
     val withdrawalUrl: String? = null,
 ) {
-    /** Section headings of the disclosure body. Defaults are the tested English; the activity passes resources. */
+    /** Section headings and enabled-function lines of the disclosure body: the app resources ([fromResources]). */
     data class Labels(
-        val responsibleInstitution: (String) -> String = { "Responsible institution: $it" },
-        val serverOperator: (String) -> String = { "Server operator: $it" },
-        val researchContact: (String) -> String = { "Research contact: $it" },
-        val dataDestination: (String) -> String = { "Data destination: $it" },
-        val purpose: String = "Purpose",
-        val expectedDuration: String = "Expected duration",
-        val whatHappens: String = "What happens",
-        val enabledFunctions: String = "Enabled study functions covered by this agreement",
-        val enabledFunctionsBody: String =
-            "These enabled functions are not separate choices in the next screen. " +
-                "Any research records they create are sent only to the study server named above.",
-        val risks: String = "Foreseeable risks",
-        val benefits: String = "Expected benefits",
-        val useAndSharing: String = "Use and sharing",
-        val retention: String = "Retention and deletion",
-        val withdrawalErases: String = "Withdrawing erases data previously collected by this study.",
-        val withdrawalKeeps: String = "Withdrawing stops collection; this study keeps data collected before withdrawal.",
-        val effectiveAt: (String) -> String = { "Policy effective date: $it" },
-        val version: (String) -> String = { "Disclosure version: $it" },
-        val nonChoiceDisclosure: (CollectionModuleId) -> String? = NON_CHOICE_MODULE_DISCLOSURES::get,
+        val responsibleInstitution: (String) -> String,
+        val serverOperator: (String) -> String,
+        val researchContact: (String) -> String,
+        val dataDestination: (String) -> String,
+        val purpose: String,
+        val expectedDuration: String,
+        val whatHappens: String,
+        val enabledFunctions: String,
+        val enabledFunctionsBody: String,
+        val risks: String,
+        val benefits: String,
+        val useAndSharing: String,
+        val retention: String,
+        val withdrawalPolicy: String,
+        val withdrawalKeeps: String,
+        val effectiveAt: (String) -> String,
+        val version: (String) -> String,
+        val nonChoiceDisclosure: (CollectionModuleId) -> String?,
     ) {
         companion object {
             fun fromResources(context: Context) = Labels(
@@ -92,7 +79,7 @@ data class StudyDisclosureCopy(
                 benefits = context.getString(R.string.disclosure_benefits),
                 useAndSharing = context.getString(R.string.disclosure_use_sharing),
                 retention = context.getString(R.string.disclosure_retention),
-                withdrawalErases = context.getString(R.string.disclosure_withdrawal_erases),
+                withdrawalPolicy = context.getString(R.string.disclosure_withdrawal_policy),
                 withdrawalKeeps = context.getString(R.string.disclosure_withdrawal_keeps),
                 effectiveAt = { context.getString(R.string.study_policy_effective_at, it) },
                 version = { context.getString(R.string.disclosure_version, it) },
@@ -104,7 +91,7 @@ data class StudyDisclosureCopy(
     }
 
     companion object {
-        fun from(preview: EnrollmentPreviewResponse, labels: Labels = Labels()): StudyDisclosureCopy {
+        fun from(preview: EnrollmentPreviewResponse, labels: Labels): StudyDisclosureCopy {
             val manifest = preview.manifest
             val policy = manifest.participantPolicy
             return StudyDisclosureCopy(
@@ -143,10 +130,10 @@ data class StudyDisclosureCopy(
                     appendLine()
                     appendLine(labels.retention)
                     appendLine(policy.retentionAndDeletion)
-                    appendLine(if (manifest.withdrawalMode == com.openlattice.chronicle.study.WithdrawalMode.ERASE)
-                        labels.withdrawalErases else labels.withdrawalKeeps)
+                    appendLine(if (manifest.withdrawalMode == WithdrawalMode.ERASE)
+                        labels.withdrawalPolicy else labels.withdrawalKeeps)
                     appendLine()
-                    appendLine(labels.effectiveAt(policy.effectiveAt.toString()))
+                    appendLine(labels.effectiveAt(Utils.formatPolicyDate(policy.effectiveAt)))
                     append(labels.version(policy.version))
                 },
                 privacyPolicyUrl = policy.privacyPolicyUrl,

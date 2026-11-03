@@ -1,15 +1,15 @@
 package com.openlattice.chronicle.collection.state
 
-import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
-import com.openlattice.chronicle.collection.BatteryPolicy
 import com.openlattice.chronicle.collection.CollectionCadence
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
-import com.openlattice.chronicle.collection.NetworkPolicy
+import com.openlattice.chronicle.collection.capability.DistributionChannel
+import com.openlattice.chronicle.collection.capability.DistributionModulePolicy
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import org.junit.Assume.assumeTrue
+import org.junit.Test
 
 class SupportedCollectionPolicyTest {
     private fun minimalPlaySetting(
@@ -45,8 +45,24 @@ class SupportedCollectionPolicyTest {
     }
 
     @Test
+    fun unsupportedEnabledModuleIsReportedAsAStudySetupProblem() {
+        val unsupported = CollectionModuleId.entries.firstOrNull {
+            it.active && !DistributionModulePolicy.supports(
+                DistributionChannel.current(), it,
+            )
+        }
+        assumeTrue(unsupported != null)
+        val result = runCatching {
+            requireSupportedCollectionPolicies(
+                minimalPlaySetting(enabled = mapOf(unsupported!! to CollectionModuleSetting(enabled = true))),
+            )
+        }
+        assertTrue(result.exceptionOrNull() is UnsupportedStudyModulesException)
+    }
+
+    @Test
     fun publicReleaseRejectsDisabledMandatoryUploadDiagnostics() {
-        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL in setOf("PLAY", "AMAZON"))
+        assumeTrue(DistributionChannel.current().minimalPublic)
         val result = runCatching {
             requireSupportedCollectionPolicies(
                 minimalPlaySetting(
@@ -60,8 +76,8 @@ class SupportedCollectionPolicyTest {
     }
 
     @Test
-    fun playReleaseRejectsEveryModuleOutsideUsageBasicTelemetryAndUnlockIdentification() {
-        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL == "PLAY")
+    fun amazonReleaseRejectsEveryModuleOutsideUsageBasicTelemetryAndUnlockIdentification() {
+        assumeTrue(DistributionChannel.current() == DistributionChannel.AMAZON)
         val supported = setOf(
             CollectionModuleId.USAGE_EVENTS,
             CollectionModuleId.IN_APP_ACTIVITY_CLASS,
@@ -91,24 +107,12 @@ class SupportedCollectionPolicyTest {
     }
 
     @Test
-    fun everyUnimplementedPolicyKnobIsRejectedBeforeConsent() {
+    fun unsupportedCollectionCadenceIsRejectedBeforeConsent() {
         val unsupported = listOf(
             CollectionModuleSetting(enabled = true, collectionCadence = CollectionCadence(intervalSeconds = 60)),
             CollectionModuleSetting(
                 enabled = true,
                 collectionCadence = CollectionCadence(intervalSeconds = 900, jitterSeconds = 5),
-            ),
-            CollectionModuleSetting(
-                enabled = true,
-                uploadCadence = CollectionCadence(intervalSeconds = 120),
-            ),
-            CollectionModuleSetting(
-                enabled = true,
-                batteryPolicy = BatteryPolicy(minLevelPercent = 30),
-            ),
-            CollectionModuleSetting(
-                enabled = true,
-                networkPolicy = NetworkPolicy(requireUnmetered = true),
             ),
         )
 
@@ -124,5 +128,32 @@ class SupportedCollectionPolicyTest {
                 "Unsupported policy was accepted: $setting"
             }
         }
+    }
+
+    /** The study gives battery (a fixed-interval collector) a jittered cadence: refused before consent is asked. */
+    @Test
+    fun aJitteredCadenceOnAnIntervalCollectorIsRejectedBeforeConsent() {
+        val result = runCatching {
+            requireSupportedCollectionPolicies(
+                minimalPlaySetting(
+                    enabled = mapOf(CollectionModuleId.BATTERY_TELEMETRY to CollectionModuleSetting(
+                        enabled = true,
+                        collectionCadence = CollectionCadence(intervalSeconds = 1_800, jitterSeconds = 30),
+                    )),
+                ),
+            )
+        }
+        assertEquals("battery_telemetry uses unsupported collection-cadence jitter", result.exceptionOrNull()?.message)
+    }
+
+    /** A recovered pending enrollment lists usage as "not on this device": only hardware sensors can be, so it is refused. */
+    @Test
+    fun onlyHardwareSensorsCanBeUnavailableInAnEnrollment() {
+        val settings = minimalPlaySetting(enabled = mapOf(CollectionModuleId.USAGE_EVENTS to CollectionModuleSetting(enabled = true)))
+        val result = runCatching {
+            validateEnrollmentModulePartition(settings, settings.effectiveEnabledModuleIds() - CollectionModuleId.USAGE_EVENTS,
+                emptySet(), setOf(CollectionModuleId.USAGE_EVENTS))
+        }
+        assertEquals("Only per-sensor hardware modules may be unavailable", result.exceptionOrNull()?.message)
     }
 }

@@ -1,5 +1,8 @@
 package com.openlattice.chronicle.collection.state
 
+import android.app.Application
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.HealthConnectRecordType
@@ -9,12 +12,20 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class)
 class HealthConnectConsentContractTest {
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
     fun consentCopyListsOnlyTheStudyApprovedRecordTypesInCanonicalOrder() {
         val template = CollectionConsentCopy.consentTemplate(
+            context = context,
             moduleId = CollectionModuleId.HEALTH_CONNECT,
             healthConnectRecordTypes = linkedSetOf(
                 HealthConnectRecordType.SLEEP,
@@ -55,6 +66,7 @@ class HealthConnectConsentContractTest {
         if (BuildConfig.HAS_HEALTH_CONNECT) {
             assertThrows(IllegalArgumentException::class.java) {
                 CollectionConsentCopy.consentTemplate(
+                    context = context,
                     moduleId = CollectionModuleId.HEALTH_CONNECT,
                     healthConnectRecordTypes = emptySet(),
                 )
@@ -62,6 +74,7 @@ class HealthConnectConsentContractTest {
         } else {
             assertTrue(
                 CollectionConsentCopy.consentTemplate(
+                    context = context,
                     moduleId = CollectionModuleId.HEALTH_CONNECT,
                     healthConnectRecordTypes = emptySet(),
                 ).whatItCollects.isEmpty(),
@@ -90,6 +103,7 @@ class HealthConnectConsentContractTest {
         if (!BuildConfig.HAS_HEALTH_CONNECT) {
             assertTrue(
                 CollectionConsentCopy.consentTemplate(
+                    context = context,
                     moduleId = CollectionModuleId.HEALTH_CONNECT,
                     healthConnectRecordTypes = emptySet(),
                 ).whatItCollects.isEmpty(),
@@ -97,6 +111,7 @@ class HealthConnectConsentContractTest {
             return
         }
         val message = healthConnectReconsentMessage(
+            context,
             linkedSetOf(HealthConnectRecordType.STEPS, HealthConnectRecordType.SLEEP),
         )
 
@@ -104,7 +119,7 @@ class HealthConnectConsentContractTest {
         assertTrue(message.contains("• Sleep sessions and stages"))
         assertFalse(message.contains("Distance"))
         assertThrows(IllegalArgumentException::class.java) {
-            healthConnectReconsentMessage(emptySet())
+            healthConnectReconsentMessage(context, emptySet())
         }
     }
 

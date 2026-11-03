@@ -1,7 +1,7 @@
 package com.openlattice.chronicle.collection.state
 
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.requiredDecisionHaltsCollection
 
 /**
  * The participant's standing decision for a module (per-module consent design §4.1).
@@ -44,10 +44,6 @@ public data class CollectionModuleState(
     val requiredApplied: Boolean,
     /** The [com.openlattice.chronicle.collection.AndroidDataCollectionSetting] version last applied. */
     val appliedVersion: Int,
-    /** Stable snapshot of the collection policy covered by the standing decision. */
-    val appliedPolicySnapshot: String?,
-    /** The disposition applied on the most recent ACTIVE -> INACTIVE transition, if any. */
-    val lastDisposition: CollectionDataDisposition?,
 ) {
     /** Whether the participant has accepted the current enable epoch. */
     public val accepted: Boolean get() = decision == ParticipantDecision.ACCEPTED
@@ -83,11 +79,10 @@ public data class CollectionModuleState(
      * Halts ALL collection (per-module consent design §5): the participant **explicitly
      * declined** a study-required module. Reversible — re-accepting it resumes collection.
      * A merely [UNDECIDED] required module does **not** halt (grace window: already-accepted
-     * modules keep collecting until the participant accepts or declines). Mirrors the
-     * `countRequiredDeclined` gate query in `CollectionModuleStateDao`; keep the two in sync.
+     * modules keep collecting until the participant accepts or declines).
      */
     public val requiredAndDeclined: Boolean
-        get() = serverEnabled && requiredApplied && decision == ParticipantDecision.DECLINED
+        get() = requiredDecisionHaltsCollection(serverEnabled, requiredApplied, decision == ParticipantDecision.DECLINED)
 
     public companion object {
         /**
@@ -109,8 +104,6 @@ public data class CollectionModuleState(
                 decidedAtEpochMillis = null,
                 requiredApplied = false,
                 appliedVersion = 0,
-                appliedPolicySnapshot = null,
-                lastDisposition = null,
             )
     }
 }

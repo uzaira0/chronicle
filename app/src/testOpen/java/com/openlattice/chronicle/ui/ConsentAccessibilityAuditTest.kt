@@ -2,6 +2,7 @@ package com.openlattice.chronicle.ui
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Color
 import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
@@ -9,6 +10,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.core.graphics.ColorUtils
 import androidx.test.core.app.ApplicationProvider
+import com.google.android.material.button.MaterialButton
 import com.openlattice.chronicle.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -56,6 +58,27 @@ class ConsentAccessibilityAuditTest {
                     (android.graphics.Color.alpha(view.currentTextColor) * view.alpha).toInt())
                 val contrast = ColorUtils.calculateContrast(ColorUtils.compositeColors(color, background), background)
                 assertTrue("${view.id} night=$night contrast=$contrast", contrast >= 4.5)
+            }
+        }
+    }
+
+    /**
+     * H-NOT-NOW-CONTRAST: both consent actions, the filled Allow and the outlined secondary "Not now"/Don't allow, keep
+     * readable text on their composited background in light and dark, and stay enabled full-size tap targets.
+     */
+    @Test fun consentActionsHaveReadableContrastAndFullTapTargetsInBothThemes() {
+        for (night in listOf(Configuration.UI_MODE_NIGHT_NO, Configuration.UI_MODE_NIGHT_YES)) {
+            val context = context(night)
+            val orientation = layout(context, R.layout.activity_collection_orientation)
+            val screen = context.getColor(R.color.chronicle_bg)
+            val minimumTarget = (48 * context.resources.displayMetrics.density).toInt()
+            for (id in listOf(R.id.orientationAccept, R.id.orientationDecline)) {
+                val action = orientation.findViewById<MaterialButton>(id)
+                val fill = ColorUtils.compositeColors(action.backgroundTintList?.defaultColor ?: Color.TRANSPARENT, screen)
+                val contrast = ColorUtils.calculateContrast(ColorUtils.compositeColors(action.currentTextColor, fill), fill)
+                assertTrue("${action.text} night=$night contrast=$contrast", contrast >= 4.5)
+                assertTrue(action.isEnabled)
+                assertTrue("${action.text} night=$night height=${action.minimumHeight}", action.minimumHeight >= minimumTarget)
             }
         }
     }

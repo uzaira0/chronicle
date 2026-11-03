@@ -9,7 +9,7 @@ import org.junit.Test
 
 class CollectionCapabilityResolverTest {
 
-    private val playSupportedModules = setOf(
+    private val amazonSupportedModules = setOf(
         CollectionModuleId.USAGE_EVENTS,
         CollectionModuleId.IN_APP_ACTIVITY_CLASS,
         CollectionModuleId.DEVICE_LIFECYCLE,
@@ -34,41 +34,19 @@ class CollectionCapabilityResolverTest {
     }
 
     @Test
-    fun playReleasePolicyDisablesEveryRiskyOrNonessentialModule() {
-        assertEquals(playSupportedModules, DistributionModulePolicy.playSupportedModules)
-        val forbidden = CollectionModuleId.entries.filter { it.active && it !in playSupportedModules }
-
-        forbidden.forEach { moduleId ->
-            val result = resolve(moduleId, playReady)
-            assertTrue(
-                "${moduleId.id} must be policy-disabled in Play, but was $result",
-                result is CollectionCapability.PolicyDisabled,
-            )
+    fun amazonCapabilitySetIsExactlyTheMinimalRegistry() {
+        assertEquals(amazonSupportedModules, DistributionModulePolicy.amazonSupportedModules)
+        CollectionModuleId.entries.filter { it.active }.forEach { moduleId ->
+            val result = resolve(moduleId, amazonReady)
+            if (moduleId in amazonSupportedModules) {
+                assertEquals("${moduleId.id} must remain available", CollectionCapability.Ready, result)
+            } else {
+                assertTrue("${moduleId.id} must be policy-disabled in Amazon, but was $result",
+                    result is CollectionCapability.PolicyDisabled)
+            }
         }
     }
 
-    @Test
-    fun amazonReleaseUsesTheSameMinimalModulePolicy() {
-        val amazonReady = ready.copy(distribution = DistributionChannel.AMAZON)
-        val forbidden = CollectionModuleId.entries.filter { it.active && it !in playSupportedModules }
-
-        forbidden.forEach { moduleId ->
-            assertTrue(
-                "${moduleId.id} must be policy-disabled in Amazon",
-                resolve(moduleId, amazonReady) is CollectionCapability.PolicyDisabled,
-            )
-        }
-        playSupportedModules.forEach { moduleId ->
-            assertEquals(CollectionCapability.Ready, resolve(moduleId, amazonReady))
-        }
-    }
-
-    @Test
-    fun playReleaseKeepsUnlockIdentificationAndBasicTelemetryAvailable() {
-        playSupportedModules.forEach { moduleId ->
-            assertEquals("${moduleId.id} must remain available", CollectionCapability.Ready, resolve(moduleId, playReady))
-        }
-    }
     private val ready = CapabilityEnvironment(
         sdkInt = 36,
         distribution = DistributionChannel.RESEARCH,
@@ -82,7 +60,7 @@ class CollectionCapabilityResolverTest {
         // A full-channel device: the fixture must not depend on which flavor runs the test.
         restrictedCollectorsCompiledIn = true,
     )
-    private val playReady = ready.copy(distribution = DistributionChannel.PLAY)
+    private val amazonReady = ready.copy(distribution = DistributionChannel.AMAZON)
 
     @Test
     fun amazonPolicyDisablesRestrictedModulesBeforeServiceChecks() {

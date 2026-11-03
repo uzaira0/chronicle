@@ -50,7 +50,7 @@ public data class PermissionRequirement(public val permission: String, public va
 public object ModulePermissions {
 
     public const val ACTIVITY_RECOGNITION: String = "android.permission.ACTIVITY_RECOGNITION"
-    public const val LEGACY_ACTIVITY_RECOGNITION: String = "com.google.android.gms.permission.ACTIVITY_RECOGNITION"
+    public const val GMS_ACTIVITY_RECOGNITION: String = "com.google.android.gms.permission.ACTIVITY_RECOGNITION"
     public const val PACKAGE_USAGE_STATS: String = "android.permission.PACKAGE_USAGE_STATS"
     public const val ACCESS_NETWORK_STATE: String = "android.permission.ACCESS_NETWORK_STATE"
     public const val BIND_NOTIFICATION_LISTENER_SERVICE: String =

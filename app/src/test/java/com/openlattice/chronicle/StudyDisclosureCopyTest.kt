@@ -1,17 +1,25 @@
 package com.openlattice.chronicle
 
+import android.content.Context
+import android.content.res.Configuration
+import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.api.EnrollmentPreviewResponse
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
 import com.openlattice.chronicle.serialization.ChronicleJson
+import com.openlattice.chronicle.study.WithdrawalMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 class StudyDisclosureCopyTest {
+    private val context = ApplicationProvider.getApplicationContext<Context>()
+    /** The resource-backed labels StudyDisclosureActivity shows: the text participants read. */
+    private val labels get() = StudyDisclosureCopy.Labels.fromResources(context)
+
     @Test fun withdrawalCopyExplainsThatTheStudyPolicyControlsPriorData() {
-        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         val message = context.getString(R.string.server_delete_confirm_message)
         assertTrue(message.contains("Data on this device is erased after the server confirms"))
         assertTrue(message.contains("Previously uploaded data is kept or erased according to the study's withdrawal policy"))
@@ -25,7 +33,7 @@ class StudyDisclosureCopyTest {
         val preview = ChronicleJson.moshi.adapter(EnrollmentPreviewResponse::class.java)
             .fromJson(previewJson)!!
 
-        val copy = StudyDisclosureCopy.from(preview)
+        val copy = StudyDisclosureCopy.from(preview, labels)
         val visibleCopy = copy.title + "\n" + copy.body
 
         listOf(
@@ -60,7 +68,7 @@ class StudyDisclosureCopyTest {
             )
         }
 
-        val body = StudyDisclosureCopy.from(preview).body
+        val body = StudyDisclosureCopy.from(preview, labels).body
 
         listOf(
             "Enabled study functions covered by this agreement",
@@ -73,31 +81,47 @@ class StudyDisclosureCopyTest {
     }
 
     @Test
-    fun disclosureDoesNotClaimAndroidUnsupportedAmbientAudio() {
+    fun disclosureDoesNotClaimAReservedModule() {
         val baseline = preview()
-        val withIosOnlyModule = baseline.copy(
+        val withReservedModule = baseline.copy(
             manifest = baseline.manifest.copy(
                 collectionSettings = baseline.manifest.collectionSettings.copy(
                     modules = baseline.manifest.collectionSettings.modules +
-                        (CollectionModuleId.AMBIENT_AUDIO to CollectionModuleSetting(enabled = true)),
+                        (CollectionModuleId.GAZE_TRACKING to CollectionModuleSetting(enabled = true)),
                 ),
             ),
         )
 
         assertEquals(
-            nonChoiceModuleDisclosureLines(baseline),
-            nonChoiceModuleDisclosureLines(withIosOnlyModule),
+            nonChoiceModuleDisclosureLines(baseline, labels.nonChoiceDisclosure),
+            nonChoiceModuleDisclosureLines(withReservedModule, labels.nonChoiceDisclosure),
         )
     }
 
     @Test fun enrollmentPreviewDisclosesWithdrawalModeBeforeAcceptance() {
         val baseline = preview()
-        val labels = StudyDisclosureCopy.Labels()
-        for (mode in com.openlattice.chronicle.study.WithdrawalMode.values()) {
-            val disclosure = StudyDisclosureCopy.from(baseline.copy(manifest = baseline.manifest.copy(withdrawalMode = mode)))
-            val erases = mode == com.openlattice.chronicle.study.WithdrawalMode.ERASE
-            assertTrue(disclosure.body.contains(if (erases) labels.withdrawalErases else labels.withdrawalKeeps))
-            org.junit.Assert.assertFalse(disclosure.body.contains(if (erases) labels.withdrawalKeeps else labels.withdrawalErases))
+        for (mode in WithdrawalMode.values()) {
+            val disclosure = StudyDisclosureCopy.from(baseline.copy(manifest = baseline.manifest.copy(withdrawalMode = mode)), labels)
+            val erases = mode == WithdrawalMode.ERASE
+            assertTrue(disclosure.body.contains(if (erases) labels.withdrawalPolicy else labels.withdrawalKeeps))
+            org.junit.Assert.assertFalse(disclosure.body.contains(if (erases) labels.withdrawalKeeps else labels.withdrawalPolicy))
+        }
+    }
+
+    /**
+     * Sensor availability checks every sensor type Chronicle models and uploads the device's list, whether or not the
+     * study enables a sensor module: the line says so in each locale, not "study-requested".
+     */
+    @Test fun sensorAvailabilityLineDescribesEveryModeledSensorInEachLocale() {
+        val english = nonChoiceModuleDisclosureLines(preview(), labels.nonChoiceDisclosure).single { it.startsWith("Sensor availability") }
+        assertTrue(english, english.contains("which of all the sensors Chronicle models this device reports as available or unavailable"))
+        val spanish = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+            setLocale(Locale.forLanguageTag("es"))
+        }).getString(R.string.disclosure_function_sensor_availability)
+        assertTrue(spanish, spanish.contains("cuáles de todos los sensores modelados por Chronicle están disponibles o no"))
+        listOf(english, spanish).forEach { line ->
+            org.junit.Assert.assertFalse(line, line.contains("study-requested") || line.contains("solicitados por el estudio"))
+            assertTrue(line, line.contains("no sensor measurements") || line.contains("no contiene mediciones de sensores"))
         }
     }
 
@@ -109,7 +133,6 @@ class StudyDisclosureCopyTest {
     }
 
     @Test fun enrollmentDisclosureRequiresTheAdultOrGuardianAttestation() {
-        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         val activity = org.robolectric.Robolectric.buildActivity(StudyDisclosureActivity::class.java,
             StudyDisclosureActivity.intent(context, preview())).setup().get()
         val accept = activity.findViewById<com.google.android.material.button.MaterialButton>(R.id.acceptStudyDisclosureButton)

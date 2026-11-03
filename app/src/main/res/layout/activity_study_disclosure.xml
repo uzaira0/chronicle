@@ -5,43 +5,43 @@
     android:fillViewport="true">
 
     <LinearLayout
-        android:layout_width="match_parent"
+        style="@style/Chronicle.Content"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="@dimen/eq_space_5">
 
-        <TextView
+        <TextView android:accessibilityHeading="true"
             android:id="@+id/studyDisclosureHeading"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/disclosure_before_you_join"
-            android:textAppearance="@style/TextAppearance.MaterialComponents.Headline5" />
+            android:textAppearance="@style/Chronicle.Title" />
 
-        <TextView
+        <TextView android:accessibilityHeading="true"
             android:id="@+id/studyDisclosureTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:textAppearance="@style/TextAppearance.MaterialComponents.Headline6" />
+            android:layout_marginTop="@dimen/eq_space_3"
+            android:textAppearance="@style/Chronicle.SectionTitle" />
 
         <TextView
             android:id="@+id/studyDisclosureBody"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:lineSpacingExtra="3dp"
+            android:layout_marginTop="@dimen/eq_space_4"
+            android:lineSpacingExtra="@dimen/eq_space_1"
             android:textIsSelectable="true" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/studyPrivacyButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+            style="@style/Chronicle.Button.Text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/disclosure_privacy_policy" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/studyConsentDocumentButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+            style="@style/Chronicle.Button.Text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/disclosure_full_consent"
@@ -49,7 +49,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/studyWithdrawalButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+            style="@style/Chronicle.Button.Text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/study_withdrawal_options"
@@ -67,12 +67,12 @@
             android:id="@+id/acceptStudyDisclosureButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="@dimen/eq_space_4"
             android:text="@string/disclosure_agree" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/declineStudyDisclosureButton"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            style="@style/Chronicle.Button.Secondary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/disclosure_cancel" />

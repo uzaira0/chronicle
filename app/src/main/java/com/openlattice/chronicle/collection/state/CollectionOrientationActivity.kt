@@ -10,11 +10,14 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.SavedStateHandle
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.HealthConnectRecordType
+import android.view.accessibility.AccessibilityEvent
+import android.widget.ScrollView
 
 /**
  * The enrollment orientation wizard (per-module consent design §6). One screen per
@@ -40,11 +43,29 @@ class CollectionOrientationActivity : AppCompatActivity() {
     private lateinit var plan: ConsentPlan
     private lateinit var steps: List<Step>
 
-    /** Step index and decisions survive rotation; memory only, never a saved-state Bundle. */
-    internal class Progress : ViewModel() {
-        val accepted = linkedSetOf<CollectionModuleId>()
-        val declined = linkedSetOf<CollectionModuleId>()
-        var current = 0
+    /** Only module ids and the current step are saved; no enrollment credential is stored here. */
+    internal class Progress(private val state: SavedStateHandle) : ViewModel() {
+        val accepted get() = ids(EXTRA_ACCEPTED_IDS)
+        val declined get() = ids(EXTRA_DECLINED_IDS)
+        var current: Int
+            get() = state.get<Int>(CURRENT_STEP) ?: 0
+            set(value) { state[CURRENT_STEP] = value }
+
+        fun decide(moduleId: CollectionModuleId, allow: Boolean?) {
+            update(EXTRA_ACCEPTED_IDS, moduleId, allow == true)
+            update(EXTRA_DECLINED_IDS, moduleId, allow == false)
+        }
+
+        private fun ids(key: String): Set<CollectionModuleId> =
+            state.get<ArrayList<String>>(key).orEmpty().mapNotNull { CollectionModuleId.fromIdOrNull(it) }.toSet()
+
+        private fun update(key: String, moduleId: CollectionModuleId, selected: Boolean) {
+            val values = ids(key).toMutableSet()
+            if (selected) values.add(moduleId) else values.remove(moduleId)
+            state[key] = ArrayList(values.map { it.id })
+        }
+
+        private companion object { const val CURRENT_STEP = "orientation_current_step" }
     }
     private val progress: Progress by viewModels()
     private val accepted get() = progress.accepted
@@ -96,14 +117,13 @@ class CollectionOrientationActivity : AppCompatActivity() {
 
     private fun bindStep() {
         val step = steps[current]
-        val template = CollectionConsentCopy.localizedConsentTemplate(
+        val template = CollectionConsentCopy.consentTemplate(
             this,
             step.moduleId,
             plan.healthConnectRecordTypes,
         )
 
         val requirement = StepRequirementCopy.forRequired(step.required, this)
-        val planCopy = ConsentPlanCopy.fromResources(this)
         findViewById<TextView>(R.id.orientationStep).text =
             getString(R.string.orientation_step, current + 1, steps.size, requirement.displayLabel, template.label)
         findViewById<TextView>(R.id.orientationBadge).text = requirement.badge
@@ -113,11 +133,11 @@ class CollectionOrientationActivity : AppCompatActivity() {
         val planVisibility = if (current == 0) View.VISIBLE else View.GONE
         findViewById<TextView>(R.id.orientationRequirementSummaryHeader).apply {
             visibility = planVisibility
-            text = plan.requirementPlanHeader(planCopy)
+            text = plan.requirementPlanHeader(this@CollectionOrientationActivity)
         }
         findViewById<TextView>(R.id.orientationRequirementSummary).apply {
             visibility = planVisibility
-            text = plan.requirementSummaryLines(currentModule = step.moduleId, copy = planCopy).joinToString("\n")
+            text = plan.requirementSummaryLines(this@CollectionOrientationActivity, step.moduleId).joinToString("\n")
         }
         findViewById<TextView>(R.id.orientationTitle).text = getString(R.string.orientation_title_format, template.label, requirement.displayLabel)
         findViewById<TextView>(R.id.orientationCollects).text = bullets(template.whatItCollects)
@@ -138,21 +158,20 @@ class CollectionOrientationActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.orientationTitle).apply {
             isFocusableInTouchMode = true
             requestFocus()
-            sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED)
+            sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED)
         }
-        findViewById<android.widget.ScrollView>(R.id.orientationScrollView).scrollTo(0, 0)
+        findViewById<ScrollView>(R.id.orientationScrollView).scrollTo(0, 0)
     }
 
     private fun onAllow() {
         val moduleId = steps[current].moduleId
-        declined.remove(moduleId)
-        accepted.add(moduleId)
+        progress.decide(moduleId, true)
         advance()
     }
 
     private fun onDecline() {
         val step = steps[current]
-        val label = CollectionConsentCopy.localizedLabel(this, step.moduleId)
+        val label = CollectionConsentCopy.label(this, step.moduleId)
         if (step.required) {
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.orientation_required_title)
@@ -165,8 +184,7 @@ class CollectionOrientationActivity : AppCompatActivity() {
                 .setTitle(getString(R.string.orientation_decline_title, label))
                 .setMessage(R.string.orientation_decline_body)
                 .setPositiveButton(R.string.dont_allow) { _, _ ->
-                    accepted.remove(step.moduleId)
-                    declined.add(step.moduleId)
+                    progress.decide(step.moduleId, false)
                     advance()
                 }
                 .setNegativeButton(android.R.string.cancel, null)
@@ -187,8 +205,7 @@ class CollectionOrientationActivity : AppCompatActivity() {
         current -= 1
         // Clear the prior step's decision so the participant can freely re-decide it.
         val moduleId = steps[current].moduleId
-        accepted.remove(moduleId)
-        declined.remove(moduleId)
+        progress.decide(moduleId, null)
         bindStep()
     }
 
@@ -303,66 +320,24 @@ data class StepRequirementCopy(
     }
 }
 
-/**
- * Presentation hooks for the step plan. The default is the tested English rendering; the
- * orientation screen supplies a resource-backed instance so the plan follows the device locale.
- */
-class ConsentPlanCopy(
-    val moduleLabel: (CollectionModuleId) -> String,
-    val requirementLabel: (Boolean) -> String,
-    val stepLine: (index: Int, requirement: String, label: String, current: Boolean) -> String,
-    val planHeader: (requiredCount: Int, optionalCount: Int) -> String,
-) {
-    companion object {
-        val ENGLISH = ConsentPlanCopy(
-            moduleLabel = { CollectionConsentCopy.template(it).label },
-            requirementLabel = { StepRequirementCopy.forRequired(it).displayLabel },
-            stepLine = { index, requirement, label, current ->
-                "Step ${index + 1}: [$requirement] $label${if (current) " (current)" else ""}"
-            },
-            planHeader = ::sourceStudyRequirementPlanHeader,
-        )
-
-        fun fromResources(context: Context) = ConsentPlanCopy(
-            moduleLabel = { CollectionConsentCopy.localizedLabel(context, it) },
-            requirementLabel = { StepRequirementCopy.forRequired(it, context).displayLabel },
-            stepLine = { index, requirement, label, current ->
-                context.getString(
-                    R.string.orientation_plan_line,
-                    index + 1,
-                    requirement,
-                    label,
-                    if (current) context.getString(R.string.orientation_plan_current) else "",
-                )
-            },
-            planHeader = { requiredCount, optionalCount ->
-                context.getString(
-                    R.string.orientation_plan_header,
-                    context.resources.getQuantityString(R.plurals.orientation_required_steps, requiredCount, requiredCount),
-                    context.resources.getQuantityString(R.plurals.orientation_optional_steps, optionalCount, optionalCount),
-                )
-            },
-        )
-    }
-}
-
-fun ConsentPlan.requirementSummaryLines(
-    currentModule: CollectionModuleId? = null,
-    copy: ConsentPlanCopy = ConsentPlanCopy.ENGLISH,
-): List<String> {
+/** One line per plan step, in the device locale; [currentModule] is marked as the current step. */
+fun ConsentPlan.requirementSummaryLines(context: Context, currentModule: CollectionModuleId? = null): List<String> {
     val requiredModules = required.toSet()
     return orderedModules.mapIndexed { index, moduleId ->
-        val label = copy.moduleLabel(moduleId)
-        val requirement = copy.requirementLabel(requiredModules.contains(moduleId))
-        copy.stepLine(index, requirement, label, moduleId == currentModule)
+        val stepNumber: Int = index + 1
+        context.getString(
+            R.string.orientation_plan_line,
+            stepNumber,
+            StepRequirementCopy.forRequired(requiredModules.contains(moduleId), context).displayLabel,
+            CollectionConsentCopy.label(context, moduleId).let { label ->
+                if (moduleId == currentModule) context.getString(R.string.orientation_plan_current, label) else label
+            },
+        )
     }
 }
 
-fun ConsentPlan.requirementPlanHeader(copy: ConsentPlanCopy = ConsentPlanCopy.ENGLISH): String =
-    copy.planHeader(required.size, optional.size)
-
-private fun sourceStudyRequirementPlanHeader(requiredCount: Int, optionalCount: Int): String {
-    fun plural(count: Int, singular: String): String = "$count $singular${if (count == 1) "" else "s"}"
-    return "Source study step plan: ${plural(requiredCount, "required step")}, " +
-        "${plural(optionalCount, "optional step")}"
-}
+fun ConsentPlan.requirementPlanHeader(context: Context): String = context.getString(
+    R.string.orientation_plan_header,
+    context.resources.getQuantityString(R.plurals.orientation_required_steps, required.size, required.size),
+    context.resources.getQuantityString(R.plurals.orientation_optional_steps, optional.size, optional.size),
+)

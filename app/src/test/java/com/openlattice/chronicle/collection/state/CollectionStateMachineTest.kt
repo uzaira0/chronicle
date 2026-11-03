@@ -1,22 +1,21 @@
 package com.openlattice.chronicle.collection.state
 
 import com.openlattice.chronicle.android.AndroidSensorSetting
-import com.openlattice.chronicle.collection.BatteryPolicy
+import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
 import com.openlattice.chronicle.collection.CollectionCadence
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
 import com.openlattice.chronicle.collection.HealthConnectRecordType
 import com.openlattice.chronicle.collection.InteractionPolicy
-import com.openlattice.chronicle.collection.NetworkPolicy
 import com.openlattice.chronicle.collection.SensorCollectionModules
 import com.openlattice.chronicle.collection.settings.ResolutionSource
 import com.openlattice.chronicle.collection.settings.ResolvedModuleSetting
+import com.openlattice.chronicle.serialization.ChronicleJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.openlattice.chronicle.collection.withConsentEpochs
 
 /**
  * Exhaustive tests for the pure collection-loop transition engine (collection loop
@@ -28,13 +27,22 @@ class CollectionStateMachineTest {
 
     private val moduleId = CollectionModuleId.BATTERY_TELEMETRY
 
+    @Test fun sharedConsentContract() {
+        ConsentContractCase.all().forEach { row ->
+            val transition = row.reconcile()
+            assertEquals(row.name, row.survives,
+                transition.newState.decision == row.decision && row.decision != ParticipantDecision.UNDECIDED)
+            assertEquals(row.name, row.halted,
+                CollectionModuleState.collectionHalted(listOf(transition.newState)))
+        }
+    }
+
     private fun state(
         serverEnabled: Boolean,
         decision: ParticipantDecision,
         required: Boolean = false,
         version: Int = 1,
         id: CollectionModuleId = moduleId,
-        appliedSetting: CollectionModuleSetting = CollectionModuleSetting(enabled = serverEnabled, required = required),
     ) = CollectionModuleState(
         moduleId = id,
         serverEnabled = serverEnabled,
@@ -42,19 +50,16 @@ class CollectionStateMachineTest {
         decidedAtEpochMillis = if (decision == ParticipantDecision.UNDECIDED) null else 100L,
         requiredApplied = required,
         appliedVersion = version,
-        appliedPolicySnapshot = appliedSetting.consentPolicySnapshot(),
-        lastDisposition = null,
     )
 
     private fun resolved(
         enabled: Boolean,
         required: Boolean = false,
-        disposition: CollectionDataDisposition? = null,
         id: CollectionModuleId = moduleId,
     ): Map<CollectionModuleId, ResolvedModuleSetting> = mapOf(
         id to ResolvedModuleSetting(
             moduleId = id,
-            setting = CollectionModuleSetting(enabled = enabled, required = required, disableDisposition = disposition),
+            setting = CollectionModuleSetting(enabled = enabled, required = required),
             source = ResolutionSource.GENERALIZED,
             valid = true,
         ),
@@ -64,10 +69,9 @@ class CollectionStateMachineTest {
         prev: CollectionModuleState?,
         enabled: Boolean,
         required: Boolean = false,
-        disposition: CollectionDataDisposition? = null,
     ) = CollectionStateMachine.reconcile(
         previous = if (prev == null) emptyMap() else mapOf(moduleId to prev),
-        resolved = resolved(enabled, required, disposition),
+        resolved = resolved(enabled, required),
         settingVersion = 2,
     ).single()
 
@@ -104,35 +108,25 @@ class CollectionStateMachineTest {
         val t = reconcileOne(state(false, ParticipantDecision.UNDECIDED), enabled = false)
         assertEquals(ModuleTransitionType.UNCHANGED_INACTIVE, t.type)
         assertEquals(CollectionModulePhase.INACTIVE, t.newState.phase)
-        assertNull(t.disposition)
     }
 
-    @Test fun testActiveDisabledAppliesDefaultDisposition() {
+    @Test fun testActiveDisabledIsForciblyDisabledAndClearsTheDecision() {
         val t = reconcileOne(state(true, ParticipantDecision.ACCEPTED), enabled = false)
         assertEquals(ModuleTransitionType.FORCIBLY_DISABLED, t.type)
         assertEquals(CollectionModulePhase.INACTIVE, t.newState.phase)
-        assertEquals(CollectionDataDisposition.FLUSH_THEN_STOP, t.disposition)
-        assertEquals(CollectionDataDisposition.FLUSH_THEN_STOP, t.newState.lastDisposition)
         assertEquals("decision cleared on disable", ParticipantDecision.UNDECIDED, t.newState.decision)
     }
 
-    @Test fun testActiveDisabledHonorsExplicitDisposition() {
-        val t = reconcileOne(state(true, ParticipantDecision.ACCEPTED), enabled = false, disposition = CollectionDataDisposition.HOLD_PENDING)
-        assertEquals(CollectionDataDisposition.HOLD_PENDING, t.disposition)
-    }
-
-    @Test fun testAwaitingDisabledHasNoDisposition() {
-        val t = reconcileOne(state(true, ParticipantDecision.UNDECIDED), enabled = false, disposition = CollectionDataDisposition.DISCARD_AND_STOP)
+    @Test fun testAwaitingDisabledIsForciblyDisabled() {
+        val t = reconcileOne(state(true, ParticipantDecision.UNDECIDED), enabled = false)
         assertEquals(ModuleTransitionType.FORCIBLY_DISABLED, t.type)
         assertEquals(CollectionModulePhase.INACTIVE, t.newState.phase)
-        assertNull("never collected -> nothing to dispose", t.disposition)
     }
 
-    @Test fun testDeclinedDisabledHasNoDisposition() {
+    @Test fun testDeclinedDisabledIsForciblyDisabled() {
         val t = reconcileOne(state(true, ParticipantDecision.DECLINED), enabled = false)
         assertEquals(ModuleTransitionType.FORCIBLY_DISABLED, t.type)
         assertEquals(CollectionModulePhase.INACTIVE, t.newState.phase)
-        assertNull(t.disposition)
     }
 
     // ===== reconcile(): → OPTIONAL =====
@@ -154,8 +148,7 @@ class CollectionStateMachineTest {
     @Test fun testAwaitingStaysAwaitingOptional() {
         // Already awaiting an OPTIONAL decision from a prior sync → STILL_AWAITING_DECISION, NOT a
         // fresh NEEDS_DECISION. The in-app prompt persists, but the coordinator must not re-post the
-        // "a data collection option was added" notification on every settings poll (the
-        // constant-notification bug: reconcile previously never emitted STILL_AWAITING_DECISION).
+        // "a data collection option was added" notification on every settings poll.
         val t = reconcileOne(state(true, ParticipantDecision.UNDECIDED), enabled = true, required = false)
         assertEquals(ModuleTransitionType.STILL_AWAITING_DECISION, t.type)
         assertEquals(CollectionModulePhase.AWAITING_DECISION, t.newState.phase)
@@ -200,107 +193,65 @@ class CollectionStateMachineTest {
         assertEquals(2, t.newState.appliedVersion)
     }
 
-    @Test fun testAcceptedOptionalPolicyChangesRequireFreshDecision() {
+    @Test fun testAcceptedOptionalPolicyEditsKeepTheDecision() {
         val priorSetting = CollectionModuleSetting(enabled = true, required = false)
         val changedSettings = listOf(
             priorSetting.copy(collectionCadence = CollectionCadence(intervalSeconds = 60)),
-            priorSetting.copy(uploadCadence = CollectionCadence(intervalSeconds = 120)),
-            priorSetting.copy(batteryPolicy = BatteryPolicy(minLevelPercent = 20)),
-            priorSetting.copy(networkPolicy = NetworkPolicy(requireUnmetered = true)),
             priorSetting.copy(sensorPolicy = AndroidSensorSetting(samplingRateHz = 10)),
             priorSetting.copy(interactionPolicy = InteractionPolicy(gridRows = 5)),
         )
-        val prev = state(
-            serverEnabled = true,
-            decision = ParticipantDecision.ACCEPTED,
-            appliedSetting = priorSetting,
-        )
+        val prev = state(serverEnabled = true, decision = ParticipantDecision.ACCEPTED)
 
         changedSettings.forEach { changedSetting ->
-            val transition = CollectionStateMachine.reconcile(
-                previous = mapOf(moduleId to prev),
-                resolved = mapOf(
-                    moduleId to ResolvedModuleSetting(
-                        moduleId = moduleId,
-                        setting = changedSetting,
-                        source = ResolutionSource.GENERALIZED,
-                        valid = true,
-                    ),
-                ),
-                settingVersion = 2,
-            ).single()
-
-            assertEquals(ModuleTransitionType.NEEDS_DECISION, transition.type)
-            assertEquals(CollectionModulePhase.AWAITING_DECISION, transition.newState.phase)
-            assertEquals(ParticipantDecision.UNDECIDED, transition.newState.decision)
-            assertFalse("changed policy must stop collection until re-accepted", transition.newState.collectsWhenEnrolled)
+            val transition = reconcileSetting(prev, changedSetting)
+            assertEquals(ModuleTransitionType.STILL_ACTIVE, transition.type)
+            assertEquals(ParticipantDecision.ACCEPTED, transition.newState.decision)
+            assertTrue("a policy edit keeps collecting", transition.newState.collectsWhenEnrolled)
         }
     }
 
-    @Test fun testAcceptedRequiredPolicyChangeRequiresMandatoryFreshConsent() {
+    @Test fun testAcceptedRequiredPolicyEditKeepsTheDecisionWithoutMandatoryConsent() {
         val priorSetting = CollectionModuleSetting(enabled = true, required = true)
-        val prev = state(
-            serverEnabled = true,
-            decision = ParticipantDecision.ACCEPTED,
-            required = true,
-            appliedSetting = priorSetting,
-        )
-        val changedSetting = priorSetting.copy(networkPolicy = NetworkPolicy(requireUnmetered = true))
+        val prev = state(serverEnabled = true, decision = ParticipantDecision.ACCEPTED, required = true)
 
-        val transition = CollectionStateMachine.reconcile(
-            previous = mapOf(moduleId to prev),
-            resolved = mapOf(
-                moduleId to ResolvedModuleSetting(
-                    moduleId = moduleId,
-                    setting = changedSetting,
-                    source = ResolutionSource.GENERALIZED,
-                    valid = true,
-                ),
-            ),
-            settingVersion = 2,
-        ).single()
+        val transition = reconcileSetting(prev, priorSetting.copy(collectionCadence = CollectionCadence(intervalSeconds = 1_800)))
 
-        assertEquals(ModuleTransitionType.NEWLY_REQUIRED_NEEDS_CONSENT, transition.type)
-        assertTrue(transition.requiresMandatoryConsent)
-        assertEquals(CollectionModulePhase.AWAITING_DECISION, transition.newState.phase)
+        assertEquals(ModuleTransitionType.STILL_ACTIVE, transition.type)
+        assertFalse(transition.requiresMandatoryConsent)
+        assertEquals(CollectionModulePhase.ACTIVE, transition.newState.phase)
     }
 
-    @Test fun testHealthConnectRecordScopeChangeRequiresFreshDecision() {
-        val healthConnect = CollectionModuleId.HEALTH_CONNECT
-        val priorSetting = CollectionModuleSetting(
-            enabled = true,
-            required = false,
-            healthConnectRecordTypes = setOf(HealthConnectRecordType.STEPS),
-        )
-        val expandedSetting = priorSetting.copy(
-            healthConnectRecordTypes = setOf(
-                HealthConnectRecordType.STEPS,
-                HealthConnectRecordType.HEART_RATE,
-            ),
-        )
-        val previous = state(
-            serverEnabled = true,
-            decision = ParticipantDecision.ACCEPTED,
-            id = healthConnect,
-            appliedSetting = priorSetting,
-        )
+    @Test fun testADisableThenReenableEpochVoidsTheAcceptance() {
+        val prev = state(serverEnabled = true, decision = ParticipantDecision.ACCEPTED, version = 1)
 
-        val transition = CollectionStateMachine.reconcile(
-            previous = mapOf(healthConnect to previous),
-            resolved = mapOf(
-                healthConnect to ResolvedModuleSetting(
-                    moduleId = healthConnect,
-                    setting = expandedSetting,
-                    source = ResolutionSource.GENERALIZED,
-                    valid = true,
-                ),
-            ),
-            settingVersion = 2,
-        ).single()
+        val transition = reconcileSetting(prev, CollectionModuleSetting(enabled = true, consentEpoch = 2))
 
         assertEquals(ModuleTransitionType.NEEDS_DECISION, transition.type)
-        assertEquals(CollectionModulePhase.AWAITING_DECISION, transition.newState.phase)
         assertFalse(transition.newState.collectsWhenEnrolled)
+    }
+
+    private fun reconcileSetting(
+        prev: CollectionModuleState,
+        setting: CollectionModuleSetting,
+        id: CollectionModuleId = moduleId,
+    ) = CollectionStateMachine.reconcile(
+        previous = mapOf(id to prev),
+        resolved = mapOf(id to ResolvedModuleSetting(id, setting, ResolutionSource.GENERALIZED, valid = true)),
+        settingVersion = 2,
+    ).single()
+
+    @Test fun testHealthConnectRecordScopeEditKeepsTheDecision() {
+        val healthConnect = CollectionModuleId.HEALTH_CONNECT
+        val expandedSetting = CollectionModuleSetting(
+            enabled = true,
+            healthConnectRecordTypes = setOf(HealthConnectRecordType.STEPS, HealthConnectRecordType.HEART_RATE),
+        )
+        val previous = state(serverEnabled = true, decision = ParticipantDecision.ACCEPTED, id = healthConnect)
+
+        val transition = reconcileSetting(previous, expandedSetting, healthConnect)
+
+        assertEquals(ModuleTransitionType.STILL_ACTIVE, transition.type)
+        assertTrue(transition.newState.collectsWhenEnrolled)
     }
 
     @Test fun testAcceptedOptionalStaysActiveWhenOnlySettingsVersionChanges() {
@@ -309,7 +260,6 @@ class CollectionStateMachineTest {
             serverEnabled = true,
             decision = ParticipantDecision.ACCEPTED,
             version = 1,
-            appliedSetting = setting,
         )
 
         val transition = CollectionStateMachine.reconcile(
@@ -361,9 +311,15 @@ class CollectionStateMachineTest {
         // persists). Reconcile must NOT reset it to undecided, or the next settings poll would
         // silently lift the halt.
         val t = reconcileOne(state(true, ParticipantDecision.DECLINED), enabled = true, required = true)
-        assertEquals(ModuleTransitionType.STILL_DECLINED, t.type)
+        assertEquals(ModuleTransitionType.NEWLY_REQUIRED_NEEDS_CONSENT, t.type)
         assertEquals(CollectionModulePhase.DECLINED, t.newState.phase)
         assertTrue("required flag retained so the halt holds across polls", t.newState.requiredApplied)
+        assertTrue(t.newState.requiredAndDeclined)
+    }
+
+    @Test fun testAlreadyRequiredDeclineDoesNotNotifyAgain() {
+        val t = reconcileOne(state(true, ParticipantDecision.DECLINED, required = true), enabled = true, required = true)
+        assertEquals(ModuleTransitionType.STILL_DECLINED, t.type)
         assertTrue(t.newState.requiredAndDeclined)
     }
 
@@ -403,14 +359,14 @@ class CollectionStateMachineTest {
         val states = mapOf(
             CollectionModuleId.BATTERY_TELEMETRY to state(true, ParticipantDecision.UNDECIDED, id = CollectionModuleId.BATTERY_TELEMETRY),
             CollectionModuleId.USAGE_EVENTS to state(true, ParticipantDecision.DECLINED, id = CollectionModuleId.USAGE_EVENTS),
-            CollectionModuleId.HARDWARE_SENSORS to state(false, ParticipantDecision.UNDECIDED, id = CollectionModuleId.HARDWARE_SENSORS),
+            CollectionModuleId.SENSOR_ACCELEROMETER to state(false, ParticipantDecision.UNDECIDED, id = CollectionModuleId.SENSOR_ACCELEROMETER),
         )
         val result = CollectionStateMachine.decide(
             previous = states,
             decisions = mapOf(
                 CollectionModuleId.BATTERY_TELEMETRY to ParticipantDecision.ACCEPTED,
                 CollectionModuleId.USAGE_EVENTS to ParticipantDecision.ACCEPTED,
-                CollectionModuleId.HARDWARE_SENSORS to ParticipantDecision.ACCEPTED,
+                CollectionModuleId.SENSOR_ACCELEROMETER to ParticipantDecision.ACCEPTED,
             ),
             nowEpochMillis = 555L,
         )
@@ -418,7 +374,7 @@ class CollectionStateMachineTest {
         assertEquals(setOf(CollectionModuleId.BATTERY_TELEMETRY, CollectionModuleId.USAGE_EVENTS), result.activated)
         assertEquals(555L, result.newStates.getValue(CollectionModuleId.BATTERY_TELEMETRY).decidedAtEpochMillis)
         assertEquals(CollectionModulePhase.ACTIVE, result.newStates.getValue(CollectionModuleId.USAGE_EVENTS).phase)
-        assertEquals(CollectionModulePhase.INACTIVE, result.newStates.getValue(CollectionModuleId.HARDWARE_SENSORS).phase)
+        assertEquals(CollectionModulePhase.INACTIVE, result.newStates.getValue(CollectionModuleId.SENSOR_ACCELEROMETER).phase)
     }
 
     @Test fun testDeclineDeactivatesOptionalActiveModule() {
@@ -509,5 +465,45 @@ class CollectionStateMachineTest {
             CollectionStateMachine.ACK_GATED_MODULES,
         )
         assertTrue(CollectionModuleId.USER_IDENTIFICATION in CollectionStateMachine.ACK_GATED_MODULES)
+    }
+}
+
+/** One row of the shared chronicle-models consent fixture, also run by the models owner and the server. */
+internal data class ConsentContractCase(
+    val name: String,
+    val decision: ParticipantDecision,
+    val revisions: List<AndroidDataCollectionSetting>,
+    val survives: Boolean,
+    val halted: Boolean,
+) {
+    private val moduleId get() = CollectionModuleId.BATTERY_TELEMETRY
+
+    /** The phone holds [decision] at the first revision, then reconciles the last one with its server epochs. */
+    fun reconcile(): ModuleTransition {
+        val initial = revisions.first().effectiveModules().getValue(moduleId)
+        val adapter = ChronicleJson.moshi
+            .adapter(AndroidDataCollectionSetting::class.java)
+        val latest = checkNotNull(adapter.fromJson(adapter.toJson(revisions.last().withConsentEpochs(revisions))))
+            .effectiveModules().getValue(moduleId)
+        val previous = CollectionModuleState(
+            moduleId = moduleId,
+            serverEnabled = initial.enabled,
+            decision = decision,
+            decidedAtEpochMillis = if (decision == ParticipantDecision.UNDECIDED) null else 100L,
+            requiredApplied = initial.required,
+            appliedVersion = 1,
+        )
+        return CollectionStateMachine.reconcile(mapOf(moduleId to previous), mapOf(moduleId to
+            ResolvedModuleSetting(moduleId, latest, ResolutionSource.GENERALIZED, true)), revisions.last().settingsVersion).single()
+    }
+
+    companion object {
+        fun all(): List<ConsentContractCase> {
+            val fixture = generateSequence(java.io.File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
+                .map { java.io.File(it, "chronicle-models/fixtures/collection-consent.json") }.first { it.isFile }
+            val type = com.squareup.moshi.Types.newParameterizedType(List::class.java, ConsentContractCase::class.java)
+            return checkNotNull(ChronicleJson.moshi
+                .adapter<List<ConsentContractCase>>(type).fromJson(fixture.readText()))
+        }
     }
 }

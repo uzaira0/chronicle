@@ -7,35 +7,27 @@ import android.database.sqlite.SQLiteException
 import android.os.Looper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.Configuration
-import androidx.work.WorkManager
+import com.openlattice.chronicle.EnrollmentTestStores
+import com.openlattice.chronicle.WorkManagerRule
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.sink.BatterySampleSink
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
 import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.upload.LOCAL_STORAGE_RESERVE_BYTES
-import com.openlattice.chronicle.services.crypto.FileSealedEnvelopeStore
-import com.openlattice.chronicle.services.crypto.PayloadSealer
-import com.openlattice.chronicle.services.crypto.SealedEnvelopeEntry
-import com.openlattice.chronicle.services.crypto.SealedEnvelopeStore
-import com.openlattice.chronicle.crypto.EncryptedEnvelope
-import com.openlattice.chronicle.crypto.EncryptedPayloadType
 import com.openlattice.chronicle.storage.BatterySampleEntry
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.checkedSQLiteOpenHelperFactory
 import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import com.openlattice.chronicle.storage.LocalStoreRecoveryManager
 import com.openlattice.chronicle.storage.SingleEnrollmentConflictException
-import com.openlattice.chronicle.storage.UploadServerDao
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.UsagePollCheckpointEntity
+import com.openlattice.chronicle.ui.participantStorageWrite
 import java.io.File
 import java.io.IOException
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Proxy
 import java.security.MessageDigest
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
@@ -47,6 +39,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -55,11 +48,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28])
 class AndroidSweepReview3RegressionTest {
+    @get:Rule val workManagerRule = WorkManagerRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var db: ChronicleDb
     private lateinit var prefs: SharedPreferences
     private lateinit var original: UploadServerEntity
-    private lateinit var previousEnvelopes: SealedEnvelopeStore
     private val fence get() = ResearchErasureFence(context)
     private val failReads = AtomicBoolean()
     private val mainQueries = AtomicInteger()
@@ -76,51 +69,41 @@ class AndroidSweepReview3RegressionTest {
 
     @Before fun setUp() = worker {
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
-        previousEnvelopes = PayloadSealer.sealedEnvelopeStore
-        PayloadSealer.sealedEnvelopeStore = FileSealedEnvelopeStore(File(context.filesDir, "review3-sealed"))
         prefs = context.getSharedPreferences("sweep-review3", Context.MODE_PRIVATE)
         prefs.edit().clear().putString(STUDY_ID, "11111111-1111-1111-1111-111111111111")
             .putString(PARTICIPANT_ID, "participant-A").putString(PARTICIPATION_STATUS, "ENROLLED").commit()
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, prefs)
+        EnrollmentTestStores.prefs = prefs
         context.getSharedPreferences("research_erasure_fence", Context.MODE_PRIVATE).edit().clear().commit()
-        db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).build()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
-        db.uploadServerDao().insert(UploadServerEntity(name = "study", url = "https://localhost",
-            studyId = prefs.getString(STUDY_ID, "")!!, participantId = "participant-A", sourceDeviceId = "device"))
+        db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java)
+            .openHelperFactory(checkedSQLiteOpenHelperFactory { sql ->
+                if ("upload_servers" in sql) {
+                    if (Thread.currentThread() === Looper.getMainLooper().thread) mainQueries.incrementAndGet()
+                    if (failReads.get()) throw SQLiteException("transient enrollment read")
+                }
+            }).build()
+        EnrollmentTestStores.db = db
+        db.uploadServerDao().insert(UploadServerEntity(name = "study", url = "https://localhost", apiKey = "test-device-key",
+            studyId = prefs.getString(STUDY_ID, "")!!, participantId = "participant-A", sourceRandomDeviceId = "device"))
         original = db.uploadServerDao().getConfiguredServer()!!
         CollectionModuleId.values().filter { it.active }.forEach {
             db.collectionModuleStateDao().upsertAll(listOf(CollectionModuleStateEntity(it.id, true,
-                ParticipantDecision.ACCEPTED.name, 0, false, 1, null, null)))
+                ParticipantDecision.ACCEPTED.name, 0, false, 1)))
         }
-        val dao = db.uploadServerDao()
-        val proxy = Proxy.newProxyInstance(UploadServerDao::class.java.classLoader, arrayOf(UploadServerDao::class.java)) { _, method, args ->
-            if (Thread.currentThread() === Looper.getMainLooper().thread) mainQueries.incrementAndGet()
-            if (failReads.get() && method.name == "getConfiguredServer") throw SQLiteException("temporary read failure")
-            try { method.invoke(dao, *(args ?: emptyArray())) }
-            catch (error: InvocationTargetException) { throw error.targetException }
-        }
-        db.javaClass.getDeclaredField("_uploadServerDao").apply { isAccessible = true }.set(db, lazyOf(proxy))
-        if (!WorkManager.isInitialized()) WorkManager.initialize(context, Configuration.Builder().setExecutor(Executor { }).build())
         ResearchPersistenceGate.initialize(context)
-        StorageAdmission.allowed(context, LOCAL_STORAGE_RESERVE_BYTES)
-        StorageAdmission::class.java.getDeclaredField("lastAllowed").apply { isAccessible = true }.setBoolean(StorageAdmission, true)
-        StorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
-            .setLong(StorageAdmission, android.os.SystemClock.elapsedRealtime())
+        assertTrue(StorageAdmission.allowed(context, LOCAL_STORAGE_RESERVE_BYTES))
         Unit
     }
 
     @After fun tearDown() = worker {
         failReads.set(false)
-        PayloadSealer.sealedEnvelopeStore = previousEnvelopes
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
-        StorageAdmission::class.java.getDeclaredField("lastCheckedAt").apply { isAccessible = true }
-            .setLong(StorageAdmission, Long.MIN_VALUE)
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, null)
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, null)
+        StorageAdmission.clear(context)
+        EnrollmentTestStores.db = null
+        EnrollmentTestStores.prefs = null
         db.close()
     }
 
-    @Test fun row1UntaggedStorageFailureReopensOnSuccessfulStopButPrivacyFailureRequiresCompletion() = worker {
+    @Test fun untaggedStorageFailureReopensOnSuccessfulStopButPrivacyFailureRequiresCompletion() = worker {
         val sink = BatterySampleSink(db.batterySampleDao(), persistenceGuard = ResearchPersistenceGate.guard(context, module).capture())
         val batch = listOf(BatterySampleEntry("accepted", "2026-09-30T00:00:00Z", "UTC", 50,
             "DISCHARGING", "NONE", 200, 4000, "GOOD"))
@@ -144,7 +127,7 @@ class AndroidSweepReview3RegressionTest {
         assertTrue(ResearchPersistenceGate.collectsNow(context, module))
     }
 
-    @Test fun row2ExpectedEnrollmentConflictAndValidationNeverLatchHealthyCollection() = worker {
+    @Test fun expectedEnrollmentConflictAndValidationNeverLatchHealthyCollection() = worker {
         assertThrows(SingleEnrollmentConflictException::class.java) {
             ResearchPersistenceGate.enrollmentMutation(context) { db.uploadServerDao().reserveSingleEnrollment(original) }
         }
@@ -158,12 +141,12 @@ class AndroidSweepReview3RegressionTest {
         assertTrue(ResearchPersistenceGate.collectsNow(context, module))
         assertEquals(original, db.uploadServerDao().getConfiguredServer())
         kotlinx.coroutines.runBlocking {
-            assertTrue(com.openlattice.chronicle.ui.participantStorageWrite<Unit> { throw SingleEnrollmentConflictException() }.isFailure)
+            assertTrue(participantStorageWrite<Unit> { throw SingleEnrollmentConflictException() }.isFailure)
         }
         assertTrue("participant UI rejection must not add a storage latch", ResearchPersistenceGate.collectsNow(context, module))
     }
 
-    @Test fun row3MainLifecycleAndStopReturnWhileAuthorizationWorkerIsBusy() {
+    @Test fun mainLifecycleAndStopReturnWhileAuthorizationWorkerIsBusy() {
         val stale = EnrollmentSettings(context)
         worker {
             db.uploadServerDao().update(original.copy(participantId = "participant-B"))
@@ -210,7 +193,7 @@ class AndroidSweepReview3RegressionTest {
             File(this, "diagnostic-snapshot.enc").writeText("diagnostics")
         }
 
-    @Test fun row4RecoveryReplayUsesArchiveOwnerEvenAfterReplacementAndForLegacyIntents() = worker {
+    @Test fun recoveryReplayUsesArchiveOwnerEvenAfterReplacement() = worker {
         val replacement = original.copy(participantId = "participant-B")
         db.uploadServerDao().update(replacement)
         prefs.edit().putString(PARTICIPANT_ID, replacement.participantId).commit()
@@ -227,34 +210,31 @@ class AndroidSweepReview3RegressionTest {
         }
     }
 
-    @Test fun row5EnrollmentErasureDeletesRecoveryAndPreviouslyPreservedDiagnostics() = worker {
+    @Test fun enrollmentErasureDeletesRecoveryAndPreviouslyPreservedDiagnostics() = worker {
         val split = archive("split", original)
-        val legacy = File(context.noBackupFilesDir, "chronicle-recovery/legacy").apply { mkdirs() }
-        File(legacy, "artifact-chronicle.db.enc").writeText("mixed research and diagnostics")
-        File(legacy, "artifact-diagnostics.bin.enc").writeText("separate diagnostic journal")
+        val unsplit = File(context.noBackupFilesDir, "chronicle-recovery/unsplit").apply { mkdirs() }
+        File(unsplit, "artifact-chronicle.db.enc").writeText("mixed research and diagnostics")
+        File(unsplit, "artifact-diagnostics.bin.enc").writeText("separate diagnostic journal")
         LocalStoreRecoveryManager.erasePendingRecoveryArtifacts(context, scope(original))
         val diagnosticRoot = File(context.noBackupFilesDir, "chronicle-diagnostics-recovery")
         assertTrue(File(diagnosticRoot, "split/diagnostic-snapshot.enc").isFile)
         archive("fresh", original)
         LocalStoreRecoveryManager.eraseForEnrollment(context, original.studyId, original.participantId)
         assertFalse(split.exists())
-        assertFalse("an unsplit archive cannot indefinitely defeat explicit erasure", legacy.exists())
+        assertFalse("an unsplit archive cannot indefinitely defeat explicit erasure", unsplit.exists())
         assertTrue(diagnosticRoot.listFiles().orEmpty().isEmpty())
         assertFalse(File(context.noBackupFilesDir, "chronicle-recovery/fresh").exists())
     }
 
-    @Test fun row6ReplacementInstallationRetriesErasureBeforeInstallingWithoutRowInventories() = worker {
+    @Test fun replacementInstallationRetriesErasureBeforeInstallingWithoutRowInventories() = worker {
         ResearchPersistenceGate.stop { fence.installEnrollment(original) }
         db.batterySampleDao().insertAll((1..1000).map { BatterySampleEntry("old-$it", "2026-09-01T00:00:00Z",
             "UTC", 50, "DISCHARGING", "NONE", 200, 4000, "GOOD") })
         db.usagePollCheckpointDao().upsert(UsagePollCheckpointEntity("old-owner-checkpoint", 100))
         val oldArchive = archive("retiring-owner", original)
-        PayloadSealer.sealedEnvelopeStore.save("old-battery", SealedEnvelopeEntry("old-batch",
-            EncryptedEnvelope(keyId = "key", payloadType = EncryptedPayloadType.BATTERY,
-                encryptedKey = "wrapped", iv = "nonce", ciphertext = "sealed", sampleCount = 1000)))
         ResearchPersistenceGate.stop { fence.erase(setOf(module, CollectionModuleId.USAGE_EVENTS),
             ownerKey = ResearchErasureFence.enrollmentKey(original))
-            fence.markRecoveryErasure(original.studyId to original.participantId)
+            fence.markRecoveryErasure(scope(original))
         }
         db.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER fail_retirement BEFORE DELETE ON battery_samples BEGIN SELECT RAISE(ABORT, 'retry'); END")
@@ -271,7 +251,6 @@ class AndroidSweepReview3RegressionTest {
         }
         assertFalse(fence.hasPendingErasures())
         assertEquals(0, db.batterySampleDao().count())
-        assertNull(PayloadSealer.sealedEnvelopeStore.load("old-battery"))
         assertFalse(oldArchive.exists())
         assertNull(db.usagePollCheckpointDao().getLastPollTimestamp("old-owner-checkpoint"))
         assertTrue(context.getSharedPreferences("research_erasure_fence", Context.MODE_PRIVATE).all.keys.none { it.contains("_rows:") })

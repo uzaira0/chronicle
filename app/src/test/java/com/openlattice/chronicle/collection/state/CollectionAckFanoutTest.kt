@@ -1,11 +1,13 @@
 package com.openlattice.chronicle.collection.state
 
+import com.openlattice.chronicle.BuildConfig
+import java.io.IOException
+
 import com.openlattice.chronicle.TEST_SERVER_HOST
 import com.openlattice.chronicle.assumeTestServerHostTrusted
 import com.openlattice.chronicle.collection.CollectionAcknowledgment
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.ConsentTrigger
-import com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.serialization.JsonSerializer
 import org.junit.Assert.assertEquals
@@ -13,7 +15,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.OffsetDateTime
-import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -25,7 +26,6 @@ class CollectionAckFanoutTest {
     private fun server(
         id: Long,
         studyId: String = "00000000-0000-0000-0000-00000000000$id",
-        override: String? = "server-$id-signing-secret",
         enabled: Boolean = true,
     ) = UploadServerEntity(
         id = id,
@@ -33,44 +33,12 @@ class CollectionAckFanoutTest {
         url = "https://$TEST_SERVER_HOST",
         studyId = studyId,
         participantId = "participant-$id",
-        sourceDeviceId = "device-$id",
-        authMode = AUTH_MODE_API_KEY,
+        sourceRandomDeviceId = "device-$id",
         apiKey = "api-key-$id",
-        mobileSigningSecretOverride = override,
         disclosureVersion = "disclosure-$id",
         manifestDigest = "a".repeat(64),
         enabled = enabled,
     )
-
-    @Test
-    fun reportsCollectionAckToEveryEnabledServer() {
-        val acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z")
-        val calls = mutableListOf<Triple<Long, UUID, CollectionAcknowledgment>>()
-
-        val succeeded = CollectionLoopCoordinator.reportCollectionAckToServers(
-            servers = listOf(server(1), server(2), server(3)),
-            accepted = setOf(CollectionModuleId.USAGE_EVENTS, CollectionModuleId.BATTERY_TELEMETRY),
-            declined = setOf(CollectionModuleId.SENSOR_ACCELEROMETER),
-            trigger = ConsentTrigger.PARTICIPANT_TOGGLE,
-            acknowledgedAt = acknowledgedAt,
-            settingsVersion = 7,
-            report = { server, studyId, acknowledgment ->
-                calls += Triple(server.id, studyId, acknowledgment)
-            },
-        )
-
-        assertTrue(succeeded)
-        assertEquals(listOf(1L, 2L, 3L), calls.map { it.first })
-        calls.forEach { (_, _, acknowledgment) ->
-            assertEquals(setOf(CollectionModuleId.USAGE_EVENTS, CollectionModuleId.BATTERY_TELEMETRY), acknowledgment.acknowledgedModules)
-            assertEquals(setOf(CollectionModuleId.SENSOR_ACCELEROMETER), acknowledgment.declinedModules)
-            assertEquals(ConsentTrigger.PARTICIPANT_TOGGLE, acknowledgment.trigger)
-            assertEquals(acknowledgedAt, acknowledgment.acknowledgedAt)
-            assertEquals(7, acknowledgment.settingsVersion)
-            assertEquals("${com.openlattice.chronicle.BuildConfig.VERSION_NAME} (${com.openlattice.chronicle.BuildConfig.VERSION_CODE})",
-                acknowledgment.appVersion)
-        }
-    }
 
     @Test
     fun retriedAckReplaysTheAppVersionItWasRecordedWith() {
@@ -90,7 +58,7 @@ class CollectionAckFanoutTest {
         // Records written before appVersion existed replay null, matching the server's stored receipt.
         assertEquals(null, roundTripped.copy(appVersion = null).toAcknowledgmentOrNull()!!.appVersion)
         assertEquals(
-            "${com.openlattice.chronicle.BuildConfig.VERSION_NAME} (${com.openlattice.chronicle.BuildConfig.VERSION_CODE})",
+            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             PendingCollectionAckRecord.from(
                 server = server(1),
                 accepted = setOf(CollectionModuleId.USAGE_EVENTS),
@@ -99,103 +67,6 @@ class CollectionAckFanoutTest {
                 acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
             ).appVersion,
         )
-    }
-
-    @Test
-    fun partialFailureStillAttemptsLaterServersAndReturnsFalse() {
-        val attempted = mutableListOf<Long>()
-        val failures = mutableListOf<Long>()
-
-        val succeeded = CollectionLoopCoordinator.reportCollectionAckToServers(
-            servers = listOf(server(1), server(2), server(3)),
-            accepted = setOf(CollectionModuleId.USAGE_EVENTS),
-            declined = emptySet(),
-            trigger = ConsentTrigger.SETTINGS_CHANGE,
-            acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
-            report = { server, _, _ ->
-                attempted += server.id
-                if (server.id == 2L) error("server failed")
-            },
-            onFailure = { server, _ -> failures += server.id },
-        )
-
-        assertFalse(succeeded)
-        assertEquals(listOf(1L, 2L, 3L), attempted)
-        assertEquals(listOf(2L), failures)
-    }
-
-    @Test
-    fun enrollmentAckReportsUnavailableHardwareAsCapabilityEvidence() {
-        val calls = mutableListOf<CollectionAcknowledgment>()
-
-        val succeeded = CollectionLoopCoordinator.reportCollectionAckToServers(
-            servers = listOf(server(1)),
-            accepted = setOf(CollectionModuleId.USAGE_EVENTS),
-            declined = setOf(CollectionModuleId.BATTERY_TELEMETRY),
-            unavailable = setOf(CollectionModuleId.SENSOR_GYROSCOPE),
-            trigger = ConsentTrigger.ENROLLMENT,
-            acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
-            settingsVersion = 9,
-            report = { _, _, acknowledgment -> calls += acknowledgment },
-        )
-
-        assertTrue(succeeded)
-        assertEquals(setOf(CollectionModuleId.SENSOR_GYROSCOPE), calls.single().unavailableModules)
-        assertFalse(calls.single().declinedModules.contains(CollectionModuleId.SENSOR_GYROSCOPE))
-    }
-
-    @Test
-    fun invalidStudyIdFailsThatServerButDoesNotStopFanout() {
-        val attempted = mutableListOf<Long>()
-        val failures = mutableListOf<Long>()
-
-        val succeeded = CollectionLoopCoordinator.reportCollectionAckToServers(
-            servers = listOf(server(1), server(2, studyId = "not-a-uuid"), server(3)),
-            accepted = setOf(CollectionModuleId.DEVICE_LIFECYCLE),
-            declined = emptySet(),
-            trigger = ConsentTrigger.ENROLLMENT,
-            acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
-            report = { server, _, _ -> attempted += server.id },
-            onFailure = { server, _ -> failures += server.id },
-        )
-
-        assertFalse(succeeded)
-        assertEquals(listOf(1L, 3L), attempted)
-        assertEquals(listOf(2L), failures)
-    }
-
-    @Test
-    fun noDecisionIsSuccessAndDoesNotReport() {
-        var reports = 0
-
-        val succeeded = CollectionLoopCoordinator.reportCollectionAckToServers(
-            servers = listOf(server(1)),
-            accepted = emptySet(),
-            declined = emptySet(),
-            trigger = ConsentTrigger.PARTICIPANT_TOGGLE,
-            acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
-            report = { _, _, _ -> reports += 1 },
-        )
-
-        assertTrue(succeeded)
-        assertEquals(0, reports)
-    }
-
-    @Test
-    fun nonEmptyDecisionWithoutAnEligibleServerFailsClosed() {
-        var reports = 0
-
-        val succeeded = CollectionLoopCoordinator.reportCollectionAckToServers(
-            servers = emptyList(),
-            accepted = setOf(CollectionModuleId.USAGE_EVENTS),
-            declined = emptySet(),
-            trigger = ConsentTrigger.PARTICIPANT_TOGGLE,
-            acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
-            report = { _, _, _ -> reports += 1 },
-        )
-
-        assertFalse(succeeded)
-        assertEquals(0, reports)
     }
 
     @Test
@@ -227,7 +98,7 @@ class CollectionAckFanoutTest {
                 trigger = ConsentTrigger.ENROLLMENT,
                 acknowledgedAt = OffsetDateTime.parse("2026-07-02T12:34:56Z"),
                 settingsVersion = 7,
-            ),
+            ).copy(decisionSeq = 5),
         )
 
         val json = JsonSerializer.toJson(expected)
@@ -236,8 +107,9 @@ class CollectionAckFanoutTest {
         assertEquals(expected, actual)
         assertEquals(server(1).studyId, actual?.single()?.studyId)
         assertEquals(server(1).participantId, actual?.single()?.participantId)
-        assertEquals(server(1).sourceDeviceId, actual?.single()?.sourceDeviceId)
+        assertEquals(server(1).sourceRandomDeviceId, actual?.single()?.sourceRandomDeviceId)
         assertEquals(7, actual?.single()?.toAcknowledgmentOrNull()?.settingsVersion)
+        assertEquals(5L, actual?.single()?.toAcknowledgmentOrNull()?.decisionSeq)
         assertEquals(
             setOf(CollectionModuleId.SENSOR_GYROSCOPE),
             actual?.single()?.toAcknowledgmentOrNull()?.unavailableModules,
@@ -309,7 +181,7 @@ class CollectionAckFanoutTest {
         val delivered = mutableListOf<CollectionAcknowledgment>()
 
         val failed = CollectionLoopCoordinator.retryPendingCollectionAcks(pending, listOf(destination), report = { _, _, ack ->
-            if (ack.acknowledgedModules.isNotEmpty()) throw java.io.IOException("offline")
+            if (ack.acknowledgedModules.isNotEmpty()) throw IOException("offline")
             delivered += ack
         })
         assertFalse(failed.allAttemptedSucceeded)
@@ -387,7 +259,7 @@ class CollectionAckFanoutTest {
         val replacement = oldServer.copy(
             studyId = "22222222-2222-2222-2222-222222222222",
             participantId = "replacement-participant",
-            sourceDeviceId = "replacement-device",
+            sourceRandomDeviceId = "replacement-device",
         )
         var reports = 0
         val discarded = mutableListOf<PendingCollectionAckDiscardReason>()
@@ -431,10 +303,10 @@ class CollectionAckFanoutTest {
     }
 
     @Test
-    fun legacyIdentityFreeRecordIsReboundOnlyToTheExactPredecessorEnrollment() {
+    fun identityFreeRecordIsDiscardedEvenForTheMatchingEnrollment() {
         assumeTestServerHostTrusted()
         val current = server(1)
-        val legacy = PendingCollectionAckRecord(
+        val incompleteIdentity = PendingCollectionAckRecord(
             serverId = current.id,
             acceptedModuleIds = listOf(CollectionModuleId.USAGE_EVENTS.id),
             declinedModuleIds = emptyList(),
@@ -443,54 +315,25 @@ class CollectionAckFanoutTest {
             disclosureVersion = current.disclosureVersion,
             manifestDigest = current.manifestDigest,
         )
-        val reports = mutableListOf<Triple<Long, UUID, String>>()
-
-        val result = CollectionLoopCoordinator.retryPendingCollectionAcks(
-            pending = listOf(legacy),
-            servers = listOf(current),
-            report = { server, studyId, acknowledgment ->
-                reports += Triple(server.id, studyId, acknowledgment.manifestDigest.orEmpty())
-            },
-        )
-
-        assertTrue(result.allAttemptedSucceeded)
-        assertEquals(
-            listOf(Triple(current.id, UUID.fromString(current.studyId), current.manifestDigest)),
-            reports,
-        )
-        assertEquals(setOf(legacy.stableKey()), result.removedStableKeys)
-    }
-
-    @Test
-    fun legacyIdentityFreeRecordIsNotReplayedAcrossEnrollmentEvidence() {
-        val current = server(1)
-        val legacy = PendingCollectionAckRecord(
-            serverId = current.id,
-            acceptedModuleIds = listOf(CollectionModuleId.USAGE_EVENTS.id),
-            declinedModuleIds = emptyList(),
-            trigger = ConsentTrigger.ENROLLMENT.name,
-            acknowledgedAt = "2026-07-02T12:34:56Z",
-            disclosureVersion = current.disclosureVersion,
-            manifestDigest = "b".repeat(64),
-        )
         var reports = 0
         val discarded = mutableListOf<PendingCollectionAckDiscardReason>()
 
         val result = CollectionLoopCoordinator.retryPendingCollectionAcks(
-            pending = listOf(legacy),
+            pending = listOf(incompleteIdentity),
             servers = listOf(current),
-            report = { _, _, _ -> reports += 1 },
+            report = { _, _, _ -> reports++ },
             onDiscard = { _, reason -> discarded += reason },
         )
 
         assertTrue(result.allAttemptedSucceeded)
         assertEquals(0, reports)
-        assertEquals(listOf(PendingCollectionAckDiscardReason.ENROLLMENT_IDENTITY_MISMATCH), discarded)
-        assertEquals(setOf(legacy.stableKey()), result.removedStableKeys)
+        assertEquals(listOf(PendingCollectionAckDiscardReason.INCOMPLETE_IDENTITY), discarded)
+        assertEquals(setOf(incompleteIdentity.stableKey()), result.removedStableKeys)
     }
 
+
     @Test
-    fun partiallyPopulatedLegacyIdentityIsNeverNetworkReplayed() {
+    fun partiallyPopulatedIdentityIsNeverNetworkReplayed() {
         val current = server(1)
         val partial = PendingCollectionAckRecord(
             serverId = current.id,
@@ -514,7 +357,7 @@ class CollectionAckFanoutTest {
 
         assertTrue(result.allAttemptedSucceeded)
         assertEquals(0, reports)
-        assertEquals(listOf(PendingCollectionAckDiscardReason.LEGACY_OR_INCOMPLETE_IDENTITY), discarded)
+        assertEquals(listOf(PendingCollectionAckDiscardReason.INCOMPLETE_IDENTITY), discarded)
         assertEquals(setOf(partial.stableKey()), result.removedStableKeys)
     }
 

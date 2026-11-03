@@ -6,6 +6,7 @@ import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
 import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.recordAccessEpisodes
 import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 
 /** Persisted provider failures supplement OS permission checks; each recovery ends its episode. */
 internal object CaptureRegistrationStatus {
@@ -16,7 +17,7 @@ internal object CaptureRegistrationStatus {
 
     fun clear(context: Context) {
         (listOf(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)) + modules.map { episodePrefs(context, it) }).forEach {
-            com.openlattice.chronicle.storage.checkLocalStoreWrite(it.edit().clear().commit())
+            checkLocalStoreWrite(it.edit().clear().commit())
         }
     }
     fun failedModules(context: Context): Set<CollectionModuleId> {

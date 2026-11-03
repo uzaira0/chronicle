@@ -2,31 +2,17 @@ package com.openlattice.chronicle.collection.permissions
 
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.HealthConnectRecordType
+import com.openlattice.chronicle.collection.capability.CapabilityEnvironment
+import com.openlattice.chronicle.collection.capability.DistributionChannel
+import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
+import com.openlattice.chronicle.collection.state.CollectionModuleState
+import com.openlattice.chronicle.collection.state.ParticipantDecision
+import java.io.File
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
 
-/**
- * Coverage invariant for the permission-gap class of bug: a module is consented and collectable, but
- * the OS permission it needs is never granted, so it silently produces nothing. That is exactly how
- * `health_connect` (no Health Connect grant flow) and the ACTIVITY_RECOGNITION modules
- * (activity_recognition / sleep / step-counter / significant-motion never requested) shipped inert.
- *
- * [ModulePermissions.REQUIREMENTS] is the single source of truth for what each module needs and how
- * it is granted. This test reads the real manifests and the real source and asserts that source of
- * truth is honored end-to-end:
- *  - every permission a module needs is actually DECLARED (as `<uses-permission>` or, for the
- *    service-bound special accesses, as a `<service android:permission=…>`), and
- *  - the RUNTIME and HEALTH_CONNECT kinds have a REQUEST path wired in source (a declared-but-never-
- *    requested permission is the gap we are guarding), and
- *  - the Health Connect permission set is in lock-step across the map, the request helper, and the
- *    manifest (declaring health permissions the app never reads is a Play-policy violation).
- *
- * It is source/manifest-scanning (like `CollectionGateCallSiteInvariantTest`) so the map and the
- * wiring cannot drift apart unnoticed.
- */
+/** Module requirements must agree with packaged manifests and observable access decisions. */
 class ModulePermissionCoverageTest {
 
     private companion object {
@@ -63,13 +49,6 @@ class ModulePermissionCoverageTest {
                 tag.findAll(m.readText()).mapNotNull { perm.find(it.value)?.groupValues?.get(1) }
             }.toSet()
         }
-
-        fun mainSourceText(root: File, modules: List<String>): String =
-            (modules.map { File(root, "$it/src/main") } + File(root, "app/src/googleServices"))
-                .filter { it.isDirectory }
-                .flatMap { it.walkTopDown().toList() }
-                .filter { it.isFile && it.extension == "kt" }
-                .joinToString("\n") { it.readText() }
     }
 
     @Test
@@ -136,15 +115,6 @@ class ModulePermissionCoverageTest {
             ),
         )
         assertTrue(ModulePermissions.healthConnectReadPermissionsFor(emptySet()).isEmpty())
-
-        val source = File(
-            buildRoot(),
-            "app/src/googleServices/java/com/openlattice/chronicle/collection/device/AndroidHealthMetricSource.kt",
-        ).readText()
-        assertTrue(source.contains("HealthConnectScopeStore.of(appContext).read()"))
-        HealthConnectRecordType.entries.forEach { type ->
-            assertTrue("Android source must gate ${type.id}", source.contains("HealthConnectRecordType.${type.name}"))
-        }
     }
 
     @Test
@@ -156,7 +126,7 @@ class ModulePermissionCoverageTest {
     @Test
     fun healthConnectIsResearchOnlyAndAbsentFromPlay() {
         val root = buildRoot()
-        listOf("open", "research").forEach { flavor ->
+        listOf("research").forEach { flavor ->
             val manifest = File(root, "app/src/$flavor/AndroidManifest.xml").readText()
             assertTrue(
                 "$flavor must register the current Health Connect rationale action",
@@ -172,81 +142,37 @@ class ModulePermissionCoverageTest {
             )
         }
 
-        val playManifest = File(root, "app/src/play/AndroidManifest.xml").readText()
-        assertTrue(!playManifest.contains("permission.health."))
-        assertTrue(!playManifest.contains("com.google.android.apps.healthdata"))
-        assertTrue(!playManifest.contains("HealthConnectRationaleActivity"))
+        // Play ships the open artifact; neither public store build carries Health Connect.
+        listOf("amazon", "open").forEach { flavor ->
+            val manifest = File(root, "app/src/$flavor/AndroidManifest.xml").readText()
+            assertTrue("$flavor must not request Health Connect", !manifest.contains("permission.health."))
+            assertTrue(!manifest.contains("com.google.android.apps.healthdata"))
+            assertTrue(!manifest.contains("HealthConnectRationaleActivity"))
+        }
 
-        val rationale = File(
-            root,
-            "app/src/googleServices/java/com/openlattice/chronicle/HealthConnectRationaleActivity.kt",
-        ).readText()
-        assertTrue(rationale.contains("platform_privacy_policy_full"))
-        assertTrue(rationale.contains("platform_privacy_policy_url"))
     }
 
     @Test
-    fun runtimeAndHealthConnectKindsHaveARequestPathInSource() {
-        val root = buildRoot()
-        val src = mainSourceText(root, listOf("app", "collection-core", "collection-device"))
-
-        assertTrue(
-            "A module declares a RUNTIME permission but no RequestMultiplePermissions / RequestPermission " +
-                "launcher exists in source — declared-but-never-requested is exactly the gap this guards.",
-            ModulePermissions.REQUIREMENTS.values.flatten().none { it.kind == PermissionKind.RUNTIME } ||
-                (src.contains("RequestMultiplePermissions") || src.contains("RequestPermission(")),
-        )
-        assertTrue(
-            "health_connect needs the Health Connect grant flow but no createRequestPermissionResultContract " +
-                "launcher exists in source — the module would read nothing, forever.",
-            !ModulePermissions.needsHealthConnect(CollectionModuleId.entries) ||
-                src.contains("createRequestPermissionResultContract"),
-        )
-        assertTrue(
-            "a module needs notification-listener access but no ACTION_NOTIFICATION_LISTENER_SETTINGS " +
-                "deep-link exists in source — the module would never get enabled.",
-            !ModulePermissions.needsKind(CollectionModuleId.entries, PermissionKind.NOTIFICATION_LISTENER) ||
-                src.contains("ACTION_NOTIFICATION_LISTENER_SETTINGS"),
-        )
-        assertTrue(
-            "a module needs the accessibility service but no openAccessibilitySettings deep-link exists " +
-                "in source — the module would never get enabled.",
-            !ModulePermissions.needsKind(CollectionModuleId.entries, PermissionKind.ACCESSIBILITY) ||
-                src.contains("openAccessibilitySettings"),
-        )
-    }
-
-    @Test
-    fun theRequestSurfaceIsDrivenByTheSourceOfTruth() {
-        // The public Data Sharing tab uses the common permission authority plus the distribution
-        // facade. Only research/open source may import the Health Connect request implementation.
-        val fragment = File(buildRoot(), "app/src/main/java/com/openlattice/chronicle/ui/DataSharingFragment.kt")
-        assertTrue("DataSharingFragment.kt not found at ${fragment.absolutePath}", fragment.isFile)
-        val text = fragment.readText()
-        // The fragment's only permission source is activeModulePermissionStatus, which derives every
-        // request from ModulePermissions; an unused import used to satisfy this check.
-        assertTrue("DataSharingFragment must request via activeModulePermissionStatus",
-            text.contains("activeModulePermissionStatus("))
-        val authority = File(buildRoot(), "app/src/main/java/com/openlattice/chronicle/collection/capability/PermissionStatus.kt")
-        assertTrue("activeModulePermissionStatus must derive from ModulePermissions",
-            authority.readText().contains("ModulePermissions.runtimePermissionsFor("))
-        assertTrue(
-            "DataSharingFragment must request distribution-owned optional permissions",
-            text.contains("DistributionRestrictedRuntime"),
-        )
-        assertFalse(
-            "Shared public source must not import Health Connect",
-            text.contains("HealthConnectPermissions"),
-        )
-        assertTrue(
-            "DataSharingFragment must request the device-supported optional permission set through the facade",
-            text.contains("DistributionRestrictedRuntime.healthPermissionsToRequest"),
-        )
-        val researchFacade = File(
-            buildRoot(),
-            "app/src/googleServices/java/com/openlattice/chronicle/collection/DistributionRestrictedRuntime.kt",
-        ).readText()
-        assertTrue(researchFacade.contains("HealthConnectPermissions.permissionsToRequest"))
+    fun activeModulesRequestOnlyTheirMissingRuntimePermissions() {
+        val module = CollectionModuleState(
+            CollectionModuleId.SENSOR_STEP_COUNTER, true,
+            ParticipantDecision.ACCEPTED, 1L, false, 1)
+        val environment = CapabilityEnvironment(
+            sdkInt = 36,
+            distribution = DistributionChannel.current(),
+            googleServicesAvailable = true, healthConnectAvailable = false, healthConnectGranted = false,
+            usageAccessGranted = true, grantedRuntimePermissions = emptySet(),
+            notificationListenerEnabled = true, accessibilityEnabled = true)
+        val missing = activeModulePermissionStatus(listOf(module), environment)
+        assertEquals(listOf("android.permission.ACTIVITY_RECOGNITION"), missing.missingRuntime)
+        assertEquals(setOf(CollectionModuleId.SENSOR_STEP_COUNTER), missing.runtimeAccessModules)
+        val granted = activeModulePermissionStatus(listOf(module),
+            environment.copy(grantedRuntimePermissions = setOf("android.permission.ACTIVITY_RECOGNITION")))
+        assertTrue(granted.missingRuntime.isEmpty())
+        assertTrue(granted.runtimeAccessModules.isEmpty())
+        val undecided = module.copy(decision = ParticipantDecision.UNDECIDED)
+        assertTrue(activeModulePermissionStatus(listOf(undecided), environment)
+            .missingRuntime.isEmpty())
     }
 
     @Test

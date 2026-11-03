@@ -1,19 +1,23 @@
 package com.openlattice.chronicle.preferences
 
+import android.content.Context
 import com.openlattice.chronicle.api.MobileEnrollmentManifest
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
 import com.openlattice.chronicle.collection.state.CollectionModuleState
 import com.openlattice.chronicle.collection.state.CollectionStateMachine
+import com.openlattice.chronicle.collection.state.ResearchErasureFence
 import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.checkLocalStoreWrite
 import java.net.URI
 import java.util.Locale
 import java.util.UUID
 
 /**
  * Verifies enrollment evidence before using the settings state applied for that enrollment.
- * Consent-gated modules also require the participant's current decision.
+ * Consent-gated modules also require the participant's current decision; an operational module follows
+ * [appliedOperationalModules], the latest applied settings, once a settings sync has stored them.
  */
 internal fun configuredStudyModuleEnabled(
     server: UploadServerEntity?,
@@ -21,22 +25,9 @@ internal fun configuredStudyModuleEnabled(
     participantId: String,
     moduleId: CollectionModuleId,
     currentState: CollectionModuleState? = null,
+    appliedOperationalModules: Set<CollectionModuleId>? = null,
 ): Boolean {
-    if (server == null || !server.enabled || !server.enrollmentSetupComplete) return false
-    if (server.studyId != studyId.toString() || server.participantId != participantId) return false
-    val rawManifest = server.studyDisclosureJson ?: return false
-    val disclosureVersion = server.disclosureVersion ?: return false
-    val manifestDigest = server.manifestDigest ?: return false
-    if (!LOWERCASE_SHA_256.matches(manifestDigest)) return false
-    val manifest = runCatching {
-        ChronicleJson.moshi.adapter(MobileEnrollmentManifest::class.java).fromJson(rawManifest)
-    }.getOrNull() ?: return false
-    if (
-        manifest.studyId != studyId ||
-        manifest.participantId != participantId ||
-        manifest.participantPolicy.version != disclosureVersion ||
-        canonicalHttpsOrigin(manifest.serverOrigin) != canonicalHttpsOrigin(server.url)
-    ) return false
+    val manifest = verifiedManifest(server, studyId, participantId) ?: return false
     val enabledAtEnrollment = moduleId in manifest.collectionSettings.effectiveEnabledModuleIds()
     val consentGated = moduleId in CollectionStateMachine.ACK_GATED_MODULES
     if (currentState != null) {
@@ -47,7 +38,38 @@ internal fun configuredStudyModuleEnabled(
             (if (consentGated) currentState.collectsWhenEnrolled
             else currentState.serverEnabled)
     }
-    return enabledAtEnrollment && !consentGated
+    return !consentGated && (appliedOperationalModules?.contains(moduleId) ?: enabledAtEnrollment)
+}
+
+/** The enrollment's manifest, when the stored enrollment evidence matches the expected study, participant and origin. */
+private fun verifiedManifest(server: UploadServerEntity?, studyId: UUID, participantId: String): MobileEnrollmentManifest? {
+    if (server == null || !server.enabled || !server.enrollmentSetupComplete) return null
+    if (server.studyId != studyId.toString() || server.participantId != participantId) return null
+    if (server.manifestDigest?.let(LOWERCASE_SHA_256::matches) != true) return null
+    val manifest = server.studyDisclosureJson?.let { raw ->
+        runCatching { ChronicleJson.moshi.adapter(MobileEnrollmentManifest::class.java).fromJson(raw) }.getOrNull()
+    } ?: return null
+    return manifest.takeIf {
+        it.studyId == studyId && it.participantId == participantId &&
+            it.participantPolicy.version == server.disclosureVersion &&
+            canonicalHttpsOrigin(it.serverOrigin) == canonicalHttpsOrigin(server.url)
+    }
+}
+
+/** The operational modules (those with no consent decision) the latest applied study settings enable, per enrollment. */
+internal object AppliedOperationalModules {
+    private const val PREFS = "applied_operational_modules"
+
+    private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun save(context: Context, owner: UploadServerEntity, enabled: Set<CollectionModuleId>) = checkLocalStoreWrite(
+        prefs(context).edit().clear()
+            .putStringSet(ResearchErasureFence.enrollmentKey(owner), enabled.mapTo(HashSet()) { it.id }).commit(),
+    )
+
+    fun load(context: Context, owner: UploadServerEntity): Set<CollectionModuleId>? =
+        prefs(context).getStringSet(ResearchErasureFence.enrollmentKey(owner), null)
+            ?.mapNotNullTo(HashSet(), CollectionModuleId::fromIdOrNull)
 }
 
 private fun canonicalHttpsOrigin(raw: String): String? {

@@ -6,26 +6,23 @@ import android.database.sqlite.SQLiteException
 import android.os.Looper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.EnrollmentTestStores
+import com.openlattice.chronicle.WorkManagerRule
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.ConsentTrigger
 import com.openlattice.chronicle.collection.SensorCollectionModules
-import com.openlattice.chronicle.collection.sensors.SensorRuntimeController
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
 import com.openlattice.chronicle.preferences.STUDY_ID
 import com.openlattice.chronicle.services.sensors.HardwareSensorService
 import com.openlattice.chronicle.storage.ChronicleDb
-import com.openlattice.chronicle.storage.CollectionModuleStateDao
 import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import com.openlattice.chronicle.storage.LocalStoreRecoveryManager
 import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.checkedSQLiteOpenHelperFactory
 import java.io.File
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Proxy
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -35,6 +32,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -46,8 +44,11 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class, sdk = [28])
 class AndroidSweepReview6RegressionTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
+    // Sensor startup enqueues the direct-boot drain; the plain Application has no WorkManager.
+    @get:Rule val workManagerRule = WorkManagerRule()
     private val sensorModule = SensorCollectionModules.moduleFor(AndroidSensorType.accelerometer)
     private lateinit var db: ChronicleDb
+    private var beforeSql: (String) -> Unit = {}
 
     private fun <T> worker(action: () -> T): T {
         val future = CompletableFuture<T>()
@@ -63,73 +64,70 @@ class AndroidSweepReview6RegressionTest {
         prefs.edit().clear().putString(STUDY_ID, "11111111-1111-1111-1111-111111111111")
             .putString(PARTICIPANT_ID, "participant").putString(PARTICIPATION_STATUS, "ENROLLED")
             .putStringSet("sensor_enabled_types", setOf(AndroidSensorType.accelerometer.name)).commit()
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, prefs)
-        db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).build()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
-        db.uploadServerDao().insert(UploadServerEntity(name = "study", url = "https://localhost",
-            studyId = prefs.getString(STUDY_ID, "")!!, participantId = "participant", sourceDeviceId = "device"))
+        EnrollmentTestStores.prefs = prefs
+        db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java)
+            .openHelperFactory(checkedSQLiteOpenHelperFactory { beforeSql(it) }).build()
+        org.robolectric.Shadows.shadowOf(context.getSystemService(android.hardware.SensorManager::class.java))
+            .addSensor(org.robolectric.shadows.SensorBuilder.newBuilder().setType(android.hardware.Sensor.TYPE_ACCELEROMETER).build())
+        EnrollmentTestStores.db = db
+        db.uploadServerDao().insert(UploadServerEntity(name = "study", url = "https://localhost", apiKey = "test-device-key",
+            studyId = prefs.getString(STUDY_ID, "")!!, participantId = "participant", sourceRandomDeviceId = "device"))
         db.collectionModuleStateDao().upsertAll(listOf(CollectionModuleId.HEALTH_CONNECT, CollectionModuleId.BATTERY_TELEMETRY, sensorModule).map {
-            CollectionModuleStateEntity(it.id, true, ParticipantDecision.ACCEPTED.name, 1, false, 1, null, null)
+            CollectionModuleStateEntity(it.id, true, ParticipantDecision.ACCEPTED.name, 1, false, 1)
         })
         ResearchPersistenceGate.initialize(context)
     }
 
     @After fun tearDown() = worker {
         ResearchPersistenceGate.resetAfterLocalStoreRecovery()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, null)
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, null)
+        EnrollmentTestStores.db = null
+        EnrollmentTestStores.prefs = null
         db.close()
     }
 
-    private fun swapModuleStateDao(failing: AtomicBoolean, method: String, attempts: AtomicInteger = AtomicInteger()): () -> Unit {
-        val dao = db.collectionModuleStateDao()
-        val proxy = Proxy.newProxyInstance(CollectionModuleStateDao::class.java.classLoader, arrayOf(CollectionModuleStateDao::class.java)) { _, m,
-            args ->
-            if (m.name == method && failing.get()) {
+    private fun refuseModuleStateSql(failing: AtomicBoolean, method: String, attempts: AtomicInteger = AtomicInteger()): () -> Unit {
+        beforeSql = { sql ->
+            val target = "collection_module_state" in sql && when (method) {
+                "getAll" -> sql.startsWith("SELECT", ignoreCase = true)
+                "upsertAll" -> sql.startsWith("INSERT", ignoreCase = true)
+                else -> error("unexpected SQL refusal target $method")
+            }
+            if (target && failing.get()) {
                 attempts.incrementAndGet()
                 throw SQLiteException("temporary module-state failure")
             }
-            try { m.invoke(dao, *(args ?: emptyArray())) } catch (error: InvocationTargetException) { throw error.targetException }
         }
-        val field = db.javaClass.getDeclaredField("_collectionModuleStateDao").apply { isAccessible = true }
-        field.set(db, lazyOf(proxy))
-        return { field.set(db, lazyOf(dao)) }
+        return { beforeSql = {} }
     }
 
     @Test fun transientStartupGateReadRetriesInsteadOfStoppingTheSensorService() {
         val failing = AtomicBoolean(true)
         val attempts = AtomicInteger()
-        val restore = swapModuleStateDao(failing, "countRequiredDeclined", attempts)
+        val restore = refuseModuleStateSql(failing, "getAll", attempts)
         val service = Robolectric.buildService(HardwareSensorService::class.java).create().get()
-        val startup = service.javaClass.getDeclaredField("startupExecutor").apply { isAccessible = true }.get(service) as ExecutorService
         try {
             waitUntil { attempts.get() >= 2 }
             shadowOf(Looper.getMainLooper()).idle()
             assertFalse("a transient gate read must not be treated as 'no sensor enabled'", shadowOf(service).isStoppedBySelf)
             failing.set(false)
             waitUntil {
-                (service.javaClass.getDeclaredField("controller").apply { isAccessible = true }.get(
-                    service) as? SensorRuntimeController)?.isStarted == true
+                shadowOf(context.getSystemService(android.hardware.SensorManager::class.java)).listeners.isNotEmpty()
             }
         } finally {
             failing.set(false)
             service.onDestroy()
-            assertTrue(startup.awaitTermination(5, TimeUnit.SECONDS))
             restore()
         }
     }
 
     @Test fun declineWhoseSaveFailedReopensCollectionOnceReplayCompletesIt() {
         val failing = AtomicBoolean(true)
-        val restore = swapModuleStateDao(failing, "upsertAll")
+        val restore = refuseModuleStateSql(failing, "upsertAll")
         val coordinator = CollectionLoopCoordinator(context)
         try {
             val error = runCatching { worker {
-                CollectionLoopCoordinator::class.java.getDeclaredMethod("applyDecisionsIf", Set::class.java,
-                    Set::class.java, ConsentTrigger::class.java, Boolean::class.javaPrimitiveType,
-                    kotlin.Function0::class.java).apply { isAccessible = true }
-                    .invoke(coordinator, emptySet<CollectionModuleId>(), setOf(CollectionModuleId.BATTERY_TELEMETRY),
-                        ConsentTrigger.values().first(), false, { true })
+                coordinator.applyDecisions(emptySet(), setOf(CollectionModuleId.BATTERY_TELEMETRY),
+                    ConsentTrigger.values().first())
             } }.exceptionOrNull()
             assertNotNull("the decline's state save must fail", error)
             assertFalse(ResearchPersistenceGate.collectsNow(context, CollectionModuleId.HEALTH_CONNECT))
@@ -148,16 +146,13 @@ class AndroidSweepReview6RegressionTest {
 
     @Test fun declineThatNeverCommittedKeepsCollectionClosed() {
         val failing = AtomicBoolean(true)
-        val restore = swapModuleStateDao(failing, "upsertAll")
+        val restore = refuseModuleStateSql(failing, "upsertAll")
         val coordinator = CollectionLoopCoordinator(context)
         try {
             // The replayed save fails too, so the decline never becomes durable.
             runCatching { worker {
-                CollectionLoopCoordinator::class.java.getDeclaredMethod("applyDecisionsIf", Set::class.java,
-                    Set::class.java, ConsentTrigger::class.java, Boolean::class.javaPrimitiveType,
-                    kotlin.Function0::class.java).apply { isAccessible = true }
-                    .invoke(coordinator, emptySet<CollectionModuleId>(), setOf(CollectionModuleId.BATTERY_TELEMETRY),
-                        ConsentTrigger.values().first(), false, { true })
+                coordinator.applyDecisions(emptySet(), setOf(CollectionModuleId.BATTERY_TELEMETRY),
+                    ConsentTrigger.values().first())
             } }
             runCatching { worker { coordinator.replayPendingErasures() } }
             assertEquals(ParticipantDecision.ACCEPTED, worker { CollectionLoopStore.of(context).loadAll(
@@ -195,7 +190,9 @@ class AndroidSweepReview6RegressionTest {
 
     private fun waitUntil(predicate: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
-        while (!predicate() && System.nanoTime() < deadline) Thread.sleep(10)
+        while (!predicate() && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(10)
+        }
         assertTrue("condition not reached before the deadline", predicate())
     }
 }

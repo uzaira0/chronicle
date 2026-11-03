@@ -7,8 +7,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import com.google.android.material.button.MaterialButton
 import com.openlattice.chronicle.R
+import com.openlattice.chronicle.audit.AuditStores
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.layout.TestStores
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,7 +21,7 @@ class OrientationRecreationTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test fun stepAndDecisionsSurviveRecreation() {
-        TestStores.install(context, enrolled = false)
+        AuditStores.install(context, enrolled = false)
         val plan = ConsentPlan(
             required = listOf(CollectionModuleId.USAGE_EVENTS),
             optional = listOf(CollectionModuleId.BATTERY_TELEMETRY),

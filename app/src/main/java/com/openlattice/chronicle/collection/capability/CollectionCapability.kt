@@ -4,47 +4,58 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.SensorManager
 import android.os.Build
-import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
 import androidx.core.content.ContextCompat
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.R
-import com.openlattice.chronicle.ui.CopyResolver
-import com.openlattice.chronicle.ui.englishCopy
+import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.SensorCollectionModules
-import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.permissions.ModulePermissions
 import com.openlattice.chronicle.collection.permissions.PermissionKind
+import com.openlattice.chronicle.collection.state.CaptureRegistrationStatus
 import com.openlattice.chronicle.hasUsageSettingPermission
 import com.openlattice.chronicle.sensors.SensorTypeMapping
+import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
+import com.openlattice.chronicle.ui.CopyResolver
+import com.openlattice.chronicle.ui.englishCopy
 
-public enum class DistributionChannel {
-    PLAY,
-    AMAZON,
-    RESEARCH,
-    OPEN;
+public enum class DistributionChannel(public val minimalPublic: Boolean) {
+    AMAZON(minimalPublic = true),
+    RESEARCH(minimalPublic = false),
+    OPEN(minimalPublic = false);
 
     public companion object {
-        public fun current(): DistributionChannel = valueOf(BuildConfig.DISTRIBUTION_CHANNEL)
+        private val configured = valueOf(BuildConfig.DISTRIBUTION_CHANNEL)
+
+        public fun current(): DistributionChannel = configured
     }
 }
 
 /**
- * Distribution-level collection boundary. The Play artifact intentionally carries only the
+ * Distribution-level collection boundary. The Amazon artifact intentionally carries only the
  * smallest useful research surface: app usage, basic device telemetry, upload diagnostics, and
  * the participant's explicitly requested unlock-identification prompt. A study requesting any
  * other module must be rejected before consent rather than silently collecting less than its
  * signed manifest promises.
  */
 internal object DistributionModulePolicy {
-    /** Generated from `src/play/assets/approved-module-registry.json` at build time. */
-    internal val playSupportedModules: Set<CollectionModuleId> =
-        BuildConfig.PLAY_APPROVED_MODULE_IDS.split(',')
+    internal fun supports(moduleId: CollectionModuleId): Boolean = supports(DistributionChannel.current(), moduleId)
+
+    /** Generated from `src/amazon/assets/approved-module-registry.json` at build time. */
+    internal val amazonSupportedModules: Set<CollectionModuleId> =
+        approvedModules(BuildConfig.AMAZON_APPROVED_MODULE_IDS)
+
+    /** Generated from this flavor's approved-module registry; research has no allowlist. */
+    private val distributionSupportedModules: Set<CollectionModuleId> =
+        approvedModules(BuildConfig.DISTRIBUTION_APPROVED_MODULE_IDS)
+
+    private fun approvedModules(moduleIds: String): Set<CollectionModuleId> =
+        moduleIds.split(',')
             .filter(String::isNotBlank)
             .mapTo(linkedSetOf()) { moduleId ->
                 requireNotNull(CollectionModuleId.fromIdOrNull(moduleId)) {
-                    "Unknown module in the approved Play registry: $moduleId"
+                    "Unknown module in the approved registry: $moduleId"
                 }
             }
 
@@ -65,10 +76,8 @@ internal object DistributionModulePolicy {
     ) + SensorCollectionModules.sensorModuleIds
 
     /**
-     * Per-distribution module allowlist. Play and Amazon carry the approved registry only. The
-     * full distributions (OPEN, RESEARCH) support every module exactly when the artifact was
-     * built with the restricted collectors compiled in; the policy reads the same build flag
-     * the runtime gates read, so it can never promise a module the runtime will not start.
+     * Amazon and Open require registry approval. Research has no allowlist. Open and
+     * Research also require the restricted collectors for modules whose runtime uses them.
      */
     internal fun supports(distribution: DistributionChannel, moduleId: CollectionModuleId): Boolean =
         supports(distribution, moduleId, BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)
@@ -79,8 +88,10 @@ internal object DistributionModulePolicy {
         restrictedCollectorsCompiledIn: Boolean,
     ): Boolean =
         when (distribution) {
-            DistributionChannel.PLAY, DistributionChannel.AMAZON -> moduleId in playSupportedModules
-            DistributionChannel.OPEN, DistributionChannel.RESEARCH ->
+            DistributionChannel.AMAZON -> moduleId in amazonSupportedModules
+            DistributionChannel.OPEN -> moduleId in distributionSupportedModules &&
+                (restrictedCollectorsCompiledIn || moduleId !in restrictedResearchModules)
+            DistributionChannel.RESEARCH ->
                 restrictedCollectorsCompiledIn || moduleId !in restrictedResearchModules
         }
 }
@@ -127,7 +138,7 @@ public data class CapabilityEnvironment(
 
 private val ENGLISH_CAPABILITY: CopyResolver = englishCopy(
     mapOf(
-        R.string.cap_not_in_play to "%s is not included in the minimal Google Play release",
+        R.string.cap_not_in_play to "%s is not included in this minimal release",
         R.string.cap_sensor_unavailable to "%s is not available on this device",
         R.string.cap_optional_not_included to "This optional module is not included in this distribution",
         R.string.cap_hc_fire_os to "Health Connect is not available on Fire OS",
@@ -160,10 +171,6 @@ public object CollectionCapabilityResolver {
             CollectionModuleId.entries,
             Build.VERSION.SDK_INT,
         )
-        val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-        val availableSensors = AndroidSensorType.entries.filterTo(linkedSetOf()) { sensorType ->
-            sensorManager?.getDefaultSensor(SensorTypeMapping.toAndroidType(sensorType)) != null
-        }
         return CapabilityEnvironment(
             sdkInt = Build.VERSION.SDK_INT,
             distribution = DistributionChannel.current(),
@@ -174,15 +181,50 @@ public object CollectionCapabilityResolver {
             healthConnectGranted = BuildConfig.HAS_HEALTH_CONNECT &&
                 DistributionRestrictedRuntime.healthConnectGranted(appContext),
             usageAccessGranted = hasUsageSettingPermission(appContext),
-            failedCaptureRegistrations = com.openlattice.chronicle.collection.state.CaptureRegistrationStatus.failedModules(appContext),
+            failedCaptureRegistrations = CaptureRegistrationStatus.failedModules(appContext),
             grantedRuntimePermissions = activeRuntimePermissions.filterTo(linkedSetOf()) {
                 ContextCompat.checkSelfPermission(appContext, it) == PackageManager.PERMISSION_GRANTED
             },
             notificationListenerEnabled = hasNotificationListenerAccess(appContext),
             accessibilityEnabled = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
                 DistributionRestrictedRuntime.interactionAccessibilityEnabled(appContext),
-            availableSensors = availableSensors,
+            availableSensors = availableSensors(appContext),
         )
+    }
+
+    public fun availableSensors(context: Context): Set<AndroidSensorType> {
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        return AndroidSensorType.entries.filterTo(linkedSetOf()) { sensorType ->
+            sensorManager?.getDefaultSensor(SensorTypeMapping.toAndroidType(sensorType)) != null
+        }
+    }
+
+    private fun CopyResolver.text(id: Int, vararg args: Any): String = invoke(id, args)
+
+    private fun serviceCapability(
+        moduleId: CollectionModuleId,
+        environment: CapabilityEnvironment,
+        copy: CopyResolver,
+    ): CollectionCapability? {
+        return when {
+            moduleId == CollectionModuleId.HEALTH_CONNECT -> when {
+                !BuildConfig.HAS_HEALTH_CONNECT -> CollectionCapability.PolicyDisabled(copy.text(R.string.cap_optional_not_included))
+                environment.distribution == DistributionChannel.AMAZON -> CollectionCapability.ServiceUnavailable(copy.text(R.string.cap_hc_fire_os))
+                environment.sdkInt < Build.VERSION_CODES.P ->
+                    CollectionCapability.UnsupportedApi(Build.VERSION_CODES.P, copy.text(R.string.cap_hc_android_9))
+                !environment.healthConnectAvailable -> CollectionCapability.ServiceUnavailable(copy.text(R.string.cap_hc_not_installed))
+                !environment.healthConnectGranted -> CollectionCapability.PermissionRequired(copy.text(R.string.cap_hc_access_required))
+                else -> null
+            }
+            moduleId in googleModules -> when {
+                environment.distribution == DistributionChannel.AMAZON ->
+                    CollectionCapability.ServiceUnavailable(copy.text(R.string.cap_gms_fire_os, moduleLabel(moduleId, copy)))
+                !environment.googleServicesAvailable ->
+                    CollectionCapability.ServiceUnavailable(copy.text(R.string.cap_gms_required, moduleLabel(moduleId, copy)))
+                else -> null
+            }
+            else -> null
+        }
     }
 
     public fun resolve(
@@ -190,7 +232,6 @@ public object CollectionCapabilityResolver {
         environment: CapabilityEnvironment,
         copy: CopyResolver = ENGLISH_CAPABILITY,
     ): CollectionCapability {
-        fun s(id: Int, vararg args: Any) = copy(id, args)
         if (
             !DistributionModulePolicy.supports(
                 environment.distribution,
@@ -199,10 +240,10 @@ public object CollectionCapabilityResolver {
             )
         ) {
             return CollectionCapability.PolicyDisabled(
-                if (environment.distribution in setOf(DistributionChannel.PLAY, DistributionChannel.AMAZON)) {
-                    s(R.string.cap_not_in_play, moduleId.id)
+                if (environment.distribution.minimalPublic) {
+                    copy.text(R.string.cap_not_in_play, moduleId.id)
                 } else {
-                    s(R.string.cap_optional_not_included)
+                    copy.text(R.string.cap_optional_not_included)
                 },
             )
         }
@@ -210,68 +251,34 @@ public object CollectionCapabilityResolver {
         val sensorType = SensorCollectionModules.sensorTypeOf(moduleId)
         if (sensorType != null && sensorType !in environment.availableSensors) {
             return CollectionCapability.UnsupportedDevice(
-                s(R.string.cap_sensor_unavailable, sensorLabel(sensorType)),
+                copy.text(R.string.cap_sensor_unavailable, sensorLabel(sensorType)),
             )
         }
 
-        if (moduleId == CollectionModuleId.HEALTH_CONNECT) {
-            if (!BuildConfig.HAS_HEALTH_CONNECT) {
-                return CollectionCapability.PolicyDisabled(
-                    s(R.string.cap_optional_not_included),
-                )
-            }
-            if (environment.distribution == DistributionChannel.AMAZON) {
-                return CollectionCapability.ServiceUnavailable(s(R.string.cap_hc_fire_os))
-            }
-            if (environment.sdkInt < Build.VERSION_CODES.P) {
-                return CollectionCapability.UnsupportedApi(
-                    Build.VERSION_CODES.P,
-                    s(R.string.cap_hc_android_9),
-                )
-            }
-            if (!environment.healthConnectAvailable) {
-                return CollectionCapability.ServiceUnavailable(s(R.string.cap_hc_not_installed))
-            }
-            if (!environment.healthConnectGranted) {
-                return CollectionCapability.PermissionRequired(s(R.string.cap_hc_access_required))
-            }
-        }
-
-        if (moduleId in googleModules) {
-            if (environment.distribution == DistributionChannel.AMAZON) {
-                return CollectionCapability.ServiceUnavailable(
-                    s(R.string.cap_gms_fire_os, moduleLabel(moduleId, copy)),
-                )
-            }
-            if (!environment.googleServicesAvailable) {
-                return CollectionCapability.ServiceUnavailable(
-                    s(R.string.cap_gms_required, moduleLabel(moduleId, copy)),
-                )
-            }
-        }
+        serviceCapability(moduleId, environment, copy)?.let { return it }
 
         if (moduleId in usageModules && !environment.usageAccessGranted) {
-            return CollectionCapability.UserEnablementRequired(s(R.string.cap_usage_access))
+            return CollectionCapability.UserEnablementRequired(copy.text(R.string.cap_usage_access))
         }
 
         if (moduleId in environment.failedCaptureRegistrations) {
-            return CollectionCapability.ServiceUnavailable(s(R.string.cap_capture_retry))
+            return CollectionCapability.ServiceUnavailable(copy.text(R.string.cap_capture_retry))
         }
         val missingRuntime = ModulePermissions.runtimePermissionsFor(listOf(moduleId), environment.sdkInt)
             .filterNot(environment.grantedRuntimePermissions::contains)
         if (missingRuntime.isNotEmpty()) {
-            return CollectionCapability.PermissionRequired(s(R.string.cap_device_permission))
+            return CollectionCapability.PermissionRequired(copy.text(R.string.cap_device_permission))
         }
 
         if (ModulePermissions.needsKind(listOf(moduleId), PermissionKind.NOTIFICATION_LISTENER) &&
             !environment.notificationListenerEnabled
         ) {
-            return CollectionCapability.UserEnablementRequired(s(R.string.cap_notification_access))
+            return CollectionCapability.UserEnablementRequired(copy.text(R.string.cap_notification_access))
         }
         if (ModulePermissions.needsKind(listOf(moduleId), PermissionKind.ACCESSIBILITY) &&
             !environment.accessibilityEnabled
         ) {
-            return CollectionCapability.UserEnablementRequired(s(R.string.cap_accessibility))
+            return CollectionCapability.UserEnablementRequired(copy.text(R.string.cap_accessibility))
         }
 
         return CollectionCapability.Ready

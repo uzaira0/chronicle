@@ -101,14 +101,14 @@ class StudyModuleAuthorizationTest {
 
     @Test
     fun androidUnsupportedModuleIsNeverAuthorizedEvenWhenExplicitlyEnabled() {
-        val preview = previewWith(CollectionModuleId.AMBIENT_AUDIO, enabled = true)
+        val preview = previewWith(CollectionModuleId.GAZE_TRACKING, enabled = true)
 
         assertFalse(
             configuredStudyModuleEnabled(
                 server(preview),
                 preview.manifest.studyId,
                 preview.manifest.participantId,
-                CollectionModuleId.AMBIENT_AUDIO,
+                CollectionModuleId.GAZE_TRACKING,
             ),
         )
     }
@@ -138,7 +138,7 @@ class StudyModuleAuthorizationTest {
         url = preview.manifest.serverOrigin,
         studyId = preview.manifest.studyId.toString(),
         participantId = preview.manifest.participantId,
-        sourceDeviceId = "device-a",
+        sourceRandomDeviceId = "device-a",
         studyDisclosureJson = ChronicleJson.moshi
             .adapter(MobileEnrollmentManifest::class.java)
             .toJson(preview.manifest),

@@ -1,43 +1,56 @@
 package com.openlattice.chronicle.ui
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.View
-import com.google.android.material.button.MaterialButton
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.viewModels
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.lifecycleScope
-import androidx.appcompat.app.AlertDialog
-import com.google.android.material.switchmaterial.SwitchMaterial
+import androidx.lifecycle.viewModelScope
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.materialswitch.MaterialSwitch
 import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.HealthConnectRecordType
-import com.openlattice.chronicle.collection.capability.CollectionCapability
-import com.openlattice.chronicle.collection.capability.PermissionStatus
-import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
-import com.openlattice.chronicle.collection.capability.CapabilityEnvironment
-import com.openlattice.chronicle.collection.capability.CollectionCapabilityResolver
 import com.openlattice.chronicle.collection.ConsentTrigger
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
+import com.openlattice.chronicle.collection.HealthConnectRecordType
 import com.openlattice.chronicle.collection.SensorCollectionModules
+import com.openlattice.chronicle.collection.capability.CapabilityEnvironment
+import com.openlattice.chronicle.collection.capability.CollectionCapability
+import com.openlattice.chronicle.collection.capability.CollectionCapabilityResolver
+import com.openlattice.chronicle.collection.capability.PermissionStatus
+import com.openlattice.chronicle.collection.capability.activeModulePermissionStatus
 import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
 import com.openlattice.chronicle.collection.state.CollectionConsentCopy
-import com.openlattice.chronicle.collection.state.localizedLabel
-import com.openlattice.chronicle.collection.state.localizedConsentTemplate
 import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
-import com.openlattice.chronicle.collection.state.CollectionStateMachine
+import com.openlattice.chronicle.collection.state.CollectionLoopStore
 import com.openlattice.chronicle.collection.state.CollectionModulePhase
 import com.openlattice.chronicle.collection.state.CollectionModuleState
+import com.openlattice.chronicle.collection.state.CollectionOrientationActivity
+import com.openlattice.chronicle.collection.state.CollectionStateMachine
+import com.openlattice.chronicle.collection.state.ParticipantDecision
+import com.openlattice.chronicle.collection.state.ConsentPlan
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.ResearchErasureFence
+import com.openlattice.chronicle.collection.state.StorageAdmission
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -58,6 +71,10 @@ import kotlinx.coroutines.withContext
  *  - **Sensors**: the former Sensors tab, folded in as a section (local per-sensor toggles).
  */
 class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
+    private val moduleReview: ModuleDisclosureReview by viewModels()
+    private val moduleReviewLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        moduleReview.onResult(requireContext().applicationContext, result.resultCode, result.data)
+    }
     private var refreshJob: Job? = null
     private val moduleRows = mutableMapOf<CollectionModuleId, LinearLayout>()
     private val affordanceRows = mutableMapOf<Pair<String, String>, View>()
@@ -76,7 +93,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
         rows.forEachIndexed { index, row ->
             if (list.getChildAt(index) !== row) {
-                (row.parent as? android.view.ViewGroup)?.removeView(row)
+                (row.parent as? ViewGroup)?.removeView(row)
                 list.addView(row, index)
             }
         }
@@ -90,10 +107,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     private var permissionStatus = PermissionStatus(emptyList(), needHealthConnect = false)
     private var capabilities: Map<CollectionModuleId, CollectionCapability> = emptyMap()
     private var participationStop: ParticipationStop? = null
+    private var collectionPauseMessage: String? = null
     private var capabilityEnvironment: CapabilityEnvironment? = null
-
-    /** Set when a permission request needs Health Connect after the runtime request resolves. */
-    private var pendingHealthConnectRequest = false
 
     // Runtime (dangerous) permission request — e.g. ACTIVITY_RECOGNITION, needed by the
     // activity_recognition / sleep modules and the step-counter / significant-motion sensors. The
@@ -102,7 +117,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     private val runtimePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
-        if (BuildConfig.HAS_HEALTH_CONNECT && pendingHealthConnectRequest) {
+        if (BuildConfig.HAS_HEALTH_CONNECT && moduleReview.pendingHealthConnectRequest) {
             launchHealthConnect()
         }
     }
@@ -120,6 +135,14 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        moduleReview.completion.observe(viewLifecycleOwner) { completion ->
+            if (completion == null) return@observe
+            moduleReview.completion.value = null
+            viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
+                refreshAfterDecision(completion.result.getOrThrow(), completion.accepted)
+            }
+        }
+        moduleReview.resumePending(requireContext().applicationContext)
     }
 
     override fun onResume() {
@@ -149,6 +172,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     /** Rebinds every section from one snapshot (kept in one place so no surface goes stale). */
     private fun bindAll(view: View, snapshot: DashboardSnapshot) {
         participationStop = snapshot.participationStop
+        collectionPauseMessage = collectionPauseReason(requireContext(), snapshot.collectionModules)?.let(::getString)
         bindAppUsage(view, snapshot)
         bindSensors(view, snapshot)
     }
@@ -237,7 +261,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             TextView(requireContext()).apply {
                 text = message
                 setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
-                textSize = 16f
+                setTextAppearance(R.style.Chronicle_Body)
             },
         )
         row.addView(
@@ -271,23 +295,23 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             return
         }
         val runtime = permissionStatus.missingRuntime
-        pendingHealthConnectRequest = permissionStatus.needHealthConnect
+        moduleReview.pendingHealthConnectRequest = permissionStatus.needHealthConnect
         when {
             runtime.isNotEmpty() && permanentlyDeniedRuntime() -> DeviceSettingsNavigator.open(
                 requireContext(), Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                    .setData(android.net.Uri.parse("package:${requireContext().packageName}")),
+                    .setData(Uri.parse("package:${requireContext().packageName}")),
             )
             runtime.isNotEmpty() -> {
                 check(requireContext().getSharedPreferences("runtime_permission_requests", Context.MODE_PRIVATE)
                     .edit().apply { runtime.forEach { putBoolean(it, true) } }.commit())
                 runtimePermissionLauncher.launch(runtime.toTypedArray())
             }
-            pendingHealthConnectRequest -> launchHealthConnect()
+            moduleReview.pendingHealthConnectRequest -> launchHealthConnect()
         }
     }
 
     private fun confirmUsageAccessDisclosure() {
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.usage_access_disclosure_title)
             .setMessage(R.string.usage_access_disclosure_body)
             .setNegativeButton(android.R.string.cancel, null)
@@ -301,11 +325,15 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     }
 
     private fun launchHealthConnect() {
-        pendingHealthConnectRequest = false
+        moduleReview.pendingHealthConnectRequest = false
         if (!BuildConfig.HAS_HEALTH_CONNECT) return
         val configured = runCatching {
             HealthConnectScopeStore.of(requireContext()).read()
-        }.getOrDefault(emptySet())
+        }.getOrElse {
+            Log.e(TAG, "Health Connect scope is unavailable")
+            Toast.makeText(requireContext(), R.string.ds_hc_scope_unavailable, Toast.LENGTH_LONG).show()
+            return
+        }
         if (configured.isEmpty()) {
             Toast.makeText(
                 requireContext(),
@@ -316,8 +344,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         }
         val recordTypeList = configured
             .sortedBy { it.ordinal }
-            .joinToString(", ") { healthConnectRecordTypeLabel(it) }
-        AlertDialog.Builder(requireContext())
+            .joinToString(", ") { getString(CollectionConsentCopy.healthConnectRecordLabel(it)) }
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.health_connect_disclosure_title)
             .setMessage(getString(R.string.health_connect_disclosure_body, recordTypeList))
             .setNegativeButton(android.R.string.cancel, null)
@@ -339,29 +367,10 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             .show()
     }
 
-    private fun healthConnectRecordTypeLabel(type: HealthConnectRecordType): String = getString(
-        when (type) {
-            HealthConnectRecordType.STEPS -> R.string.hc_record_steps
-            HealthConnectRecordType.DISTANCE -> R.string.hc_record_distance
-            HealthConnectRecordType.HEART_RATE -> R.string.hc_record_heart_rate
-            HealthConnectRecordType.TOTAL_CALORIES_BURNED -> R.string.hc_record_total_calories_burned
-            HealthConnectRecordType.ACTIVE_CALORIES_BURNED -> R.string.hc_record_active_calories_burned
-            HealthConnectRecordType.FLOORS_CLIMBED -> R.string.hc_record_floors_climbed
-            HealthConnectRecordType.RESTING_HEART_RATE -> R.string.hc_record_resting_heart_rate
-            HealthConnectRecordType.OXYGEN_SATURATION -> R.string.hc_record_oxygen_saturation
-            HealthConnectRecordType.RESPIRATORY_RATE -> R.string.hc_record_respiratory_rate
-            HealthConnectRecordType.SLEEP -> R.string.hc_record_sleep
-            HealthConnectRecordType.EXERCISE -> R.string.hc_record_exercise
-            HealthConnectRecordType.HEART_RATE_VARIABILITY -> R.string.hc_record_heart_rate_variability
-            HealthConnectRecordType.BODY_TEMPERATURE -> R.string.hc_record_body_temperature
-            HealthConnectRecordType.SKIN_TEMPERATURE -> R.string.hc_record_skin_temperature
-        },
-    )
-
     private fun openNotificationListenerSettings() {
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) return
         val disclosure = notificationAccessDisclosure(permissionStatus.notificationAccessModules, requireContext().copyResolver())
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(disclosure.title)
             .setMessage(disclosure.body)
             .setNegativeButton(android.R.string.cancel, null)
@@ -408,7 +417,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         val attention = states.filter { it.requiredButNotAccepted }
         val anyDeclined = attention.any { it.requiredAndDeclined }
         reconcileRows(pendingList, attention.map { attentionRow(it) })
-        val storagePaused = com.openlattice.chronicle.collection.state.StorageAdmission.isPaused(requireContext())
+        val storagePaused = StorageAdmission.isPaused(requireContext())
         if (attention.isEmpty() && !storagePaused) {
             banner.visibility = View.GONE
             pendingList.visibility = View.GONE
@@ -426,7 +435,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     }
 
     private fun moduleNames(states: List<CollectionModuleState>): String =
-        states.joinToString(", ") { CollectionConsentCopy.localizedLabel(requireContext(), it.moduleId) }
+        states.joinToString(", ") { CollectionConsentCopy.label(requireContext(), it.moduleId) }
 
     /**
      * A required-module attention row in the consolidated list. A still-undecided module
@@ -435,7 +444,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
      */
     private fun attentionRow(state: CollectionModuleState): View {
         val moduleId = state.moduleId
-        val moduleLabel = CollectionConsentCopy.localizedLabel(requireContext(), moduleId)
+        val moduleLabel = CollectionConsentCopy.label(requireContext(), moduleId)
         val isDeclined = state.requiredAndDeclined
         val key = moduleId to isDeclined
         attentionRows[key]?.let { return it }
@@ -447,7 +456,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                 getString(if (isDeclined) R.string.ds_declined_paused else R.string.ds_required_by_study),
             )
             setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
-            textSize = 16f
+            setTextAppearance(R.style.Chronicle_Body)
             minLines = 2
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -487,7 +496,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                 },
             )
         } else {
-            applyRequiredDecision(accepted = setOf(moduleId), declined = emptySet())
+            reviewModule(moduleId)
         }
     }
 
@@ -519,21 +528,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                     true
                 }
             }.getOrThrow() }
-            val snapshot = DashboardDataRepository.load(requireContext())
-            val environment = loadCapabilityEnvironment()
-            capabilities = computeCapabilities(snapshot.collectionModules, environment)
-            permissionStatus = activeModulePermissionStatus(snapshot.collectionModules, environment)
-            view?.let { bindAll(it, snapshot) }
-            // Accepting a required module may newly need an OS permission — ask right away.
-            if (accepted.isNotEmpty() && locallyApplied) {
-                requestMissingPermissions()
-            } else if (!locallyApplied) {
-                Toast.makeText(
-                    requireContext(),
-                    getString(R.string.ds_policy_changed),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
+            refreshAfterDecision(locallyApplied, accepted.isNotEmpty())
         }
     }
 
@@ -551,32 +546,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         ).apply { setMargins(0, topMargin, 0, 0) }
     }
 
-    private fun moduleRowLabel(row: LinearLayout, description: String, available: Boolean): TextView =
-        (row.getChildAt(0) as? TextView ?: TextView(requireContext())).apply {
-            text = description
-            setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
-            textSize = 16f
-            minLines = 2
-            includeFontPadding = true
-            alpha = if (available) 1f else 0.6f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-
-    private fun moduleRowSwitch(row: LinearLayout, description: String, enabled: Boolean, checked: Boolean): SwitchMaterial =
-        (row.getChildAt(1) as? SwitchMaterial ?: SwitchMaterial(requireContext())).apply {
-            setOnCheckedChangeListener(null)
-            text = ""
-            contentDescription = description
-            minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.CENTER_VERTICAL }
-            isEnabled = enabled
-            isChecked = checked
-        }
-
     private fun moduleRow(moduleId: CollectionModuleId, state: CollectionModuleState?): View {
-        val moduleLabel = CollectionConsentCopy.localizedLabel(requireContext(), moduleId)
+        val moduleLabel = CollectionConsentCopy.label(requireContext(), moduleId)
         // `collectedByStudy` true smart-casts `state` non-null, so the inner reads need no ?..
         val collectedByStudy = state?.serverEnabled == true
         // A required module reads as ON+locked only once accepted; a required-but-not-yet-
@@ -606,7 +577,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         return row
     }
 
-    private fun bindOptionalToggle(switch: SwitchMaterial, moduleId: CollectionModuleId) {
+    private fun bindOptionalToggle(switch: MaterialSwitch, moduleId: CollectionModuleId) {
         switch.setOnCheckedChangeListener { _, on ->
             if (BuildConfig.HAS_HEALTH_CONNECT && on && moduleId == CollectionModuleId.HEALTH_CONNECT) {
                 switch.isEnabled = false
@@ -626,9 +597,32 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                         bindOptionalToggle(switch, moduleId)
                     },
                 )
+            } else if (on) {
+                switch.setOnCheckedChangeListener(null)
+                switch.isChecked = false
+                bindOptionalToggle(switch, moduleId)
+                reviewModule(moduleId)
             } else {
                 onToggleOptional(moduleId, on, switch)
             }
+        }
+    }
+
+    private fun reviewModule(moduleId: CollectionModuleId) {
+        if (moduleReview.pending != null) return
+        val appContext = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch(storageFailureHandler()) {
+            val pending = withContext(Dispatchers.IO) {
+                val state = CollectionLoopStore.of(appContext).loadAll()[moduleId] ?: return@withContext null
+                val owner = ResearchPersistenceGate.captureOwner(appContext) ?: return@withContext null
+                PendingModuleReview(state, ResearchErasureFence.enrollmentKey(owner))
+            } ?: return@launch
+            if (!pending.state.serverEnabled || moduleReview.pending != null) return@launch
+            moduleReview.pending = pending
+            moduleReviewLauncher.launch(CollectionOrientationActivity.intent(requireContext(), ConsentPlan(
+                required = if (pending.state.requiredApplied) listOf(moduleId) else emptyList(),
+                optional = if (pending.state.requiredApplied) emptyList() else listOf(moduleId),
+            )))
         }
     }
 
@@ -648,19 +642,10 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
             onCancelled()
             return
         }
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.ds_hc_review_title)
             .setMessage(
-                healthConnectReconsentMessage(
-                    scope,
-                    readsOnlyHeader = getString(R.string.ds_hc_reads_only),
-                    willNotReadHeader = getString(R.string.ds_hc_will_not_read),
-                    template = CollectionConsentCopy.localizedConsentTemplate(
-                        requireContext(),
-                        CollectionModuleId.HEALTH_CONNECT,
-                        scope,
-                    ),
-                ),
+                healthConnectReconsentMessage(requireContext(), scope),
             )
             .setNegativeButton(android.R.string.cancel) { _, _ -> onCancelled() }
             .setOnCancelListener { onCancelled() }
@@ -671,7 +656,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     private fun onToggleOptional(
         moduleId: CollectionModuleId,
         on: Boolean,
-        switch: SwitchMaterial,
+        switch: MaterialSwitch,
         reviewedHealthConnectScope: Set<HealthConnectRecordType>? = null,
     ) {
         switch.isEnabled = false
@@ -692,23 +677,20 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
                     true
                 }
             }.getOrThrow() }
-            // Rebind from fresh state; the loop will also refresh, but this is immediate.
-            val snapshot = DashboardDataRepository.load(requireContext())
-            val environment = loadCapabilityEnvironment()
-            capabilities = computeCapabilities(snapshot.collectionModules, environment)
-            permissionStatus = activeModulePermissionStatus(snapshot.collectionModules, environment)
-            view?.let { bindAll(it, snapshot) }
-            // Turning a module on may need an OS permission — ask now rather than make the
-            // participant hunt for the affordance.
-            if (on && locallyApplied) {
-                requestMissingPermissions()
-            } else if (!locallyApplied) {
-                Toast.makeText(
-                    requireContext(),
-                    getString(R.string.ds_policy_changed),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
+            refreshAfterDecision(locallyApplied, on)
+        }
+    }
+
+    private suspend fun refreshAfterDecision(locallyApplied: Boolean, accepted: Boolean) {
+        val snapshot = DashboardDataRepository.load(requireContext())
+        val environment = loadCapabilityEnvironment()
+        capabilities = computeCapabilities(snapshot.collectionModules, environment)
+        permissionStatus = activeModulePermissionStatus(snapshot.collectionModules, environment)
+        view?.let { bindAll(it, snapshot) }
+        if (accepted && locallyApplied) {
+            requestMissingPermissions()
+        } else if (!locallyApplied) {
+            Toast.makeText(requireContext(), R.string.ds_policy_changed, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -744,7 +726,8 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
     private fun statusText(moduleId: CollectionModuleId, state: CollectionModuleState?): String = when {
         state?.serverEnabled != true -> getString(R.string.ds_status_not_collected)
-        participationStop != null -> getString(requireNotNull(participationStop).status)
+        participationStop != null -> getString(requireNotNull(participationStop).copy.status)
+        state.accepted && collectionPauseMessage != null -> requireNotNull(collectionPauseMessage)
         capabilities[moduleId]?.canCollectNow == false -> capabilities.getValue(moduleId).message
         state.requiredApplied && state.accepted -> getString(R.string.ds_status_required_collecting)
         state.requiredAndDeclined -> getString(R.string.ds_status_declined_paused)
@@ -760,7 +743,7 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
     // ----- Sensors section -----
     //
-    // Each sensor is its OWN consent-gated module (per-sensor consent redesign, 2026-06-11) — the
+    // Each sensor is its OWN consent-gated module — the
     // study marks each sensor required / optional / unavailable, and the participant toggles each
     // one individually, exactly like an App & Device Usage module. There is NO grouped "Hardware
     // Sensors" toggle. Each sensor's sampling rate + duty cycle are set by the study and shown
@@ -829,18 +812,18 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
 
         val label = moduleRowLabel(row, getString(
             R.string.ds_module_row,
-            CollectionConsentCopy.localizedLabel(requireContext(), moduleId),
+            CollectionConsentCopy.label(requireContext(), moduleId),
             sensorStatusText(moduleId, state, isAvailable) + rateDutyLine(sensor, collectedByStudy && isAvailable, sensors),
         ), collectedByStudy && isAvailable)
         if (label.parent == null) row.addView(label)
 
         val switch = moduleRowSwitch(row,
-            getString(R.string.ds_sensor_toggle_cd, CollectionConsentCopy.localizedLabel(requireContext(), moduleId)),
+            getString(R.string.ds_sensor_toggle_cd, CollectionConsentCopy.label(requireContext(), moduleId)),
             canToggle, requiredAccepted || (optional && isActive))
         if (canToggle) {
             // Order matters: set isChecked above BEFORE attaching the listener so binding does not
-            // fire a spurious decision. Reuses the usage-module accept/decline path on this sensor.
-            switch.setOnCheckedChangeListener { _, on -> onToggleOptional(moduleId, on, switch) }
+            // fire a spurious decision. Turning a sensor on reviews its disclosure like any module.
+            bindOptionalToggle(switch, moduleId)
         }
         if (switch.parent == null) row.addView(switch)
         moduleRows[moduleId] = row
@@ -851,17 +834,12 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
         moduleId: CollectionModuleId,
         state: CollectionModuleState?,
         isAvailable: Boolean,
-    ): String = sensorCollectionStatusText(state, isAvailable, capabilities[moduleId], ::getString, participationStop)
+    ): String = sensorCollectionStatusText(
+        state, isAvailable, capabilities[moduleId], ::getString,
+        CollectionStopState(participation = participationStop, requiredModuleMessage = collectionPauseMessage),
+    )
 
     /** The read-only, study-set sampling rate + duty cycle line for a sensor the study collects. */
-    private fun rateDutyLine(sensor: AndroidSensorType, show: Boolean, sensors: SensorDashboardSummary): String {
-        if (!show) return ""
-        val rate = sensors.rateHzByType[sensor] ?: return ""
-        val active = sensors.activeSecondsByType[sensor] ?: 0
-        val period = sensors.periodSecondsByType[sensor] ?: 0
-        val idle = (period - active).coerceAtLeast(0)
-        return "\n" + getString(R.string.ds_sensor_study_setting, rate.toString(), active.toString(), idle.toString())
-    }
 
     private companion object {
         private const val TAG = "DataSharingFragment"
@@ -900,19 +878,12 @@ class DataSharingFragment : Fragment(R.layout.fragment_data_sharing) {
     }
 }
 
-internal fun healthConnectReconsentMessage(
-    recordTypes: Set<HealthConnectRecordType>,
-    readsOnlyHeader: String = "This study will read only these approved Health Connect record types:",
-    willNotReadHeader: String = "It will not read:",
-    template: CollectionConsentCopy.ModuleTemplate = CollectionConsentCopy.consentTemplate(
-        CollectionModuleId.HEALTH_CONNECT,
-        recordTypes,
-    ),
-): String {
+internal fun healthConnectReconsentMessage(context: Context, recordTypes: Set<HealthConnectRecordType>): String {
+    val template = CollectionConsentCopy.consentTemplate(context, CollectionModuleId.HEALTH_CONNECT, recordTypes)
     return buildString {
-        append("$readsOnlyHeader\n\n")
+        append("${context.getString(R.string.ds_hc_reads_only)}\n\n")
         append(template.whatItCollects.joinToString("\n") { "• $it" })
-        append("\n\n$willNotReadHeader\n")
+        append("\n\n${context.getString(R.string.ds_hc_will_not_read)}\n")
         append(template.whatItDoesNotCollect.joinToString("\n") { "• $it" })
         if (template.caveats.isNotEmpty()) {
             append("\n\n")
@@ -939,8 +910,8 @@ private const val ENGLISH_AUDIO_LIMIT =
 private val ENGLISH_NOTIFICATION_ACCESS: CopyResolver = englishCopy(
     mapOf(
         R.string.nad_unavailable_title to "Access unavailable",
-        R.string.nad_unavailable_affordance to "This access is not included in the Play release.",
-        R.string.nad_unavailable_body to "The Play release does not request Android Notification access.",
+        R.string.nad_unavailable_affordance to "This access is not included in this release.",
+        R.string.nad_unavailable_body to "This release does not request Android Notification access.",
         R.string.nad_audio_status to "Audio Status",
         R.string.nad_audio_metadata to "Audio Metadata",
         R.string.nad_notification_activity to "Notification Activity",
@@ -1024,33 +995,168 @@ internal fun sensorCollectionStatusText(
     state: CollectionModuleState?,
     isAvailable: Boolean,
     capability: CollectionCapability?,
-    resolve: (Int) -> String = ::englishSensorStatus,
-    participationStop: ParticipationStop? = null,
+    resolve: (Int) -> String,
+    stop: CollectionStopState = CollectionStopState(),
 ): String = when {
     !isAvailable -> resolve(R.string.ds_sensor_unavailable)
     state?.serverEnabled != true -> resolve(R.string.ds_status_not_collected)
-    participationStop != null -> resolve(participationStop.status)
+    stop.participation != null -> resolve(stop.participation.copy.status)
+    state.accepted && stop.requiredModuleMessage != null -> stop.requiredModuleMessage
     capability?.canCollectNow == false -> capability.message
-    state.requiredApplied && state.accepted -> resolve(R.string.ds_status_required_collecting)
-    state.requiredAndDeclined -> resolve(R.string.ds_status_declined_paused)
-    state.requiredApplied -> resolve(R.string.ds_status_required_accept)
-    else -> when (state.phase) {
-        CollectionModulePhase.ACTIVE -> resolve(R.string.ds_status_on)
-        CollectionModulePhase.DECLINED -> resolve(R.string.ds_status_off_declined)
-        else -> resolve(R.string.ds_status_off_share)
+    else -> resolve(sensorConsentStatus(state))
+}
+
+/** Status of a study-enabled, collectable sensor from the participant's consent decision alone. */
+private fun sensorConsentStatus(state: CollectionModuleState): Int = when {
+    state.requiredApplied && state.accepted -> R.string.ds_status_required_collecting
+    state.requiredAndDeclined -> R.string.ds_status_declined_paused
+    state.requiredApplied -> R.string.ds_status_required_accept
+    state.phase == CollectionModulePhase.ACTIVE -> R.string.ds_status_on
+    state.phase == CollectionModulePhase.DECLINED -> R.string.ds_status_off_declined
+    else -> R.string.ds_status_off_share
+}
+
+internal data class PendingModuleReview(val state: CollectionModuleState, val ownerKey: String) {
+    fun toBundle() = Bundle().apply {
+        putString(MODULE, state.moduleId.id)
+        putBoolean(ENABLED, state.serverEnabled)
+        putString(DECISION, state.decision.name)
+        state.decidedAtEpochMillis?.let { putLong(DECIDED_AT, it) }
+        putBoolean(REQUIRED, state.requiredApplied)
+        putInt(VERSION, state.appliedVersion)
+        putString(OWNER, ownerKey)
+    }
+
+    companion object {
+        private const val MODULE = "module"
+        private const val ENABLED = "enabled"
+        private const val DECISION = "decision"
+        private const val DECIDED_AT = "decided_at"
+        private const val REQUIRED = "required"
+        private const val VERSION = "version"
+        private const val OWNER = "owner"
+
+        fun fromBundle(saved: Bundle) = PendingModuleReview(
+            CollectionModuleState(
+                moduleId = requireNotNull(CollectionModuleId.fromIdOrNull(saved.getString(MODULE).orEmpty())),
+                serverEnabled = saved.getBoolean(ENABLED),
+                decision = ParticipantDecision.valueOf(requireNotNull(saved.getString(DECISION))),
+                decidedAtEpochMillis = if (saved.containsKey(DECIDED_AT)) saved.getLong(DECIDED_AT) else null,
+                requiredApplied = saved.getBoolean(REQUIRED),
+                appliedVersion = saved.getInt(VERSION),
+            ),
+            requireNotNull(saved.getString(OWNER)),
+        )
     }
 }
 
-/** JVM-testable English rendering of the sensor status ids; the fragment resolves via resources. */
-private fun englishSensorStatus(id: Int): String = when (id) {
-    R.string.ds_sensor_unavailable -> "Sensor is not available on this device"
-    R.string.ds_status_not_collected -> "Not collected by this study"
-    R.string.ds_status_required_collecting -> "Required — collecting"
-    R.string.ds_status_declined_paused -> "Declined — all collection paused (accept above to resume)."
-    R.string.ds_status_required_accept -> "Required — accept above to start sharing."
-    R.string.ds_status_on -> "On — collecting"
-    R.string.ds_status_off_declined -> "Off — you turned this off"
-    R.string.participation_status_ended -> "Stopped — the study team ended your participation"
-    R.string.participation_status_paused -> "Paused by the study team"
-    else -> "Off — turn on to share"
+internal data class CollectionStopState(
+    val participation: ParticipationStop? = null,
+    val requiredModuleMessage: String? = null,
+)
+
+internal data class ModuleReviewCompletion(val accepted: Boolean, val result: Result<Boolean>)
+
+internal class ModuleDisclosureReview(private val savedState: SavedStateHandle) : ViewModel() {
+    var pendingHealthConnectRequest: Boolean
+        get() = savedState.get<Boolean>(PENDING_HEALTH_CONNECT) ?: false
+        set(value) { savedState[PENDING_HEALTH_CONNECT] = value }
+    var pending: PendingModuleReview?
+        get() = savedState.get<Bundle>(PENDING)?.let { PendingModuleReview.fromBundle(it) }
+        set(value) { savedState[PENDING] = value?.toBundle() }
+    val completion = MutableLiveData<ModuleReviewCompletion?>()
+    private var applying = false
+
+    fun onResult(context: Context, resultCode: Int, data: Intent?) {
+        val request = pending ?: return
+        val reviewed = setOf(request.state.moduleId)
+        val accepted = when {
+            resultCode != Activity.RESULT_OK -> null
+            CollectionOrientationActivity.acceptedFrom(data) == reviewed -> true
+            CollectionOrientationActivity.declinedFrom(data) == reviewed -> false
+            else -> null
+        }
+        if (accepted == null) {
+            clear()
+            return
+        }
+        savedState[ACCEPTED] = accepted
+        resumePending(context)
+    }
+
+    fun resumePending(context: Context) {
+        val request = pending ?: return
+        val accepted = savedState.get<Boolean>(ACCEPTED) ?: return
+        if (applying) return
+        applying = true
+        val appContext = context.applicationContext
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { participantStorageWrite {
+                applyDecision(appContext, request, accepted)
+            } }
+            clear()
+            applying = false
+            completion.value = ModuleReviewCompletion(accepted, result)
+        }
+    }
+
+    private fun applyDecision(context: Context, request: PendingModuleReview, accepted: Boolean): Boolean {
+        val owner = ResearchPersistenceGate.captureOwner(context) ?: return false
+        if (ResearchErasureFence.enrollmentKey(owner) != request.ownerKey) return false
+        val coordinator = CollectionLoopCoordinator(context)
+        val trigger = if (request.state.requiredApplied) ConsentTrigger.SETTINGS_CHANGE else ConsentTrigger.PARTICIPANT_TOGGLE
+        if (accepted) return coordinator.applyReviewedModuleAcceptance(request.state, owner, trigger)
+        coordinator.applyDecisions(accepted = emptySet(), declined = setOf(request.state.moduleId), trigger = trigger)
+        return true
+    }
+
+    private fun clear() {
+        pending = null
+        savedState.remove<Boolean>(ACCEPTED)
+    }
+
+    private companion object {
+        const val PENDING_HEALTH_CONNECT = "pending_health_connect"
+        const val PENDING = "module_review_pending"
+        const val ACCEPTED = "module_review_accepted"
+    }
+}
+
+private fun Fragment.moduleRowLabel(row: LinearLayout, description: String, available: Boolean): TextView =
+    (row.getChildAt(0) as? TextView ?: TextView(requireContext())).apply {
+        text = description
+        setTextColor(resources.getColor(R.color.chronicle_text_primary, null))
+        setTextAppearance(R.style.Chronicle_Body)
+        minLines = 2
+        includeFontPadding = true
+        alpha = if (available) 1f else 0.6f
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+    }
+
+private fun Fragment.moduleRowSwitch(row: LinearLayout, description: String, enabled: Boolean, checked: Boolean): MaterialSwitch =
+    (row.getChildAt(1) as? MaterialSwitch ?: MaterialSwitch(requireContext())).apply {
+        setOnCheckedChangeListener(null)
+        text = ""
+        contentDescription = description
+        minHeight = resources.getDimensionPixelSize(R.dimen.chronicle_touch_target)
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { gravity = Gravity.CENTER_VERTICAL }
+        isEnabled = enabled
+        isChecked = checked
+    }
+
+private fun Fragment.rateDutyLine(sensor: AndroidSensorType, show: Boolean, sensors: SensorDashboardSummary): String {
+    if (!show) return ""
+    val rate = sensors.rateHzByType[sensor] ?: return ""
+    val active = sensors.activeSecondsByType[sensor] ?: 0
+    val period = sensors.periodSecondsByType[sensor] ?: 0
+    val idle = (period - active).coerceAtLeast(0)
+    return "\n" + getString(R.string.ds_sensor_study_setting, rate.toString(), active.toString(), idle.toString())
+}
+
+private fun collectionPauseReason(context: Context, modules: List<CollectionModuleState>): Int? = when {
+    StorageAdmission.isPaused(context) -> R.string.ds_status_paused_storage
+    modules.any { it.requiredAndDeclined } -> R.string.ds_status_paused_required
+    else -> null
 }

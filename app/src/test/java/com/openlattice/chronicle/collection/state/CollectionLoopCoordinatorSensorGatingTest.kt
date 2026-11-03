@@ -1,5 +1,7 @@
 package com.openlattice.chronicle.collection.state
 
+import org.junit.Assert.assertThrows
+
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.CollectionModuleSetting
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
@@ -46,7 +48,7 @@ class CollectionLoopCoordinatorSensorGatingTest {
         val map = resolvedMap(
             CollectionModuleId.USAGE_EVENTS,
             CollectionModuleId.SENSOR_ACCELEROMETER,
-            CollectionModuleId.SENSOR_SAMSUNG_GRIP_WIFI,
+            CollectionModuleId.SENSOR_GYROSCOPE,
         )
         // The device has the accelerometer but not the Samsung grip sensor.
         val available = setOf(CollectionModuleId.SENSOR_ACCELEROMETER)
@@ -54,7 +56,7 @@ class CollectionLoopCoordinatorSensorGatingTest {
         val gated = CollectionLoopCoordinator.retainCollectableSensors(map, available)
 
         assertTrue("device-present sensor kept", gated.containsKey(CollectionModuleId.SENSOR_ACCELEROMETER))
-        assertFalse("device-absent sensor dropped", gated.containsKey(CollectionModuleId.SENSOR_SAMSUNG_GRIP_WIFI))
+        assertFalse("device-absent sensor dropped", gated.containsKey(CollectionModuleId.SENSOR_GYROSCOPE))
     }
 
     @Test
@@ -155,9 +157,9 @@ class CollectionLoopCoordinatorSensorGatingTest {
     }
 
     @Test
-    fun enrollmentEvidenceExcludesAndroidUnsupportedAmbientAudio() {
+    fun enrollmentEvidenceExcludesAReservedModule() {
         val fetched = authoritativeSetting(
-            CollectionModuleId.AMBIENT_AUDIO to CollectionModuleSetting(enabled = true),
+            CollectionModuleId.GAZE_TRACKING to CollectionModuleSetting(enabled = true),
         )
 
         val partition = enrollmentModulePartition(
@@ -167,33 +169,37 @@ class CollectionLoopCoordinatorSensorGatingTest {
             declined = emptySet(),
         )
 
-        assertFalse(CollectionModuleId.AMBIENT_AUDIO in partition.accepted)
-        assertFalse(CollectionModuleId.AMBIENT_AUDIO in partition.declined)
-        assertFalse(CollectionModuleId.AMBIENT_AUDIO in partition.unavailable)
+        assertFalse(CollectionModuleId.GAZE_TRACKING in partition.accepted)
+        assertFalse(CollectionModuleId.GAZE_TRACKING in partition.declined)
+        assertFalse(CollectionModuleId.GAZE_TRACKING in partition.unavailable)
     }
 
-    @Test(expected = IllegalArgumentException::class)
+    @Test
     fun enrollmentPartitionRejectsAnEnabledModuleMissingFromAllThreeSets() {
-        enrollmentModulePartition(
-            fetched = authoritativeSetting(
-                CollectionModuleId.USAGE_EVENTS to CollectionModuleSetting(enabled = true),
-            ),
-            availableSensorModules = emptySet(),
-            accepted = emptySet(),
-            declined = emptySet(),
-        )
+        assertThrows(IllegalArgumentException::class.java) {
+            enrollmentModulePartition(
+                fetched = authoritativeSetting(
+                    CollectionModuleId.USAGE_EVENTS to CollectionModuleSetting(enabled = true),
+                ),
+                availableSensorModules = emptySet(),
+                accepted = emptySet(),
+                declined = emptySet(),
+            )
+        }
     }
 
-    @Test(expected = IllegalArgumentException::class)
+    @Test
     fun enrollmentPartitionRejectsDecliningARequiredAvailableModule() {
-        enrollmentModulePartition(
-            fetched = authoritativeSetting(
-                CollectionModuleId.SENSOR_ACCELEROMETER to
-                    CollectionModuleSetting(enabled = true, required = true),
-            ),
-            availableSensorModules = setOf(CollectionModuleId.SENSOR_ACCELEROMETER),
-            accepted = emptySet(),
-            declined = setOf(CollectionModuleId.SENSOR_ACCELEROMETER),
-        )
+        assertThrows(IllegalArgumentException::class.java) {
+            enrollmentModulePartition(
+                fetched = authoritativeSetting(
+                    CollectionModuleId.SENSOR_ACCELEROMETER to
+                        CollectionModuleSetting(enabled = true, required = true),
+                ),
+                availableSensorModules = setOf(CollectionModuleId.SENSOR_ACCELEROMETER),
+                accepted = emptySet(),
+                declined = setOf(CollectionModuleId.SENSOR_ACCELEROMETER),
+            )
+        }
     }
 }

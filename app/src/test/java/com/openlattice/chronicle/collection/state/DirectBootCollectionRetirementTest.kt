@@ -21,6 +21,7 @@ class DirectBootCollectionRetirementTest {
         assertTrue(
             snapshot.write(
                 mapOf(AndroidSensorType.accelerometer to DirectBootSensorSnapshot.SensorConfig()),
+                "owner",
             ),
         )
         assertTrue(

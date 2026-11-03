@@ -1,12 +1,10 @@
 package com.openlattice.chronicle.collection.state
 
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.storage.CollectionModuleStateDao
 import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -24,11 +22,6 @@ class CollectionLoopStoreTest {
         override fun get(moduleId: String): CollectionModuleStateEntity? = rows[moduleId]
         override fun upsert(state: CollectionModuleStateEntity) { rows[state.moduleId] = state }
         override fun upsertAll(states: List<CollectionModuleStateEntity>) { states.forEach { rows[it.moduleId] = it } }
-        // Mirrors the @Query in CollectionModuleStateDao: enabled + required + DECLINED.
-        override fun countRequiredDeclined(): Int =
-            rows.values.count {
-                it.serverEnabled && it.requiredApplied && it.decision == ParticipantDecision.DECLINED.name
-            }
     }
 
     private fun entity(
@@ -37,7 +30,6 @@ class CollectionLoopStoreTest {
         decision: ParticipantDecision,
         decidedAt: Long? = if (decision == ParticipantDecision.UNDECIDED) null else 1L,
         requiredApplied: Boolean = false,
-        lastDisposition: String? = null,
     ) = CollectionModuleStateEntity(
         moduleId = moduleId,
         serverEnabled = serverEnabled,
@@ -45,8 +37,6 @@ class CollectionLoopStoreTest {
         decidedAtEpochMillis = decidedAt,
         requiredApplied = requiredApplied,
         appliedVersion = 1,
-        appliedPolicySnapshot = null,
-        lastDisposition = lastDisposition,
     )
 
     @Test fun testSaveThenLoadRoundTrips() {
@@ -58,8 +48,6 @@ class CollectionLoopStoreTest {
             decidedAtEpochMillis = 42L,
             requiredApplied = false,
             appliedVersion = 4,
-            appliedPolicySnapshot = "policy-v1",
-            lastDisposition = CollectionDataDisposition.HOLD_PENDING,
         )
         store.save(listOf(state))
         val loaded = store.loadAll()
@@ -77,21 +65,6 @@ class CollectionLoopStoreTest {
         assertEquals(setOf(CollectionModuleId.BATTERY_TELEMETRY), loaded.keys)
     }
 
-    @Test fun testUnknownDispositionMapsToNull() {
-        val dao = FakeDao(
-            listOf(
-                entity(
-                    "battery_telemetry",
-                    serverEnabled = false,
-                    decision = ParticipantDecision.UNDECIDED,
-                    lastDisposition = "not_a_disposition",
-                ),
-            ),
-        )
-        val state = CollectionLoopStore(dao).loadAll().getValue(CollectionModuleId.BATTERY_TELEMETRY)
-        assertNull(state.lastDisposition)
-    }
-
     @Test fun testUnknownDecisionMapsToUndecided() {
         val dao = FakeDao(
             listOf(
@@ -102,8 +75,6 @@ class CollectionLoopStoreTest {
                     decidedAtEpochMillis = null,
                     requiredApplied = false,
                     appliedVersion = 1,
-                    appliedPolicySnapshot = null,
-                    lastDisposition = null,
                 ),
             ),
         )
@@ -116,16 +87,28 @@ class CollectionLoopStoreTest {
             listOf(
                 entity("battery_telemetry", serverEnabled = true, decision = ParticipantDecision.ACCEPTED),
                 entity("usage_events", serverEnabled = true, decision = ParticipantDecision.UNDECIDED),
-                entity("hardware_sensors", serverEnabled = true, decision = ParticipantDecision.DECLINED),
+                entity(CollectionModuleId.SENSOR_ACCELEROMETER.id, serverEnabled = true, decision = ParticipantDecision.DECLINED),
                 entity("device_lifecycle", serverEnabled = false, decision = ParticipantDecision.ACCEPTED),
             ),
         )
         val store = CollectionLoopStore(dao)
         assertTrue(store.collects(CollectionModuleId.BATTERY_TELEMETRY))
         assertFalse("awaiting decision does not collect", store.collects(CollectionModuleId.USAGE_EVENTS))
-        assertFalse("declined does not collect", store.collects(CollectionModuleId.HARDWARE_SENSORS))
+        assertFalse("declined does not collect", store.collects(CollectionModuleId.SENSOR_ACCELEROMETER))
         assertFalse("server-disabled does not collect", store.collects(CollectionModuleId.DEVICE_LIFECYCLE))
         assertFalse("absent row does not collect", store.collects(CollectionModuleId.USER_IDENTIFICATION))
+    }
+
+    /** Every persisted row the gate can read, plus an absent row: it collects only when enabled and accepted. */
+    @Test fun testCollectsTruthTable() {
+        val module = CollectionModuleId.BATTERY_TELEMETRY
+        for (enabled in listOf(true, false)) for (required in listOf(true, false))
+            for (decision in ParticipantDecision.values().map { it.name } + "UNKNOWN_PERSISTED") {
+                val store = CollectionLoopStore(FakeDao(listOf(CollectionModuleStateEntity(module.id, enabled, decision, null, required, 1))))
+                assertEquals("enabled=$enabled required=$required decision=$decision",
+                    enabled && decision == ParticipantDecision.ACCEPTED.name, store.collects(module))
+            }
+        assertFalse("absent row does not collect", CollectionLoopStore(FakeDao()).collects(module))
     }
 
     @Test fun testUndecidedRequiredModuleDoesNotHalt_graceWindow() {
@@ -178,5 +161,16 @@ class CollectionLoopStoreTest {
         assertFalse("no declined required module — not halted", store.haltedByDeclinedRequired())
         assertTrue(store.collects(CollectionModuleId.BATTERY_TELEMETRY))
         assertTrue(store.collects(CollectionModuleId.USAGE_EVENTS))
+    }
+
+    @Test fun testHaltFollowsTheSharedConsentFixture() {
+        // Each reconciled fixture state, stored beside an accepted sibling, halts the store exactly as the models owner says.
+        ConsentContractCase.all().forEach { row ->
+            val store = CollectionLoopStore(FakeDao(listOf(
+                entity(CollectionModuleId.USAGE_EVENTS.id, serverEnabled = true, decision = ParticipantDecision.ACCEPTED))))
+            store.save(listOf(row.reconcile().newState))
+            assertEquals(row.name, row.halted, store.haltedByDeclinedRequired())
+            assertEquals(row.name, !row.halted, store.collects(CollectionModuleId.USAGE_EVENTS))
+        }
     }
 }

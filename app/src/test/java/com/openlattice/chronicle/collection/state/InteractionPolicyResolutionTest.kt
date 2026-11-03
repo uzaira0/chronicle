@@ -26,7 +26,7 @@ class InteractionPolicyResolutionTest {
             gridCols = 5,
             captureClicks = false,
             captureScrolls = true,
-            captureExactPosition = false,
+            captureElementPosition = false,
         )
         val setting = CollectionModuleSetting(enabled = true, interactionPolicy = studyPolicy)
         val resolved = ResolvedModuleSetting(
@@ -50,7 +50,7 @@ class InteractionPolicyResolutionTest {
             moduleId = CollectionModuleId.INTERACTION_EVENTS,
             setting = CollectionModuleSetting(
                 enabled = false,
-                interactionPolicy = InteractionPolicy(captureExactPosition = false),
+                interactionPolicy = InteractionPolicy(captureElementPosition = false),
             ),
             source = ResolutionSource.GENERALIZED,
             valid = true,
@@ -68,7 +68,7 @@ class InteractionPolicyResolutionTest {
     @Test
     fun `policy snapshot is atomic and active only for its enrolled study`() {
         val studyId = UUID.randomUUID().toString()
-        val policy = InteractionPolicy(gridRows = 7, gridCols = 4, captureExactPosition = false)
+        val policy = InteractionPolicy(gridRows = 7, gridCols = 4, captureElementPosition = false)
         val snapshot = InteractionPolicySnapshot(
             studyId = studyId,
             settingsVersion = 19,
@@ -95,7 +95,7 @@ class InteractionPolicyResolutionTest {
             dutyCyclePeriodSeconds = 61,
         )
         val sensorModule = SensorCollectionModules.moduleFor(sensorType)
-        val interactionPolicy = InteractionPolicy(captureExactPosition = false)
+        val interactionPolicy = InteractionPolicy(captureElementPosition = false)
         val resolved = mapOf(
             sensorModule to ResolvedModuleSetting(
                 moduleId = sensorModule,

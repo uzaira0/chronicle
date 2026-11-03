@@ -3,55 +3,67 @@ package com.openlattice.chronicle.collection.state
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.database.sqlite.SQLiteException
 import android.hardware.SensorManager
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import com.openlattice.chronicle.BuildConfig
+import com.openlattice.chronicle.EnrolledWork
+import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.android.AndroidSensorSetting
 import com.openlattice.chronicle.android.AndroidSensorType
 import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
-import com.openlattice.chronicle.collection.BatteryPolicy
-import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
-import com.openlattice.chronicle.collection.capability.DistributionChannel
-import com.openlattice.chronicle.collection.capability.DistributionModulePolicy
 import com.openlattice.chronicle.collection.CollectionAcknowledgment
 import com.openlattice.chronicle.collection.CollectionCadence
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.ConsentTrigger
 import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
 import com.openlattice.chronicle.collection.HealthConnectRecordType
 import com.openlattice.chronicle.collection.InteractionPolicy
-import com.openlattice.chronicle.collection.NetworkPolicy
 import com.openlattice.chronicle.collection.SensorCollectionModules
+import com.openlattice.chronicle.collection.capability.DistributionChannel
+import com.openlattice.chronicle.collection.capability.DistributionModulePolicy
+import com.openlattice.chronicle.collection.device.AndroidAppNetworkUsageSource
 import com.openlattice.chronicle.collection.device.ExpansionPullSchedule
+import com.openlattice.chronicle.collection.device.HealthConnectScopeStore
 import com.openlattice.chronicle.collection.settings.CollectionSettingsResolver
-import com.openlattice.chronicle.collection.settings.EncryptedPrefsSensorSettingSource
 import com.openlattice.chronicle.collection.settings.ResolvedModuleSetting
-import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
-import com.openlattice.chronicle.preferences.SensorSettings
-import com.openlattice.chronicle.services.upload.LocalOperationalIssue
-import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
-import com.openlattice.chronicle.services.upload.recordPolicyErasureInTransaction
-import com.openlattice.chronicle.services.upload.recordPolicyErasureCountInTransaction
-import com.openlattice.chronicle.services.upload.quarantineSourcesForTable
-import com.openlattice.chronicle.sensors.SensorTypeMapping
+import com.openlattice.chronicle.collection.sink.SensorSampleWriter
 import com.openlattice.chronicle.data.ParticipationStatus
+import com.openlattice.chronicle.generated.CollectionConsentContracts
+import com.openlattice.chronicle.preferences.AppliedOperationalModules
+import com.openlattice.chronicle.preferences.DirectBootSensorSnapshot
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.preferences.InteractionPolicySettings
+import com.openlattice.chronicle.preferences.SensorSettings
+import com.openlattice.chronicle.sensors.SensorTypeMapping
+import com.openlattice.chronicle.services.enrollment.endIfEnrollmentCancelled
 import com.openlattice.chronicle.services.notifications.CHANNEL_ID
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
-import com.openlattice.chronicle.services.notifications.userIdentificationMayRun
-import com.openlattice.chronicle.services.crypto.EncryptionSettingStore
 import com.openlattice.chronicle.services.notifications.postNotificationIfPermitted
-import com.openlattice.chronicle.services.upload.UploadWorker
+import com.openlattice.chronicle.services.upload.LocalOperationalIssue
+import com.openlattice.chronicle.services.upload.LocalUploadDiagnosticsStore
+import com.openlattice.chronicle.services.upload.LocalUploadModuleFamily
 import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
-import com.openlattice.chronicle.services.upload.resolveServerForIdentity
+import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.exactActiveEnrollmentServer
+import com.openlattice.chronicle.services.upload.quarantineSourcesForTable
+import com.openlattice.chronicle.services.upload.recordPolicyErasureCountInTransaction
+import com.openlattice.chronicle.services.upload.recordPolicyErasureInTransaction
+import com.openlattice.chronicle.services.upload.resolveServerForIdentity
+import com.openlattice.chronicle.services.upload.serverErrorCode
 import com.openlattice.chronicle.services.upload.triggerImmediateUpload
+import com.openlattice.chronicle.services.upload.uploadHttpStatus
+import com.openlattice.chronicle.services.usage.UsageModuleCollectionDelegate
+import com.openlattice.chronicle.services.withdrawal.WithdrawalState
+import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
+import com.openlattice.chronicle.storage.eraseSensorType
+import com.openlattice.chronicle.storage.nextDecisionSeq
+import java.net.HttpURLConnection
 import java.time.OffsetDateTime
 import java.util.UUID
 
@@ -79,17 +91,24 @@ internal data class EnrollmentModulePartition(
 internal fun clearDirectBootCollection(snapshot: DirectBootSensorSnapshot): Boolean =
     snapshot.write(emptyMap())
 
+/** The study enables modules this artifact does not collect; the participant needs a different study setup, not a new link. */
+internal class UnsupportedStudyModulesException(message: String) : IllegalArgumentException(message)
+
+internal enum class SettingsApplicationOutcome { APPLIED, UNAPPLIABLE, RETRY }
+
 internal fun requireSupportedCollectionPolicies(fetched: AndroidDataCollectionSetting) {
     val distribution = DistributionChannel.current()
     val requestedEnabledModules = fetched.effectiveEnabledModuleIds() +
         fetched.modules.filterValues { it.enabled }.keys
     val unsupportedModules = requestedEnabledModules
         .filterNot { DistributionModulePolicy.supports(distribution, it) }
-    require(unsupportedModules.isEmpty()) {
-        "${distribution.name.lowercase()} release does not support enabled modules: " +
-            unsupportedModules.joinToString { it.id }
+    if (unsupportedModules.isNotEmpty()) {
+        throw UnsupportedStudyModulesException(
+            "Modules not available on this build (${distribution.name.lowercase()}): " +
+                unsupportedModules.joinToString { it.id },
+        )
     }
-    if (distribution in setOf(DistributionChannel.PLAY, DistributionChannel.AMAZON)) {
+    if (distribution.minimalPublic) {
         require(fetched.effectiveModules().getValue(CollectionModuleId.UPLOAD_TELEMETRY).enabled) {
             "${distribution.name.lowercase()} release requires disclosed upload diagnostics"
         }
@@ -102,15 +121,6 @@ internal fun requireSupportedCollectionPolicies(fetched: AndroidDataCollectionSe
         }
         require(setting.collectionCadence.jitterSeconds == 0L) {
             "${moduleId.id} uses unsupported collection-cadence jitter"
-        }
-        require(setting.uploadCadence == CollectionCadence.DEFAULT_UPLOAD) {
-            "${moduleId.id} uses an unsupported upload cadence"
-        }
-        require(setting.batteryPolicy == BatteryPolicy.DEFAULT) {
-            "${moduleId.id} uses an unsupported battery policy"
-        }
-        require(setting.networkPolicy == NetworkPolicy.DEFAULT) {
-            "${moduleId.id} uses an unsupported network policy"
         }
     }
 }
@@ -177,7 +187,7 @@ internal fun enrollmentModulePartition(
  * The pure decision logic lives in [CollectionStateMachine] (JVM-tested); this class is
  * the Android glue that drives it: fetch the server setting, resolve it, reconcile
  * against persisted state, persist, and dispatch side effects (acknowledgment prompts,
- * scope-change notifications, the hardware-sensor service, and disable dispositions).
+ * scope-change notifications, the hardware-sensor service, and module queue flush or erase).
  *
  * Two entry points:
  *  - [sync] — called by the settings-sync worker, piggybacked on uploads, and at
@@ -185,12 +195,23 @@ internal fun enrollmentModulePartition(
  *  - [acknowledge] — called by the acknowledgment screen when the participant accepts
  *    one or more pending modules; activates them and reports the acknowledgment.
  */
+private const val TAG = "CollectionLoopCoordinator"
+
+/**
+ * Only the server's ack-rejected 400 says this acknowledgment can never be accepted. Any other refusal (a proxy, a
+ * contract or size mismatch, a server bug, a 422) keeps the participant's decision queued and retried.
+ */
+private fun isPermanentAckRejection(error: Exception): Boolean =
+    uploadHttpStatus(error) == HttpURLConnection.HTTP_BAD_REQUEST &&
+        serverErrorCode(error) == CollectionConsentContracts.COLLECTION_ACK_REJECTED_CODE
+private data class ConsentNotificationCopy(val title: String, val text: String)
+
 class CollectionLoopCoordinator(context: Context) {
 
     private val appContext = context.applicationContext
 
     companion object {
-        private const val TAG = "CollectionLoopCoordinator"
+
         private const val NOTIFICATION_ID_ACK = 47_001
         private const val NOTIFICATION_ID_SCOPE = 47_002
         private const val NOTIFICATION_ID_INFORM = 47_003
@@ -219,58 +240,6 @@ class CollectionLoopCoordinator(context: Context) {
                 !SensorCollectionModules.isSensorModule(id) || id in availableSensorModules
             }
 
-        /**
-         * Pure collection-ack delivery core. Local consent is already persisted before this runs.
-         * The database invariant permits at most one active study server; callers persist a
-         * delivery failure for retry. A non-empty decision with no eligible destination is a
-         * failure, never a successful no-op.
-         */
-        @JvmStatic
-        fun reportCollectionAckToServers(
-            servers: List<UploadServerEntity>,
-            accepted: Set<CollectionModuleId>,
-            declined: Set<CollectionModuleId>,
-            unavailable: Set<CollectionModuleId> = emptySet(),
-            trigger: ConsentTrigger,
-            acknowledgedAt: OffsetDateTime,
-            settingsVersion: Int? = null,
-            appVersion: String? = currentAppVersion(),
-            report: (server: UploadServerEntity, studyId: UUID, acknowledgment: CollectionAcknowledgment) -> Unit,
-            onFailure: (server: UploadServerEntity, error: Exception) -> Unit = { _, _ -> },
-        ): Boolean {
-            if (accepted.isEmpty() && declined.isEmpty() && unavailable.isEmpty()) return true
-            if (servers.isEmpty()) return false
-
-            var allSucceeded = true
-            servers.forEach { server ->
-                val studyId = runCatching { UUID.fromString(server.studyId) }.getOrNull()
-                if (studyId == null) {
-                    onFailure(server, IllegalArgumentException("Invalid study id"))
-                    allSucceeded = false
-                    return@forEach
-                }
-
-                val acknowledgment = CollectionAcknowledgment(
-                    acknowledgedModules = accepted,
-                    acknowledgedAt = acknowledgedAt,
-                    declinedModules = declined,
-                    unavailableModules = unavailable,
-                    trigger = trigger,
-                    appVersion = appVersion,
-                    settingsVersion = settingsVersion,
-                    disclosureVersion = server.disclosureVersion?.takeIf { server.manifestDigest != null },
-                    manifestDigest = server.manifestDigest?.takeIf { server.disclosureVersion != null },
-                )
-                try {
-                    report(server, studyId, acknowledgment)
-                } catch (e: Exception) {
-                    onFailure(server, e)
-                    allSucceeded = false
-                }
-            }
-            return allSucceeded
-        }
-
         @JvmStatic
         fun retryPendingCollectionAcks(
             pending: List<PendingCollectionAckRecord>,
@@ -280,8 +249,9 @@ class CollectionLoopCoordinator(context: Context) {
             onFailure: (server: UploadServerEntity, error: Exception) -> Unit = { _, _ -> },
             onDiscard: (
                 record: PendingCollectionAckRecord,
-                reason: PendingCollectionAckDiscardReason,
+                reason: PendingCollectionAckDiscardReason
             ) -> Unit = { _, _ -> },
+            onRejected: (server: UploadServerEntity, error: Exception) -> Unit = { _, _ -> },
         ): CollectionAckRetryResult {
             if (pending.isEmpty()) return CollectionAckRetryResult(emptySet(), true)
             val removedStableKeys = linkedSetOf<String>()
@@ -290,25 +260,13 @@ class CollectionLoopCoordinator(context: Context) {
 
             pending.forEach { record ->
                 val acknowledgment = record.toAcknowledgmentOrNull()
-                if (acknowledgment == null) {
-                    onDiscard(record, PendingCollectionAckDiscardReason.INVALID_ACKNOWLEDGMENT)
+                val discardReason = record.discardReason(acknowledgment)
+                if (discardReason != null) {
+                    onDiscard(record, discardReason)
                     removedStableKeys += record.stableKey()
                     return@forEach
                 }
-                val hasCompleteIdentity = record.hasCompleteEnrollmentIdentity()
-                if (!hasCompleteIdentity && !record.isLegacyIdentityFree()) {
-                    onDiscard(record, PendingCollectionAckDiscardReason.LEGACY_OR_INCOMPLETE_IDENTITY)
-                    removedStableKeys += record.stableKey()
-                    return@forEach
-                }
-                if (
-                    hasCompleteIdentity &&
-                    runCatching { UUID.fromString(requireNotNull(record.studyId)) }.getOrNull() == null
-                ) {
-                    onDiscard(record, PendingCollectionAckDiscardReason.INVALID_ENROLLMENT_IDENTITY)
-                    removedStableKeys += record.stableKey()
-                    return@forEach
-                }
+                val validAcknowledgment = checkNotNull(acknowledgment)
                 if (servers.isEmpty()) {
                     // No authoritative configured row can currently be read. Retain the record;
                     // absence of a mutable Room locator is not proof that the enrollment changed.
@@ -316,9 +274,7 @@ class CollectionLoopCoordinator(context: Context) {
                     return@forEach
                 }
 
-                val server = servers.singleOrNull { candidate ->
-                    if (hasCompleteIdentity) record.isBoundTo(candidate) else record.isLegacyBoundTo(candidate)
-                }
+                val server = servers.singleOrNull(record::isBoundTo)
                 if (server == null) {
                     onDiscard(record, PendingCollectionAckDiscardReason.ENROLLMENT_IDENTITY_MISMATCH)
                     removedStableKeys += record.stableKey()
@@ -329,13 +285,9 @@ class CollectionLoopCoordinator(context: Context) {
                     return@forEach
                 }
 
-                val studyId = runCatching { UUID.fromString(server.studyId) }.getOrNull()
-                if (studyId == null) {
-                    onDiscard(record, PendingCollectionAckDiscardReason.INVALID_ENROLLMENT_IDENTITY)
-                    removedStableKeys += record.stableKey()
-                    return@forEach
-                }
-                val participantId = record.participantId ?: server.participantId
+                // discardReason refused a record whose studyId is not a UUID, and the bound server has that studyId.
+                val studyId = UUID.fromString(server.studyId)
+                val participantId = checkNotNull(record.participantId)
                 val eligible = resolveServerForIdentity(server, studyId, participantId,
                     requireSetupComplete = server != provisionalEnrollmentServer).server
                 if (eligible == null) {
@@ -346,12 +298,18 @@ class CollectionLoopCoordinator(context: Context) {
                     return@forEach
                 }
                 try {
-                    report(eligible, studyId, acknowledgment)
+                    report(eligible, studyId, validAcknowledgment)
                     removedStableKeys += record.stableKey()
                 } catch (e: Exception) {
-                    onFailure(eligible, e)
-                    allAttemptedSucceeded = false
-                    deferredServerIds += server.id
+                    if (isPermanentAckRejection(e)) {
+                        // E3: the server will never take this acknowledgment; later decisions must not wait behind it.
+                        onRejected(eligible, e)
+                        removedStableKeys += record.stableKey()
+                    } else {
+                        onFailure(eligible, e)
+                        allAttemptedSucceeded = false
+                        deferredServerIds += server.id
+                    }
                 }
             }
 
@@ -406,13 +364,6 @@ class CollectionLoopCoordinator(context: Context) {
      * the Data Sharing surface use). Sensor modules absent from this set are filtered out of the
      * resolved settings by [retainCollectableSensors].
      */
-    private fun availableSensorModules(): Set<CollectionModuleId> {
-        val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        return SensorCollectionModules.sensorModuleIds.filterTo(mutableSetOf()) { moduleId ->
-            val sensorType = SensorCollectionModules.sensorTypeOf(moduleId) ?: return@filterTo false
-            sensorManager.getDefaultSensor(SensorTypeMapping.toAndroidType(sensorType)) != null
-        }
-    }
 
     /**
      * Resolves [fetched] and hardware-gates it: every sensor module whose hardware this device
@@ -422,18 +373,14 @@ class CollectionLoopCoordinator(context: Context) {
      */
     private fun resolveCollectableSettings(
         fetched: AndroidDataCollectionSetting,
-    ): Map<CollectionModuleId, ResolvedModuleSetting> {
-        val resolver = CollectionSettingsResolver(EncryptedPrefsSensorSettingSource(appContext))
-        // Materialize the shared manifest contract before resolving so device-local legacy sensor
-        // preferences can never add a module the authoritative enrollment snapshot omitted.
-        val authoritative = fetched.copy(modules = fetched.effectiveModules())
-        val raw = resolver.resolveAll(generalized = authoritative)
-        val resolved = retainCollectableSensors(raw, availableSensorModules())
+    ): Pair<Map<CollectionModuleId, ResolvedModuleSetting>, Map<CollectionModuleId, ResolvedModuleSetting>> {
+        val raw = CollectionSettingsResolver().resolveAll(generalized = fetched.copy(modules = fetched.effectiveModules()))
+        val resolved = retainCollectableSensors(raw, availableSensorModules(appContext))
         val gatedOut = raw.keys.filter { SensorCollectionModules.isSensorModule(it) && it !in resolved }
         if (gatedOut.isNotEmpty()) {
             Log.i(TAG, "Hardware-gated out ${gatedOut.size} device-absent sensor module(s): ${gatedOut.map { it.id }}")
         }
-        return resolved
+        return raw to resolved
     }
 
     internal fun enrollmentModulePartitionFor(
@@ -442,7 +389,7 @@ class CollectionLoopCoordinator(context: Context) {
         declined: Set<CollectionModuleId>,
     ): EnrollmentModulePartition = enrollmentModulePartition(
         fetched = fetched,
-        availableSensorModules = availableSensorModules(),
+        availableSensorModules = availableSensorModules(appContext),
         accepted = accepted,
         declined = declined,
     )
@@ -450,8 +397,8 @@ class CollectionLoopCoordinator(context: Context) {
     /**
      * Fetches the current [com.openlattice.chronicle.collection.AndroidDataCollectionSetting],
      * reconciles it against persisted state, persists the result, and dispatches side
-     * effects. Returns true on success (including the no-op cases), false on a fetch error
-     * so the caller (a Worker) can retry.
+     * effects. Returns false for transient failures so the worker retries. A policy this build
+     * cannot apply is recorded and ends this run; periodic polling can discover the next revision.
      */
     fun sync(): Boolean {
         replayPendingErasures()
@@ -471,82 +418,101 @@ class CollectionLoopCoordinator(context: Context) {
             ResearchErasureFence(appContext).settingsGeneration()
         }
         val fetched = try {
-            UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
+            UploadWorker.getChronicleStudyApi(server.url)
                 .getDataCollectionSettings(studyId)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to fetch data collection settings; will retry", e)
             return false
         }
-        if (!applyFetchedSettings(server, responseGeneration, fetched)) return false
-        // Fetch + cache the study's payload-encryption setting (HIPAA-2028 W2) alongside the
-        // data-collection settings. The server answers this read for every study (an
-        // un-provisioned one returns a disabled default), so a failure leaves the policy UNKNOWN
-        // and the upload delegates fail closed until the next sync — never plaintext. It must NOT
-        // fail the sync (the data-collection reconcile above already succeeded).
-        val encryptionGeneration = ResearchErasureFence(appContext).settingsGeneration()
-        syncEncryptionSetting(studyId, server, encryptionGeneration)
+        if (applyFetchedSettings(server, responseGeneration, fetched) == SettingsApplicationOutcome.RETRY) return false
         return pendingAcksReported
     }
 
-    /** The response and its dispositions are committed against decisions read under this stop. */
+    /** The response is committed against decisions read under this stop. */
     internal fun applyFetchedSettings(
         expected: UploadServerEntity,
         responseGeneration: Long,
         fetched: AndroidDataCollectionSetting,
-    ): Boolean {
-        var applied = false
+    ): SettingsApplicationOutcome {
+        var outcome = SettingsApplicationOutcome.RETRY
         try {
             ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.SETTINGS_APPLY,
-                ResearchErasureFence.enrollmentKey(expected), ResearchErasureFence.enrollmentKey(expected)), completed = { applied }) {
-                val current = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
+                ResearchErasureFence.enrollmentKey(expected), ResearchErasureFence.enrollmentKey(expected)),
+                completed = { outcome == SettingsApplicationOutcome.APPLIED }) {
                 val fence = ResearchErasureFence(appContext)
-                if (current == null || ResearchErasureFence.enrollmentKey(current) != ResearchErasureFence.enrollmentKey(expected) ||
-                    fence.settingsGeneration() != responseGeneration ||
-                    EnrollmentSettings(appContext).getParticipationStatus() != ParticipationStatus.ENROLLED ||
-                    com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore(appContext).state() !=
-                    com.openlattice.chronicle.services.withdrawal.WithdrawalState.NONE) return@stop
-                MinimalPlayArtifactState.markPolicyIncompatible(appContext)
-                requireSupportedCollectionPolicies(fetched)
-                val resolved = resolveCollectableSettings(fetched)
+                if (!stillEnrolled(expected) || fence.settingsGeneration() != responseGeneration) return@stop
+                try {
+                    requireSupportedCollectionPolicies(fetched)
+                } catch (error: IllegalArgumentException) {
+                    Log.e(TAG, "Collection settings revision ${fetched.settingsVersion} is unsupported by this build", error)
+                    LocalUploadDiagnosticsStore.of(appContext).recordFailure(LocalUploadModuleFamily.APP_RUNTIME, error)
+                    outcome = SettingsApplicationOutcome.UNAPPLIABLE
+                    return@stop
+                }
+                val (requested, resolved) = resolveCollectableSettings(fetched)
                 val store = CollectionLoopStore.of(appContext)
                 val previous = store.loadAll()
                 val transitions = CollectionStateMachine.reconcile(previous, resolved, fetched.settingsVersion)
-                val discarded = transitions.filter { it.disposition == CollectionDataDisposition.DISCARD_AND_STOP }
-                    .map { it.moduleId }.toSet()
-                if (discarded.isNotEmpty()) fence.erase(discarded, states = transitions.map { it.newState }, ownerKey =
-                    ResearchErasureFence.enrollmentKey(expected))
-                else fence.settingsChanged()
-                DistributionRestrictedRuntime.markDirectBootSensorErasures(appContext,
-                    discarded.mapNotNull { SensorCollectionModules.sensorTypeOf(it)?.name }.toSet())
-                store.save(transitions.map { it.newState })
-                persistHealthConnectScope(fetched)
-                dispatch(transitions, suppressDecisionNotification = previous.isEmpty())
-                replayPendingErasures()
-                if (!applyRuntimeSettings(UUID.fromString(expected.studyId), fetched.settingsVersion, resolved)) return@stop
-                applyPullIntervals(resolved)
-                val currentStates = store.loadAll().values.filter { it.moduleId in CollectionStateMachine.ACK_GATED_MODULES }
-                val accepted = currentStates.filter { it.accepted }.mapTo(linkedSetOf()) { it.moduleId }
-                val declined = currentStates.filter { it.decision == ParticipantDecision.DECLINED }.mapTo(linkedSetOf()) { it.moduleId }
-                if (accepted.isNotEmpty() || declined.isNotEmpty()) {
-                    CollectionAckRetryQueue.enqueueSettingsVersionOnce(appContext, expected, PendingCollectionAckRecord.from(
-                        server = expected, accepted = accepted, declined = declined,
-                        trigger = ConsentTrigger.SETTINGS_CHANGE, acknowledgedAt = OffsetDateTime.now(),
-                        settingsVersion = fetched.settingsVersion,
-                    ))
+                val states = transitions.map { it.newState }
+                val changed = transitions.any { it.newState != previous[it.moduleId] }
+                if (changed) collectUnreadUsage()
+                val changedAt = System.currentTimeMillis()
+                if (changed) {
+                    // Field projection and revision evidence share this phone-clock boundary, including unread
+                    // history when the flush is unavailable and events after its exclusive end.
+                    fence.reconcileModuleCollection(collectingModules(states), now = changedAt)
+                    fence.settingsChanged()
                 }
-                MinimalPlayArtifactState.markPolicyCompatible(appContext)
+                ChronicleDb.getInstance(appContext).runInTransaction {
+                    if (changed) UsageModuleCollectionDelegate.recordSettingsRevision(appContext,
+                        ResearchErasureFence.enrollmentKey(expected),
+                        previous.values.maxOfOrNull { it.appliedVersion }?.takeIf { it > 0 }, fetched.settingsVersion, changedAt)
+                    store.save(states)
+                }
+                AppliedOperationalModules.save(appContext, expected, resolved.filter { (id, setting) ->
+                    id !in CollectionStateMachine.ACK_GATED_MODULES && setting.enabled }.keys)
+                persistHealthConnectScope(fetched)
+                dispatch(transitions, previous)
+                replayPendingErasures()
+                if (!applyRuntimeSettings(UUID.fromString(expected.studyId), fetched, requested)) return@stop
+                applyPullIntervals(resolved)
+                // B9: applying a revision records no decision; the participant's own decisions are the only acks.
                 updateUserIdentificationService()
-                applied = true
+                EnrolledWork.reconcile(appContext, refreshSettings = false)
+                outcome = SettingsApplicationOutcome.APPLIED
             }
         } catch (error: Exception) {
             Log.e(TAG, "Collection settings response could not be applied", error)
         }
-        return applied
+        return outcome
+    }
+
+    /**
+     * One usage poll through the regular delegate, under the caller's stop: it collects only while usage collects (no
+     * halt, withdrawal or pause) and Usage Access reads, and otherwise keeps its cursor. Its failure must not hold back
+     * a revision, which can be a disable; the cursor and revision timeline retain the window for the next poll.
+     * Do not take USAGE_POLL_LOCK inside the stop: its holder may be waiting for the barrier's read side.
+     */
+    private fun collectUnreadUsage() {
+        try {
+            UsageModuleCollectionDelegate(appContext).execute()
+        } catch (error: Exception) {
+            Log.e(TAG, "Unread usage could not be queued under the current settings revision", error)
+        }
     }
 
     internal fun refreshCollectorAdmission() {
         updateSensorService()
         updateUserIdentificationService()
+    }
+
+    /** Retire grants and queues of modules this release excludes, through the replayable participant-decision erasure. */
+    /** The enrollment a settings response was fetched for is still the configured, enrolled, unwithdrawn one. */
+    private fun stillEnrolled(expected: UploadServerEntity): Boolean {
+        val current = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer() ?: return false
+        return ResearchErasureFence.enrollmentKey(current) == ResearchErasureFence.enrollmentKey(expected) &&
+            EnrollmentSettings(appContext).getParticipationStatus() == ParticipationStatus.ENROLLED &&
+            WithdrawalStateStore(appContext).state() == WithdrawalState.NONE
     }
 
     private fun currentErasureOwner(): String? = ChronicleDb.getInstance(appContext)
@@ -561,19 +527,19 @@ class CollectionLoopCoordinator(context: Context) {
             if (fence.pendingOwner(module) == currentErasureOwner()) {
                 fence.pendingState(module)?.let { CollectionLoopStore.of(appContext).save(listOf(it)) }
             }
-            applyDisposition(module, CollectionDataDisposition.DISCARD_AND_STOP)
+            eraseModuleQueue(module)
         }
     }
 
-    internal fun prepareRecoveryErasures(owner: Pair<String, String>?) {
+    internal fun prepareRecoveryErasures(ownerScope: String?) {
         val fence = ResearchErasureFence(appContext)
-        if (fence.hasPendingErasures()) fence.markRecoveryErasure(owner)
+        if (fence.hasPendingErasures()) fence.markRecoveryErasure(ownerScope)
     }
 
     /** Recovery archives are indivisible: explicit pending erasure wins over preservation. */
-    internal fun reconcileVerifiedRecoveryErasures(owner: Pair<String, String>?) = ResearchPersistenceGate.stop {
+    internal fun reconcileVerifiedRecoveryErasures(ownerScope: String?) = ResearchPersistenceGate.stop {
         val fence = ResearchErasureFence(appContext)
-        prepareRecoveryErasures(owner)
+        prepareRecoveryErasures(ownerScope)
         fence.erase(CollectionModuleId.values().toSet(), durableIntent = false)
         UploadQueueSingleFlight.withExclusiveMutation {
             fence.pending().forEach { eraseModuleAuxiliaryState(appContext, it) }
@@ -599,6 +565,15 @@ class CollectionLoopCoordinator(context: Context) {
         is DecisionApplicationOutcome.Applied -> outcome.reportsDelivered
         DecisionApplicationOutcome.PreconditionRejected -> false
     }
+
+    /** A disclosure for an earlier policy or enrollment cannot authorize the current module. */
+    fun applyReviewedModuleAcceptance(
+        reviewed: CollectionModuleState,
+        expectedOwner: UploadServerEntity,
+        trigger: ConsentTrigger,
+    ): Boolean = applyDecisionsIf(setOf(reviewed.moduleId), emptySet(), trigger) {
+        reviewedModuleIsCurrent(appContext, reviewed, expectedOwner)
+    } is DecisionApplicationOutcome.Applied
 
     /**
      * Opens Health Connect only if the exact scope the participant just reviewed is still current
@@ -636,7 +611,9 @@ class CollectionLoopCoordinator(context: Context) {
         if (decisions.isEmpty()) return DecisionApplicationOutcome.Applied(reportsDelivered = true)
         val store = CollectionLoopStore.of(appContext)
         lateinit var result: DecisionResult
+        var acks = emptyList<PendingCollectionAckRecord>()
         var preconditionPassed = false
+        val wasHalted = store.haltedByDeclinedRequired()
         ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.PARTICIPANT_DECISION,
             decisions.toSortedMap(compareBy { it.id }).toString(), ResearchPersistenceGate.currentOwnerKey()),
             completed = { preconditionPassed },
@@ -651,17 +628,26 @@ class CollectionLoopCoordinator(context: Context) {
             val fence = ResearchErasureFence(appContext)
             if (result.deactivated.isNotEmpty()) fence.erase(result.deactivated, states = result.newStates.values, ownerKey = currentErasureOwner())
             else fence.settingsChanged()
-            DistributionRestrictedRuntime.markDirectBootSensorErasures(appContext,
+            DistributionRestrictedRuntime.retireDirectBootSensors(appContext,
                 result.deactivated.mapNotNull { SensorCollectionModules.sensorTypeOf(it)?.name }.toSet())
-            fence.accepted(result.activated)
-            store.save(result.newStates.values)
-            // A participant turning a module off is a privacy decision, not a researcher-selected
-            // retention policy. Pending local rows are discarded while every uploader is excluded.
-            result.deactivated.forEach { moduleId ->
-                applyDisposition(moduleId, CollectionDataDisposition.DISCARD_AND_STOP)
+            // Only the enrollment review admits history captured before the acceptance.
+            fence.accepted(result.activated, initialReview = trigger == ConsentTrigger.ENROLLMENT)
+            // The decision, its sequence number and its acknowledgment commit together, so a crash cannot leave the
+            // server untold, and every row captured afterwards carries the new sequence (B7).
+            val db = ChronicleDb.getInstance(appContext)
+            db.runInTransaction {
+                store.save(result.newStates.values)
+                if (reportChanges) acks = decisionAcks(result, trigger).map { it.copy(decisionSeq = db.nextDecisionSeq()) }
+                CollectionAckRetryQueue.of(appContext).enqueue(acks)
             }
+            // A participant turning a module off is a privacy decision: its pending local rows are erased while every
+            // uploader is excluded. A study disable flushes instead (C5).
+            result.deactivated.forEach(::eraseModuleQueue)
         }
         if (!preconditionPassed) return DecisionApplicationOutcome.PreconditionRejected
+        // Accepting the declined required module lifts the hard stop: schedule what it cancelled. The queue it
+        // cleared stays gone.
+        CollectionHardStop.resumeWorkIfLifted(appContext, wasHalted)
 
         // Re-evaluate the shared sensor foreground service against the EFFECTIVE gate (which
         // folds in the global halt), not just this decision's activate/deactivate set. The
@@ -676,22 +662,22 @@ class CollectionLoopCoordinator(context: Context) {
         if (result.activated.isEmpty() && result.deactivated.isEmpty()) {
             return DecisionApplicationOutcome.Applied(reportsDelivered = true)
         }
-        var allSucceeded = true
-        (result.activated + result.deactivated)
+        return DecisionApplicationOutcome.Applied(reportsDelivered = acks.isNotEmpty() && retryPendingCollectionAcks())
+    }
+
+    /** One acknowledgment per enrolled server and settings version for the modules this decision changed. */
+    private fun decisionAcks(result: DecisionResult, trigger: ConsentTrigger): List<PendingCollectionAckRecord> {
+        val acknowledgedAt = OffsetDateTime.now()
+        return (result.activated + result.deactivated)
             .groupBy { result.newStates.getValue(it).appliedVersion }
-            .forEach { (settingsVersion, modules) ->
-                val group = modules.toSet()
-                if (!reportDecisions(
-                        accepted = result.activated.intersect(group),
-                        declined = result.deactivated.intersect(group),
-                        trigger = trigger,
-                        settingsVersion = settingsVersion,
-                    ).allDelivered
-                ) {
-                    allSucceeded = false
+            .flatMap { (settingsVersion, modules) ->
+                enabledServers().map { server ->
+                    PendingCollectionAckRecord.from(server = server,
+                        accepted = result.activated.intersect(modules.toSet()),
+                        declined = result.deactivated.intersect(modules.toSet()),
+                        trigger = trigger, acknowledgedAt = acknowledgedAt, settingsVersion = settingsVersion)
                 }
             }
-        return DecisionApplicationOutcome.Applied(reportsDelivered = allSucceeded)
     }
 
     private sealed interface DecisionApplicationOutcome {
@@ -718,7 +704,7 @@ class CollectionLoopCoordinator(context: Context) {
         }
         // Only walk the participant through sensors this device actually has — a study-enabled
         // sensor the hardware lacks (e.g. a Samsung-only sensor on a Pixel) must not get a step.
-        val resolved = resolveCollectableSettings(fetched)
+        val resolved = resolveCollectableSettings(fetched).second
         val transitions = CollectionStateMachine.reconcile(emptyMap(), resolved, fetched.settingsVersion)
         // Present sensor steps in the canonical relevance order (SensorCollectionModules.
         // sensorDisplayOrder). Non-sensor modules get rank -1 and keep their relative order ahead
@@ -748,11 +734,7 @@ class CollectionLoopCoordinator(context: Context) {
         var applied = false
         ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.SETTINGS_APPLY,
             ResearchErasureFence.enrollmentKey(expected), ResearchErasureFence.enrollmentKey(expected)), completed = { applied }) {
-            val current = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
-            if (current == null || ResearchErasureFence.enrollmentKey(current) != ResearchErasureFence.enrollmentKey(expected) ||
-                EnrollmentSettings(appContext).getParticipationStatus() != ParticipationStatus.ENROLLED ||
-                com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore(appContext).state() !=
-                com.openlattice.chronicle.services.withdrawal.WithdrawalState.NONE) return@stop
+            if (!stillEnrolled(expected)) return@stop
             replayPendingErasures()
             applied = seedCurrentEnrollmentDecisions(studyId, fetched, accepted, declined, unavailable)
         }
@@ -769,14 +751,8 @@ class CollectionLoopCoordinator(context: Context) {
         try {
             requireSupportedCollectionPolicies(fetched)
         } catch (error: IllegalArgumentException) {
-            ResearchPersistenceGate.stop {
-                MinimalPlayArtifactState.markPolicyIncompatible(appContext)
-            }
             Log.e(TAG, "Unsupported enrollment collection policy", error)
             return false
-        }
-        ResearchPersistenceGate.stop {
-            MinimalPlayArtifactState.markPolicyIncompatible(appContext)
         }
         val partition = try {
             validateEnrollmentModulePartition(fetched, accepted, declined, unavailable)
@@ -786,16 +762,14 @@ class CollectionLoopCoordinator(context: Context) {
         }
         // Seed initial state from the same hardware-gated view the wizard was shown, so a
         // device-absent sensor isn't seeded into AWAITING_DECISION behind the participant's back.
-        val resolved = resolveCollectableSettings(fetched).filterKeys { it !in partition.unavailable }
+        val (requested, collectable) = resolveCollectableSettings(fetched)
+        val resolved = collectable.filterKeys { it !in partition.unavailable }
         val store = CollectionLoopStore.of(appContext)
         val transitions = CollectionStateMachine.reconcile(emptyMap(), resolved, fetched.settingsVersion)
         // Close every module gate before installing any newly accepted runtime scope. This also
         // makes same-study credential refreshes fail closed if the process stops midway.
         try {
             ResearchPersistenceGate.stop {
-                DistributionRestrictedRuntime.markDirectBootSensorErasures(appContext,
-                    transitions.filter { it.disposition == CollectionDataDisposition.DISCARD_AND_STOP }
-                        .mapNotNull { SensorCollectionModules.sensorTypeOf(it.moduleId)?.name }.toSet())
                 store.save(transitions.map { it.newState })
                 persistHealthConnectScope(fetched)
             }
@@ -803,7 +777,7 @@ class CollectionLoopCoordinator(context: Context) {
             Log.e(TAG, "Failed to persist the initial Health Connect scope", e)
             return false
         }
-        if (!applyRuntimeSettings(studyId, fetched.settingsVersion, resolved)) {
+        if (!applyRuntimeSettings(studyId, fetched, requested)) {
             Log.e(TAG, "Failed to persist initial runtime settings; collection gates remain closed")
             return false
         }
@@ -819,12 +793,11 @@ class CollectionLoopCoordinator(context: Context) {
         // The issued row is enabled but intentionally not setup-complete yet, so use the exact
         // configured destination rather than getEnabledServer(). Network failure is acceptable
         // only after the same three-way partition is durable in the retry queue.
-        val enrollmentServers = allServers().filter { it.enabled }
-        val reportOutcome = reportDecisions(
+        val enrollmentServers = allServers(appContext).filter { it.enabled }
+        val reportOutcome = reportEnrollmentDecisions(
             accepted = partition.accepted,
             declined = partition.declined,
             unavailable = partition.unavailable,
-            trigger = ConsentTrigger.ENROLLMENT,
             settingsVersion = partition.settingsVersion,
             servers = enrollmentServers,
             provisionalEnrollmentServer = enrollmentServers.singleOrNull(),
@@ -833,9 +806,6 @@ class CollectionLoopCoordinator(context: Context) {
             Log.w(TAG, "Initial collection decision report was queued for retry")
         }
         if (!reportOutcome.allDelivered && !reportOutcome.retryDurable) return false
-        ResearchPersistenceGate.stop {
-            MinimalPlayArtifactState.markPolicyCompatible(appContext)
-        }
         updateUserIdentificationService()
         // Local consent and runtime settings are authoritative for setup completion. A transient
         // acknowledgment delivery failure is already durable in CollectionAckRetryQueue.
@@ -871,7 +841,8 @@ class CollectionLoopCoordinator(context: Context) {
 
     // ----- side effects -----
 
-    private fun dispatch(transitions: List<ModuleTransition>, suppressDecisionNotification: Boolean) {
+    private fun dispatch(transitions: List<ModuleTransition>, previous: Map<CollectionModuleId, CollectionModuleState>) {
+        val suppressDecisionNotification = previous.isEmpty()
         // Notify for modules that NEWLY need a participant decision on THIS sync — both an
         // optional NEEDS_DECISION and a mandatory NEWLY_REQUIRED_NEEDS_CONSENT. A module
         // already awaiting a decision from a prior sync (STILL_AWAITING_DECISION) is
@@ -879,8 +850,7 @@ class CollectionLoopCoordinator(context: Context) {
         // re-posting would (a) re-notify the initial baseline on the 2nd sync — once persisted,
         // `previous` is no longer empty so the baseline guard stops suppressing — and (b) nag on
         // every poll for a module the participant is already being prompted about in-app.
-        // (Phase 3 splits NEWLY_REQUIRED_NEEDS_CONSENT into its own high-priority blocking
-        // surface; for now it shares the "action needed" notification.)
+        // NEWLY_REQUIRED_NEEDS_CONSENT shares the "action needed" notification.
         // Each per-sensor module participates here exactly like a usage module: a sensor a
         // researcher adds mid-study surfaces the same "a data collection option was added" review.
         val needsDecision = transitions.filter {
@@ -888,18 +858,13 @@ class CollectionLoopCoordinator(context: Context) {
                 it.type == ModuleTransitionType.NEWLY_REQUIRED_NEEDS_CONSENT
         }.map { it.moduleId }.toSet()
 
-        // The "turned off" notice fires only for modules that were actually COLLECTING (a
-        // disposition is set only on an ACTIVE → disabled transition). A module disabled
+        // The "turned off" notice fires only for modules that were actually COLLECTING. A module disabled
         // before it ever collected (awaiting/declined) settles silently.
         val disabledWhileActive = transitions.filter {
-            it.type == ModuleTransitionType.FORCIBLY_DISABLED && it.disposition != null
+            it.type == ModuleTransitionType.FORCIBLY_DISABLED && previous[it.moduleId]?.phase == CollectionModulePhase.ACTIVE
         }
-
-        transitions.forEach { t ->
-            if (t.type == ModuleTransitionType.FORCIBLY_DISABLED) {
-                t.disposition?.let { applyDisposition(t.moduleId, it) }
-            }
-        }
+        // C5: a study disable flushes what the module already captured.
+        if (disabledWhileActive.isNotEmpty()) triggerImmediateUpload(appContext)
         // Start/stop the one shared sensor foreground service against the post-reconcile gate:
         // it runs while ANY per-sensor module collects and stops when none do — so enabling or
         // disabling individual sensors (or accepting/declining them) toggles the service.
@@ -910,9 +875,9 @@ class CollectionLoopCoordinator(context: Context) {
             // required that the participant hasn't accepted → ALL collection is now paused
             // (the global gate halt), so the notice says so.
             val mandatory = transitions.any { it.type == ModuleTransitionType.NEWLY_REQUIRED_NEEDS_CONSENT }
-            postAckNeededNotification(needsDecision, mandatory)
+            postAckNeededNotification(mandatory)
         }
-        if (disabledWhileActive.isNotEmpty()) postDisabledNotification(disabledWhileActive)
+        if (disabledWhileActive.isNotEmpty()) postDisabledNotification()
 
         // Required↔optional flips on an ALREADY-ACCEPTED module are informational (it keeps
         // collecting; only its lock state in Data Sharing changes). Tell the participant —
@@ -925,158 +890,151 @@ class CollectionLoopCoordinator(context: Context) {
     }
 
     /**
-     * Applies a disable disposition to the module's pending on-device queue.
-     * FLUSH_THEN_STOP enqueues an immediate upload (no data loss); DISCARD_AND_STOP drops
-     * the module's pending queue; HOLD_PENDING retains it while collection stops.
+     * Erases the module's pending on-device queue: the participant declined it, or an erasure is replayed.
      *
      * Dedicated queues are cleared independently. Sensor rows carry their sensor type and are
      * deleted per type. Usage, in-app activity, and lifecycle rows share `dataQueue`; the
-     * shared-queue eraser retains sibling samples and redacts only the disabled activity field.
+     * shared-queue eraser retains sibling samples and redacts only the declined activity field.
      */
-    private fun applyDisposition(moduleId: CollectionModuleId, disposition: CollectionDataDisposition) {
-        val operation = if (disposition == CollectionDataDisposition.DISCARD_AND_STOP)
-            ResearchPersistenceGate.PrivacyOperation(ResearchPersistenceGate.PrivacyOperationKind.MODULE_DISCARD, moduleId.id, currentErasureOwner(
-                )) else null
-        ResearchPersistenceGate.stop(operation) {
-            if (disposition == CollectionDataDisposition.DISCARD_AND_STOP) {
-                val fence = ResearchErasureFence(appContext)
-                if (moduleId !in fence.pending()) fence.erase(setOf(moduleId), ownerKey = currentErasureOwner())
-                UploadQueueSingleFlight.withExclusiveMutation {
-                    executeDisposition(moduleId, disposition)
-                    eraseModuleAuxiliaryState(appContext, moduleId)
-                    fence.completed(moduleId)
-                }
-            } else executeDisposition(moduleId, disposition)
+    private fun eraseModuleQueue(moduleId: CollectionModuleId) {
+        ResearchPersistenceGate.stop(ResearchPersistenceGate.PrivacyOperation(
+            ResearchPersistenceGate.PrivacyOperationKind.MODULE_DISCARD, moduleId.id, currentErasureOwner())) {
+            val fence = ResearchErasureFence(appContext)
+            if (moduleId !in fence.pending()) fence.erase(setOf(moduleId), ownerKey = currentErasureOwner())
+            UploadQueueSingleFlight.withExclusiveMutation {
+                executeErasure(moduleId)
+                eraseModuleAuxiliaryState(appContext, moduleId)
+                fence.completed(moduleId)
+            }
         }
     }
 
-    private fun executeDisposition(moduleId: CollectionModuleId, disposition: CollectionDataDisposition) {
-        // The pure policy (which queue, whether DISCARD is honorable, flush vs retain) is decided
-        // by planDisposition (JVM-tested); this method only performs the Android side effects.
-        when (val action = planDisposition(moduleId, disposition)) {
-            DispositionAction.Flush -> {
-                Log.i(TAG, "Disposition FLUSH_THEN_STOP for '${moduleId.id}': triggering upload")
-                triggerImmediateUpload(appContext)
+    private fun executeErasure(moduleId: CollectionModuleId) {
+        // Which queue holds the module's rows is decided by planModuleErasure (JVM-tested); this method only
+        // performs the Android side effects.
+        when (val action = planModuleErasure(moduleId)) {
+            is ModuleErasure.ClearDedicated -> clearDedicatedQueue(moduleId, action.queue)
+            is ModuleErasure.ClearSensor -> clearSensorQueue(moduleId, action.sensorType)
+            ModuleErasure.NoDedicatedQueue ->
+                Log.i(TAG, "Erasure: no dedicated queue for '${moduleId.id}'")
+        }
+    }
+
+    private fun clearDedicatedQueue(moduleId: CollectionModuleId, queue: ModuleQueue) = ResearchPersistenceGate.stop {
+        UploadQueueSingleFlight.withExclusiveMutation {
+            if (queue == ModuleQueue.APP_NETWORK_USAGE_SAMPLES) {
+                AndroidAppNetworkUsageSource.clearCheckpoint(appContext)
             }
-            is DispositionAction.ClearDedicated -> ResearchPersistenceGate.stop {
-                UploadQueueSingleFlight.withExclusiveMutation {
-                    if (action.queue == DispositionQueue.APP_NETWORK_USAGE_SAMPLES) {
-                        com.openlattice.chronicle.collection.device.AndroidAppNetworkUsageSource.clearCheckpoint(appContext)
-                    }
-                    val db = ChronicleDb.getInstance(appContext)
-                    db.runInTransaction {
-                        val table = dispositionQueueTable(action.queue)
-                        if (table != null && action.queue != DispositionQueue.SHARED_DATA_QUEUE) {
-                            recordPolicyErasureInTransaction(
-                                db, table, dispositionQueueFamily(action.queue),
-                                LocalOperationalIssue.MODULE_POLICY_ERASED,
-                            )
-                        }
-                        if (table != null && action.queue != DispositionQueue.SHARED_DATA_QUEUE &&
-                            action.queue !in setOf(
-                                DispositionQueue.INTERACTION_SAMPLES,
-                                DispositionQueue.AUDIO_ACTIVITY_SAMPLES,
-                                DispositionQueue.AUDIO_CONTENT_SAMPLES,
-                                DispositionQueue.NOTIFICATION_ACTIVITY_SAMPLES,
-                                DispositionQueue.SLEEP_SAMPLES,
-                                DispositionQueue.ACTIVITY_RECOGNITION_SAMPLES,
-                                DispositionQueue.HEALTH_METRIC_SAMPLES,
-                            )) db.localDataQuarantineDao().eraseSources(quarantineSourcesForTable(table))
-                    when (action.queue) {
-                    DispositionQueue.BATTERY_SAMPLES -> {
-                        Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': dropping battery_samples")
+            val db = ChronicleDb.getInstance(appContext)
+            db.runInTransaction {
+                val table = moduleQueueTable(queue)
+                if (table != null && queue != ModuleQueue.SHARED_DATA_QUEUE) {
+                    recordPolicyErasureInTransaction(
+                        db, table, moduleQueueFamily(queue),
+                        LocalOperationalIssue.MODULE_POLICY_ERASED,
+                    )
+                }
+                if (table != null && queue != ModuleQueue.SHARED_DATA_QUEUE &&
+                    queue !in setOf(
+                        ModuleQueue.INTERACTION_SAMPLES,
+                        ModuleQueue.AUDIO_ACTIVITY_SAMPLES,
+                        ModuleQueue.AUDIO_CONTENT_SAMPLES,
+                        ModuleQueue.NOTIFICATION_ACTIVITY_SAMPLES,
+                        ModuleQueue.SLEEP_SAMPLES,
+                        ModuleQueue.ACTIVITY_RECOGNITION_SAMPLES,
+                        ModuleQueue.HEALTH_METRIC_SAMPLES,
+                    )) db.localDataQuarantineDao().eraseSources(quarantineSourcesForTable(table))
+                when (queue) {
+                    ModuleQueue.BATTERY_SAMPLES -> {
+                        Log.i(TAG, "Erasure for '${moduleId.id}': dropping battery_samples")
                         db.batterySampleDao().deleteAll()
                     }
-                    DispositionQueue.USER_QUEUE -> {
-                        Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': dropping userQueue")
+                    ModuleQueue.USER_QUEUE -> {
+                        Log.i(TAG, "Erasure for '${moduleId.id}': dropping userQueue")
                         db.userQueueEntryData().deleteAll()
                     }
-                    DispositionQueue.SHARED_DATA_QUEUE -> {
-                        Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': erasing only known module samples")
+                    ModuleQueue.SHARED_DATA_QUEUE -> {
+                        Log.i(TAG, "Erasure for '${moduleId.id}': erasing only known module samples")
                         eraseSharedQueueModule(db, moduleId)
                         eraseSharedQueueModuleQuarantine(db, moduleId)
                     }
-                    DispositionQueue.INTERACTION_SAMPLES,
-                    DispositionQueue.AUDIO_ACTIVITY_SAMPLES,
-                    DispositionQueue.AUDIO_CONTENT_SAMPLES,
-                    DispositionQueue.NOTIFICATION_ACTIVITY_SAMPLES,
-                    DispositionQueue.SLEEP_SAMPLES,
-                    DispositionQueue.ACTIVITY_RECOGNITION_SAMPLES,
-                    DispositionQueue.HEALTH_METRIC_SAMPLES -> {
-                        // These legacy tables must still be erased when upgrading a device that
-                        // once ran a research-capable build. Use schema-level deletion so the
-                        // minimal Play graph never references (and therefore never retains) the
-                        // restricted Room DAO implementations.
-                        eraseRestrictedQueueAndQuarantineInTransaction(db, action.queue)
+                    ModuleQueue.INTERACTION_SAMPLES,
+                    ModuleQueue.AUDIO_ACTIVITY_SAMPLES,
+                    ModuleQueue.AUDIO_CONTENT_SAMPLES,
+                    ModuleQueue.NOTIFICATION_ACTIVITY_SAMPLES,
+                    ModuleQueue.SLEEP_SAMPLES,
+                    ModuleQueue.ACTIVITY_RECOGNITION_SAMPLES,
+                    ModuleQueue.HEALTH_METRIC_SAMPLES -> {
+                        // Schema-level deletion: the amazon build has no collector for these
+                        // tables, so its graph never references their Room DAO implementations.
+                        eraseRestrictedQueueAndQuarantineInTransaction(db, queue)
                     }
-                    DispositionQueue.CONNECTIVITY_STATE_SAMPLES -> db.connectivityStateSampleDao().deleteAll()
-                    DispositionQueue.APP_NETWORK_USAGE_SAMPLES -> db.appNetworkUsageSampleDao().deleteAll()
-                    DispositionQueue.DEVICE_SETTINGS_SAMPLES -> db.deviceSettingsSampleDao().deleteAll()
-                        DispositionQueue.NONE -> Unit
-                    }
-                    }
+                    ModuleQueue.CONNECTIVITY_STATE_SAMPLES -> db.connectivityStateSampleDao().deleteAll()
+                    ModuleQueue.APP_NETWORK_USAGE_SAMPLES -> db.appNetworkUsageSampleDao().deleteAll()
+                    ModuleQueue.DEVICE_SETTINGS_SAMPLES -> db.deviceSettingsSampleDao().deleteAll()
+                    ModuleQueue.NONE -> Unit
                 }
             }
-            is DispositionAction.ClearSensor -> ResearchPersistenceGate.stop {
-                UploadQueueSingleFlight.withExclusiveMutation {
-                    Log.i(TAG, "DISCARD_AND_STOP for '${moduleId.id}': dropping only ${action.sensorType} rows")
-                    val ramErased = com.openlattice.chronicle.collection.sink.SensorSampleWriter.discardSensorSamples(action.sensorType)
-                    val db = ChronicleDb.getInstance(appContext)
-                    db.runInTransaction {
-                        recordPolicyErasureCountInTransaction(db, ramErased.toLong(), LocalUploadModuleFamily.SENSOR,
-                            LocalOperationalIssue.MODULE_POLICY_ERASED)
-                    }
-                    DistributionRestrictedRuntime.eraseDirectBootSensorSamples(appContext, action.sensorType)
-                    db.runInTransaction {
-                        recordPolicyErasureInTransaction(
-                            db, "sensor_samples", LocalUploadModuleFamily.SENSOR,
-                            LocalOperationalIssue.MODULE_POLICY_ERASED,
-                            "sensorType = ?", arrayOf(action.sensorType),
-                        )
-                        recordPolicyErasureInTransaction(
-                            db, "sensor_sample_dead_letters", LocalUploadModuleFamily.SENSOR,
-                            LocalOperationalIssue.MODULE_POLICY_ERASED,
-                            "sensorType = ?", arrayOf(action.sensorType),
-                        )
-                        db.sensorSampleDao().deleteBySensorType(action.sensorType)
-                    }
-                }
-            }
-            DispositionAction.NoDedicatedQueue ->
-                Log.i(TAG, "DISCARD_AND_STOP: no dedicated queue for '${moduleId.id}'")
-            DispositionAction.Retain ->
-                Log.i(TAG, "Disposition HOLD_PENDING for '${moduleId.id}': retaining queue (gate stops collection)")
         }
     }
 
-    private fun reportDecisions(
+    private fun clearSensorQueue(moduleId: CollectionModuleId, sensorType: String) = ResearchPersistenceGate.stop {
+        UploadQueueSingleFlight.withExclusiveMutation {
+            Log.i(TAG, "Erasure for '${moduleId.id}': dropping only $sensorType rows")
+            val ramErased = SensorSampleWriter.discardSensorSamples(sensorType)
+            val db = ChronicleDb.getInstance(appContext)
+            db.runInTransaction {
+                recordPolicyErasureCountInTransaction(db, ramErased.toLong(), LocalUploadModuleFamily.SENSOR,
+                    LocalOperationalIssue.MODULE_POLICY_ERASED)
+            }
+            DistributionRestrictedRuntime.retireDirectBootSensors(appContext, setOf(sensorType))
+            db.runInTransaction {
+                recordPolicyErasureInTransaction(
+                    db, "sensor_samples", LocalUploadModuleFamily.SENSOR,
+                    LocalOperationalIssue.MODULE_POLICY_ERASED,
+                    "sensorType = ?", arrayOf(sensorType),
+                )
+                recordPolicyErasureInTransaction(
+                    db, "sensor_sample_dead_letters", LocalUploadModuleFamily.SENSOR,
+                    LocalOperationalIssue.MODULE_POLICY_ERASED,
+                    "sensorType = ?", arrayOf(sensorType),
+                )
+                db.eraseSensorType(sensorType)
+            }
+        }
+    }
+
+    /** The enrollment's first decision report; later decisions are acknowledged from [applyDecisionsIf]. */
+    private fun reportEnrollmentDecisions(
         accepted: Set<CollectionModuleId>,
         declined: Set<CollectionModuleId>,
-        unavailable: Set<CollectionModuleId> = emptySet(),
-        trigger: ConsentTrigger,
+        unavailable: Set<CollectionModuleId>,
         settingsVersion: Int,
-        servers: List<UploadServerEntity> = enabledServers(),
-        provisionalEnrollmentServer: UploadServerEntity? = null,
+        servers: List<UploadServerEntity>,
+        provisionalEnrollmentServer: UploadServerEntity?,
     ): DecisionReportOutcome {
         val operation = { UploadQueueSingleFlight.withExclusiveMutation {
             val admittedServers = if (provisionalEnrollmentServer == null) enabledServers() else servers
             val acknowledgedAt = OffsetDateTime.now()
             if (admittedServers.isEmpty()) return@withExclusiveMutation DecisionReportOutcome(false, false)
-            CollectionAckRetryQueue.of(appContext).enqueue(admittedServers.map { server ->
+            val records = admittedServers.map { server ->
                     PendingCollectionAckRecord.from(server = server,
                         accepted = accepted,
                         declined = declined,
                         unavailable = unavailable,
-                        trigger = trigger,
+                        trigger = ConsentTrigger.ENROLLMENT,
                         acknowledgedAt = acknowledgedAt,
                         settingsVersion = settingsVersion,
                     )
-                })
+                }
+            admittedServers.zip(records).forEach { (server, record) ->
+                CollectionAckRetryQueue.enqueueEnrollmentOnce(appContext, server, record)
+            }
             DecisionReportOutcome(allDelivered = retryPendingCollectionAcks(provisionalEnrollmentServer), retryDurable = true)
         } }
         return try {
             val admitted = if (provisionalEnrollmentServer == null) {
-                ResearchPersistenceGate.runIfEnrolled(appContext, operation)
+                ResearchPersistenceGate.runIfEnrollmentConfigured(appContext, operation)
             } else {
                 ResearchPersistenceGate.runIfExpectedEnrollment(
                     appContext,
@@ -1106,13 +1064,6 @@ class CollectionLoopCoordinator(context: Context) {
     private fun enabledServers(): List<UploadServerEntity> =
         listOfNotNull(primaryServer())
 
-    private fun allServers(): List<UploadServerEntity> = try {
-        listOfNotNull(ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer())
-    } catch (e: Exception) {
-        Log.e(TAG, "Failed to resolve the configured enrollment server", e)
-        emptyList()
-    }
-
     private fun retryPendingCollectionAcks(provisionalEnrollmentServer: UploadServerEntity? = null): Boolean {
         val queue = try {
             CollectionAckRetryQueue.of(appContext)
@@ -1120,8 +1071,11 @@ class CollectionLoopCoordinator(context: Context) {
             Log.e(TAG, "Failed to open pending collection decision store", e)
             return false
         }
+        // A cancel this ack learns of ends the enrollment, which needs the stop, so it is handled after the lease.
+        var failure: Triple<UploadServerEntity, Long, Exception>? = null
         return try {
             val operation = { UploadQueueSingleFlight.withExclusiveMutation {
+                val generation = ResearchErasureFence(appContext).settingsGeneration()
                 // Load under the enrollment read lease. Withdrawal clears this durable queue
                 // under the write side of the same barrier, so a predecessor record can never
                 // remain only in memory and cross a completed withdrawal/re-enrollment boundary.
@@ -1129,86 +1083,71 @@ class CollectionLoopCoordinator(context: Context) {
                 if (pending.isEmpty()) return@withExclusiveMutation true
                 val result = CollectionLoopCoordinator.retryPendingCollectionAcks(
                     pending = pending,
-                    servers = allServers(),
+                    servers = allServers(appContext),
                     provisionalEnrollmentServer = provisionalEnrollmentServer,
                     report = { server, studyId, acknowledgment ->
-                        UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
+                        UploadWorker.getChronicleStudyApi(server.url)
                             .reportCollectionAck(
                                 studyId,
                                 server.participantId,
-                                server.sourceDeviceId,
+                                server.sourceRandomDeviceId,
                                 server.apiKey,
                                 acknowledgment,
                             )
-                        acknowledgment.settingsVersion?.let {
-                            ChronicleDb.getInstance(appContext).uploadQueueEvidenceDao().releaseHeldThrough(it)
+                        if (acknowledgment.trigger == ConsentTrigger.ENROLLMENT) {
+                            CollectionAckRetryQueue.markEnrollmentDelivered(appContext, server)
                         }
                     },
                     onFailure = { server, error ->
                         Log.w(TAG, "Failed to retry collection decision report to '${server.name}'", error)
+                        failure = Triple(server, generation, error)
                     },
                     onDiscard = { _, reason ->
                         Log.w(TAG, "Dropped pending collection decision with reason $reason")
+                    },
+                    onRejected = { server, error ->
+                        Log.e(TAG, "Server '${server.name}' refused a collection decision; it is dropped", error)
+                        LocalUploadDiagnosticsStore.of(appContext).recordFailure(LocalUploadModuleFamily.APP_RUNTIME, error)
                     },
                 )
                 queue.removeByStableKeys(result.removedStableKeys)
                 result.allAttemptedSucceeded
             } }
-            if (provisionalEnrollmentServer == null) ResearchPersistenceGate.runIfEnrolled(appContext, operation) ?: false
-            else ResearchPersistenceGate.runIfExpectedEnrollment(appContext, provisionalEnrollmentServer, operation) ?: false
+            if (provisionalEnrollmentServer == null) {
+                val delivered = ResearchPersistenceGate.runIfEnrollmentConfigured(appContext, operation) ?: false
+                failure?.let { (server, generation, error) -> endIfEnrollmentCancelled(appContext, server, generation, error) }
+                delivered
+            } else {
+                // The enrollment's own first report runs under its setup stop; a cancel it meets stays queued for the
+                // next retry or status poll, which end the enrollment once its setup completes.
+                ResearchPersistenceGate.runIfExpectedEnrollment(appContext, provisionalEnrollmentServer, operation) ?: false
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update pending collection decision store", e)
             false
         }
     }
 
-    /**
-     * Best-effort fetch of the study's [com.openlattice.chronicle.study.StudyEncryptionSetting]
-     * (public key only) over the public settings endpoint, caching it in
-     * [EncryptionSettingStore] for the upload delegates. A failed fetch leaves the study's policy
-     * UNKNOWN, which the store reports as encryption-required, so the delegates retain their
-     * batches instead of falling back to plaintext. Never throws into the sync.
-     */
-    private fun syncEncryptionSetting(
-        studyId: UUID,
-        expected: UploadServerEntity,
-        responseGeneration: Long,
-    ) {
-        try {
-            val setting = UploadWorker.getChronicleStudyApi(expected.url, expected.mobileSigningSecretOverride)
-                .getStudyEncryptionSetting(studyId)
-            ResearchPersistenceGate.stop {
-                val current = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
-                if (current == null || ResearchErasureFence.enrollmentKey(current) != ResearchErasureFence.enrollmentKey(expected) ||
-                    ResearchErasureFence(appContext).settingsGeneration() != responseGeneration ||
-                    !ResearchPersistenceGate.isActiveEnrollment(appContext)) return@stop
-                EncryptionSettingStore.of(appContext).put(studyId, setting)
-                Log.i(TAG, "Cached encryption setting (enabled=${setting.enabled})")
-            }
-        } catch (e: Exception) {
-            // The server answers this read for every study (an un-provisioned one returns a
-            // disabled default), so a throw is a transport/auth/parse failure, NOT evidence that
-            // the study is plaintext. The policy stays unknown and the upload paths fail closed
-            // (batches retained + retried) until a fetch succeeds.
-            Log.w(TAG, "Encryption policy unknown; uploads stay fail-closed until it is fetched", e)
-        }
-    }
-
     /** Whether any per-sensor module currently collects (server-enabled AND acknowledged). */
     internal fun anySensorCollects(): Boolean =
         ResearchPersistenceGate.isActiveEnrollment(appContext) &&
+            sensorServiceDesired()
+
+    /** A pause closes the listeners, preserving the foreground service for background resume. */
+    internal fun sensorServiceDesired(): Boolean = ResearchPersistenceGate.runIfEnrolled(appContext) {
+        participationRetainsServices(EnrollmentSettings(appContext).getParticipationStatus()) &&
             SensorCollectionModules.sensorModuleIds.any { CollectionLoopStore.of(appContext).collects(it) }
+    } == true
 
     /**
-     * Starts the one shared sensor foreground service if any per-sensor module collects, and
-     * stops it otherwise. Reads the freshly-persisted gate state.
+     * Reconciles the foreground lifetime; temporary collection gates belong to the runtime.
      */
     internal fun updateSensorService() {
         if (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
             SensorSettings(appContext).clear()
             return
         }
-        if (anySensorCollects()) {
+        if (sensorServiceDesired()) {
             if (!DistributionRestrictedRuntime.tryStartHardwareSensors(appContext)) {
                 Log.i(TAG, "Sensor foreground service start deferred; collection settings sync remains applied")
             }
@@ -1226,11 +1165,7 @@ class CollectionLoopCoordinator(context: Context) {
 
     /** Keeps unlock monitoring aligned with the current accepted module state and local opt-in. */
     private fun updateUserIdentificationService() {
-        if (userIdentificationMayRun(appContext)) {
-            DeviceUnlockMonitoringService.startAuthorizedService(appContext)
-        } else {
-            DeviceUnlockMonitoringService.stopService(appContext)
-        }
+        DeviceUnlockMonitoringService.reconcile(appContext)
     }
 
     /**
@@ -1247,10 +1182,10 @@ class CollectionLoopCoordinator(context: Context) {
     /** Persists the exact study generation consumed by sensor and accessibility collectors. */
     private fun applyRuntimeSettings(
         studyId: UUID,
-        settingsVersion: Int,
-        resolved: Map<CollectionModuleId, ResolvedModuleSetting>,
+        fetched: AndroidDataCollectionSetting,
+        requested: Map<CollectionModuleId, ResolvedModuleSetting>,
     ): Boolean = applyRuntimeSettingsBeforeGate(
-        resolved = resolved,
+        resolved = requested,
         persistSensors = {
             if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
                 SensorSettings(appContext).applyResolvedSensors(it)
@@ -1260,7 +1195,7 @@ class CollectionLoopCoordinator(context: Context) {
             }
         },
         persistInteraction = { enabled, policy ->
-            InteractionPolicySettings(appContext).save(studyId, settingsVersion, enabled, policy)
+            InteractionPolicySettings(appContext).save(studyId, fetched.settingsVersion, enabled, policy)
         },
     )
 
@@ -1277,26 +1212,29 @@ class CollectionLoopCoordinator(context: Context) {
         }
     }
 
-    private fun postAckNeededNotification(modules: Set<CollectionModuleId>, mandatory: Boolean) {
+    private fun postAckNeededNotification(mandatory: Boolean) {
         // Deep-link to the Data Sharing tab, where each pending module is reviewed and decided
         // individually — NOT the retired all-at-once acknowledgment screen.
-        val intent = Intent(appContext, com.openlattice.chronicle.MainActivity::class.java)
+        val intent = Intent(appContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            .putExtra(com.openlattice.chronicle.MainActivity.EXTRA_SELECT_TAB, R.id.nav_data_sharing)
+            .putExtra(MainActivity.EXTRA_SELECT_TAB, R.id.nav_data_sharing)
         val pending = PendingIntent.getActivity(
             appContext, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val (title, text) = if (mandatory) {
-            appContext.getString(R.string.notif_required_title) to appContext.getString(R.string.notif_required_text)
+        val copy = if (mandatory) {
+            ConsentNotificationCopy(title = appContext.getString(R.string.notif_required_title),
+                text = appContext.getString(if (CollectionLoopStore.of(appContext).haltedByDeclinedRequired())
+                    R.string.ds_status_paused_required else R.string.notif_required_text))
         } else {
-            appContext.getString(R.string.notif_action_needed) to appContext.getString(R.string.notif_option_added)
+            ConsentNotificationCopy(title = appContext.getString(R.string.notif_action_needed),
+                text = appContext.getString(R.string.notif_option_added))
         }
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notification)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentTitle(copy.title)
+            .setContentText(copy.text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(copy.text))
             .setAutoCancel(true)
             .setContentIntent(pending)
             .build()
@@ -1304,9 +1242,9 @@ class CollectionLoopCoordinator(context: Context) {
     }
 
     private fun postInformationalNotice(nowRequired: Boolean, nowOptional: Boolean) {
-        val intent = Intent(appContext, com.openlattice.chronicle.MainActivity::class.java)
+        val intent = Intent(appContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            .putExtra(com.openlattice.chronicle.MainActivity.EXTRA_SELECT_TAB, R.id.nav_data_sharing)
+            .putExtra(MainActivity.EXTRA_SELECT_TAB, R.id.nav_data_sharing)
         val pending = PendingIntent.getActivity(
             appContext, 1, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -1329,9 +1267,8 @@ class CollectionLoopCoordinator(context: Context) {
         postNotificationIfPermitted(appContext, NOTIFICATION_ID_INFORM, notification)
     }
 
-    private fun postDisabledNotification(disabled: List<ModuleTransition>) {
-        // Approved copy 2026-06-04 — docs/COLLECTION-LOOP-CLOSURE-DESIGN.md Appendix B
-        // ("Disabled" notification). Fires only for disable transitions (see dispatch).
+    private fun postDisabledNotification() {
+        // Fires only for disable transitions (see dispatch).
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle(appContext.getString(R.string.notif_collection_updated))
@@ -1398,8 +1335,8 @@ data class ConsentPlan(
     }
 }
 
-/** The on-device queue a module's pending data lives in, for disable-disposition purposes. */
-internal enum class DispositionQueue {
+/** The on-device queue a module's pending data lives in. */
+internal enum class ModuleQueue {
     BATTERY_SAMPLES,
     USER_QUEUE,
     SHARED_DATA_QUEUE,
@@ -1416,109 +1353,126 @@ internal enum class DispositionQueue {
     NONE,
 }
 
-internal fun restrictedQueueTable(queue: DispositionQueue): String = when (queue) {
-    DispositionQueue.INTERACTION_SAMPLES -> "interaction_samples"
-    DispositionQueue.AUDIO_ACTIVITY_SAMPLES -> "audio_activity_samples"
-    DispositionQueue.AUDIO_CONTENT_SAMPLES -> "audio_content_samples"
-    DispositionQueue.NOTIFICATION_ACTIVITY_SAMPLES -> "notification_activity_samples"
-    DispositionQueue.SLEEP_SAMPLES -> "sleep_samples"
-    DispositionQueue.ACTIVITY_RECOGNITION_SAMPLES -> "activity_recognition_samples"
-    DispositionQueue.HEALTH_METRIC_SAMPLES -> "health_metric_samples"
+internal fun restrictedQueueTable(queue: ModuleQueue): String = when (queue) {
+    ModuleQueue.INTERACTION_SAMPLES -> "interaction_samples"
+    ModuleQueue.AUDIO_ACTIVITY_SAMPLES -> "audio_activity_samples"
+    ModuleQueue.AUDIO_CONTENT_SAMPLES -> "audio_content_samples"
+    ModuleQueue.NOTIFICATION_ACTIVITY_SAMPLES -> "notification_activity_samples"
+    ModuleQueue.SLEEP_SAMPLES -> "sleep_samples"
+    ModuleQueue.ACTIVITY_RECOGNITION_SAMPLES -> "activity_recognition_samples"
+    ModuleQueue.HEALTH_METRIC_SAMPLES -> "health_metric_samples"
+    ModuleQueue.APP_NETWORK_USAGE_SAMPLES -> "app_network_usage_samples"
     else -> error("Queue is not a restricted legacy table: $queue")
 }
 
 /** Caller holds the queue mutation lock and a Room transaction. */
-internal fun eraseRestrictedQueueAndQuarantineInTransaction(db: ChronicleDb, queue: DispositionQueue) {
+internal fun eraseRestrictedQueueAndQuarantineInTransaction(db: ChronicleDb, queue: ModuleQueue): Int {
     val table = restrictedQueueTable(queue)
     db.localDataQuarantineDao().eraseSources(quarantineSourcesForTable(table))
-    db.openHelper.writableDatabase.execSQL("DELETE FROM `$table`")
+    return when (queue) {
+        ModuleQueue.INTERACTION_SAMPLES -> db.restrictedArtifactErasureDao().deleteInteractions()
+        ModuleQueue.AUDIO_ACTIVITY_SAMPLES -> db.restrictedArtifactErasureDao().deleteAudioActivity()
+        ModuleQueue.AUDIO_CONTENT_SAMPLES -> db.restrictedArtifactErasureDao().deleteAudioContent()
+        ModuleQueue.NOTIFICATION_ACTIVITY_SAMPLES -> db.restrictedArtifactErasureDao().deleteNotificationActivity()
+        ModuleQueue.SLEEP_SAMPLES -> db.restrictedArtifactErasureDao().deleteSleep()
+        ModuleQueue.ACTIVITY_RECOGNITION_SAMPLES -> db.restrictedArtifactErasureDao().deleteActivityRecognition()
+        ModuleQueue.HEALTH_METRIC_SAMPLES -> db.restrictedArtifactErasureDao().deleteHealthMetrics()
+        ModuleQueue.APP_NETWORK_USAGE_SAMPLES -> db.appNetworkUsageSampleDao().deleteAll()
+        else -> error("Queue is not a restricted legacy table: $queue")
+    }
 }
 
-internal fun dispositionQueueTable(queue: DispositionQueue): String? = when (queue) {
-    DispositionQueue.BATTERY_SAMPLES -> "battery_samples"
-    DispositionQueue.USER_QUEUE -> "userQueue"
-    DispositionQueue.SHARED_DATA_QUEUE -> "dataQueue"
-    DispositionQueue.CONNECTIVITY_STATE_SAMPLES -> "connectivity_state_samples"
-    DispositionQueue.APP_NETWORK_USAGE_SAMPLES -> "app_network_usage_samples"
-    DispositionQueue.DEVICE_SETTINGS_SAMPLES -> "device_settings_samples"
-    DispositionQueue.NONE -> null
+internal fun moduleQueueTable(queue: ModuleQueue): String? = when (queue) {
+    ModuleQueue.BATTERY_SAMPLES -> "battery_samples"
+    ModuleQueue.USER_QUEUE -> "userQueue"
+    ModuleQueue.SHARED_DATA_QUEUE -> "dataQueue"
+    ModuleQueue.CONNECTIVITY_STATE_SAMPLES -> "connectivity_state_samples"
+    ModuleQueue.DEVICE_SETTINGS_SAMPLES -> "device_settings_samples"
+    ModuleQueue.NONE -> null
     else -> restrictedQueueTable(queue)
 }
 
-internal fun dispositionQueueFamily(queue: DispositionQueue): LocalUploadModuleFamily = when (queue) {
-    DispositionQueue.BATTERY_SAMPLES -> LocalUploadModuleFamily.BATTERY
-    DispositionQueue.USER_QUEUE, DispositionQueue.SHARED_DATA_QUEUE -> LocalUploadModuleFamily.USAGE_LIFECYCLE
-    DispositionQueue.INTERACTION_SAMPLES -> LocalUploadModuleFamily.INTERACTION
-    DispositionQueue.AUDIO_ACTIVITY_SAMPLES -> LocalUploadModuleFamily.AUDIO_ACTIVITY
-    DispositionQueue.AUDIO_CONTENT_SAMPLES -> LocalUploadModuleFamily.AUDIO_CONTENT
-    DispositionQueue.NOTIFICATION_ACTIVITY_SAMPLES -> LocalUploadModuleFamily.NOTIFICATION
-    DispositionQueue.SLEEP_SAMPLES -> LocalUploadModuleFamily.SLEEP
-    DispositionQueue.ACTIVITY_RECOGNITION_SAMPLES -> LocalUploadModuleFamily.ACTIVITY_RECOGNITION
-    DispositionQueue.HEALTH_METRIC_SAMPLES -> LocalUploadModuleFamily.HEALTH
-    DispositionQueue.CONNECTIVITY_STATE_SAMPLES -> LocalUploadModuleFamily.CONNECTIVITY
-    DispositionQueue.APP_NETWORK_USAGE_SAMPLES -> LocalUploadModuleFamily.APP_NETWORK
-    DispositionQueue.DEVICE_SETTINGS_SAMPLES -> LocalUploadModuleFamily.DEVICE_SETTINGS
-    DispositionQueue.NONE -> LocalUploadModuleFamily.LOCAL_STORE
+internal fun moduleQueueFamily(queue: ModuleQueue): LocalUploadModuleFamily = when (queue) {
+    ModuleQueue.BATTERY_SAMPLES -> LocalUploadModuleFamily.BATTERY
+    ModuleQueue.USER_QUEUE, ModuleQueue.SHARED_DATA_QUEUE -> LocalUploadModuleFamily.USAGE_LIFECYCLE
+    ModuleQueue.INTERACTION_SAMPLES -> LocalUploadModuleFamily.INTERACTION
+    ModuleQueue.AUDIO_ACTIVITY_SAMPLES -> LocalUploadModuleFamily.AUDIO_ACTIVITY
+    ModuleQueue.AUDIO_CONTENT_SAMPLES -> LocalUploadModuleFamily.AUDIO_CONTENT
+    ModuleQueue.NOTIFICATION_ACTIVITY_SAMPLES -> LocalUploadModuleFamily.NOTIFICATION
+    ModuleQueue.SLEEP_SAMPLES -> LocalUploadModuleFamily.SLEEP
+    ModuleQueue.ACTIVITY_RECOGNITION_SAMPLES -> LocalUploadModuleFamily.ACTIVITY_RECOGNITION
+    ModuleQueue.HEALTH_METRIC_SAMPLES -> LocalUploadModuleFamily.HEALTH
+    ModuleQueue.CONNECTIVITY_STATE_SAMPLES -> LocalUploadModuleFamily.CONNECTIVITY
+    ModuleQueue.APP_NETWORK_USAGE_SAMPLES -> LocalUploadModuleFamily.APP_NETWORK
+    ModuleQueue.DEVICE_SETTINGS_SAMPLES -> LocalUploadModuleFamily.DEVICE_SETTINGS
+    ModuleQueue.NONE -> LocalUploadModuleFamily.LOCAL_STORE
 }
 
-/**
- * The action a disable disposition resolves to, independent of any Android side effect. This is the
- * pure policy the coordinator's [CollectionLoopCoordinator] glue then executes.
- */
-internal sealed interface DispositionAction {
-    /** FLUSH_THEN_STOP: ship the module's pending rows (immediate upload), then stop — no data loss. */
-    object Flush : DispositionAction
+/** Which rows a module erasure clears, independent of any Android side effect. */
+internal sealed interface ModuleErasure {
+    /** A module with a dedicated queue: clear exactly that queue. */
+    data class ClearDedicated(val queue: ModuleQueue) : ModuleErasure
 
-    /** DISCARD_AND_STOP for a module with a dedicated queue: clear exactly that queue. */
-    data class ClearDedicated(val queue: DispositionQueue) : DispositionAction
+    /** One tagged hardware-sensor module. */
+    data class ClearSensor(val sensorType: String) : ModuleErasure
 
-    /** DISCARD_AND_STOP for one tagged hardware-sensor module. */
-    data class ClearSensor(val sensorType: String) : DispositionAction
-
-    /** DISCARD_AND_STOP for a module with no dedicated queue: nothing to clear. */
-    object NoDedicatedQueue : DispositionAction
-
-    /** HOLD_PENDING: retain the queue; the gate stops further collection (queue stays bounded). */
-    object Retain : DispositionAction
+    /** A module with no dedicated queue: nothing to clear. */
+    object NoDedicatedQueue : ModuleErasure
 }
 
 /** The dedicated on-device queue for [moduleId], or a shared/none marker. */
-internal fun dedicatedQueueFor(moduleId: CollectionModuleId): DispositionQueue = when {
-    moduleId == CollectionModuleId.BATTERY_TELEMETRY -> DispositionQueue.BATTERY_SAMPLES
-    moduleId == CollectionModuleId.USER_IDENTIFICATION -> DispositionQueue.USER_QUEUE
-    moduleId == CollectionModuleId.INTERACTION_EVENTS -> DispositionQueue.INTERACTION_SAMPLES
-    moduleId == CollectionModuleId.AUDIO_ACTIVITY -> DispositionQueue.AUDIO_ACTIVITY_SAMPLES
-    moduleId == CollectionModuleId.AUDIO_CONTENT -> DispositionQueue.AUDIO_CONTENT_SAMPLES
-    moduleId == CollectionModuleId.NOTIFICATION_ACTIVITY -> DispositionQueue.NOTIFICATION_ACTIVITY_SAMPLES
-    moduleId == CollectionModuleId.SLEEP -> DispositionQueue.SLEEP_SAMPLES
-    moduleId == CollectionModuleId.ACTIVITY_RECOGNITION -> DispositionQueue.ACTIVITY_RECOGNITION_SAMPLES
-    moduleId == CollectionModuleId.HEALTH_CONNECT -> DispositionQueue.HEALTH_METRIC_SAMPLES
-    moduleId == CollectionModuleId.CONNECTIVITY_STATE -> DispositionQueue.CONNECTIVITY_STATE_SAMPLES
-    moduleId == CollectionModuleId.APP_NETWORK_USAGE -> DispositionQueue.APP_NETWORK_USAGE_SAMPLES
-    moduleId == CollectionModuleId.DEVICE_SETTINGS -> DispositionQueue.DEVICE_SETTINGS_SAMPLES
+internal fun dedicatedQueueFor(moduleId: CollectionModuleId): ModuleQueue = when {
+    moduleId == CollectionModuleId.BATTERY_TELEMETRY -> ModuleQueue.BATTERY_SAMPLES
+    moduleId == CollectionModuleId.USER_IDENTIFICATION -> ModuleQueue.USER_QUEUE
+    moduleId == CollectionModuleId.INTERACTION_EVENTS -> ModuleQueue.INTERACTION_SAMPLES
+    moduleId == CollectionModuleId.AUDIO_ACTIVITY -> ModuleQueue.AUDIO_ACTIVITY_SAMPLES
+    moduleId == CollectionModuleId.AUDIO_CONTENT -> ModuleQueue.AUDIO_CONTENT_SAMPLES
+    moduleId == CollectionModuleId.NOTIFICATION_ACTIVITY -> ModuleQueue.NOTIFICATION_ACTIVITY_SAMPLES
+    moduleId == CollectionModuleId.SLEEP -> ModuleQueue.SLEEP_SAMPLES
+    moduleId == CollectionModuleId.ACTIVITY_RECOGNITION -> ModuleQueue.ACTIVITY_RECOGNITION_SAMPLES
+    moduleId == CollectionModuleId.HEALTH_CONNECT -> ModuleQueue.HEALTH_METRIC_SAMPLES
+    moduleId == CollectionModuleId.CONNECTIVITY_STATE -> ModuleQueue.CONNECTIVITY_STATE_SAMPLES
+    moduleId == CollectionModuleId.APP_NETWORK_USAGE -> ModuleQueue.APP_NETWORK_USAGE_SAMPLES
+    moduleId == CollectionModuleId.DEVICE_SETTINGS -> ModuleQueue.DEVICE_SETTINGS_SAMPLES
     // usage + in-app activity + lifecycle share dataQueue with no per-module tag.
     moduleId == CollectionModuleId.USAGE_EVENTS ||
         moduleId == CollectionModuleId.IN_APP_ACTIVITY_CLASS ||
-        moduleId == CollectionModuleId.DEVICE_LIFECYCLE -> DispositionQueue.SHARED_DATA_QUEUE
-    else -> DispositionQueue.NONE
+        moduleId == CollectionModuleId.DEVICE_LIFECYCLE -> ModuleQueue.SHARED_DATA_QUEUE
+    else -> ModuleQueue.NONE
 }
 
-/**
- * Pure decision for a disable disposition: maps (module, disposition) to the [DispositionAction] the
- * coordinator executes. Extracted from [CollectionLoopCoordinator.applyDisposition] so the full
- * disposition matrix is JVM-testable without Android (`ChronicleDb`, `Context`, the upload worker).
- */
-internal fun planDisposition(
-    moduleId: CollectionModuleId,
-    disposition: CollectionDataDisposition,
-): DispositionAction = when (disposition) {
-    CollectionDataDisposition.FLUSH_THEN_STOP -> DispositionAction.Flush
-    CollectionDataDisposition.HOLD_PENDING -> DispositionAction.Retain
-    CollectionDataDisposition.DISCARD_AND_STOP ->
-        SensorCollectionModules.sensorTypeOf(moduleId)?.let {
-            DispositionAction.ClearSensor(it.name)
-        } ?: when (val queue = dedicatedQueueFor(moduleId)) {
-            DispositionQueue.NONE -> DispositionAction.NoDedicatedQueue
-            else -> DispositionAction.ClearDedicated(queue)
+/** Pure plan for a module erasure, JVM-testable without Android (`ChronicleDb`, `Context`, the upload worker). */
+internal fun planModuleErasure(moduleId: CollectionModuleId): ModuleErasure =
+    SensorCollectionModules.sensorTypeOf(moduleId)?.let { ModuleErasure.ClearSensor(it.name) }
+        ?: when (val queue = dedicatedQueueFor(moduleId)) {
+            ModuleQueue.NONE -> ModuleErasure.NoDedicatedQueue
+            else -> ModuleErasure.ClearDedicated(queue)
         }
+
+private fun reviewedModuleIsCurrent(appContext: Context, reviewed: CollectionModuleState, expectedOwner: UploadServerEntity): Boolean {
+    val currentOwner = ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer()
+    return currentOwner != null && ResearchErasureFence.enrollmentKey(currentOwner) == ResearchErasureFence.enrollmentKey(expectedOwner) &&
+        reviewed.serverEnabled && CollectionLoopStore.of(appContext).loadAll()[reviewed.moduleId] == reviewed
+}
+
+private fun availableSensorModules(appContext: Context): Set<CollectionModuleId> {
+    val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    return SensorCollectionModules.sensorModuleIds.filterTo(mutableSetOf()) { moduleId ->
+        val sensorType = SensorCollectionModules.sensorTypeOf(moduleId) ?: return@filterTo false
+        sensorManager.getDefaultSensor(SensorTypeMapping.toAndroidType(sensorType)) != null
+    }
+}
+
+@VisibleForTesting
+internal fun allServers(appContext: Context): List<UploadServerEntity> = try {
+    listOfNotNull(ChronicleDb.getInstance(appContext).uploadServerDao().getConfiguredServer())
+} catch (error: SQLiteException) {
+    unavailableConfiguredServers(error)
+} catch (error: IllegalStateException) {
+    unavailableConfiguredServers(error)
+}
+
+private fun unavailableConfiguredServers(error: Exception): List<UploadServerEntity> {
+    Log.e(TAG, "Failed to resolve the configured enrollment server", error)
+    return emptyList()
 }
