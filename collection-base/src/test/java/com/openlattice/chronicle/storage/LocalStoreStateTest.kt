@@ -26,4 +26,19 @@ class LocalStoreStateTest {
             (state as LocalStoreState.RecoveryRequired).reason
         )
     }
+
+    /** AND-V02: a failed preference commit may leave memory ahead of disk; it is unsafe to resume from that map. */
+    @Test
+    fun onlyUnreadableStoresClassifyAsRecovery() {
+        val refused = runCatching { checkLocalStoreWrite(false) { "commit returned false" } }.exceptionOrNull()!!
+        assertEquals(LocalStoreState.RecoveryRequired(LocalStoreRecoveryReason.KEY_PERSISTENCE_FAILED), LocalStoreState.of(refused))
+        assertEquals(LocalStoreState.RecoveryRequired(LocalStoreRecoveryReason.KEY_PERSISTENCE_FAILED),
+            LocalStoreState.of(LocalStoreRecoveryRequiredException(
+                LocalStoreRecoveryReason.KEY_PERSISTENCE_FAILED, IllegalStateException("reconcile", refused))))
+        for (reason in LocalStoreRecoveryReason.entries) {
+            assertEquals(LocalStoreState.RecoveryRequired(reason), LocalStoreState.of(LocalStoreRecoveryRequiredException(reason)))
+        }
+        assertEquals(LocalStoreState.RecoveryRequired(LocalStoreRecoveryReason.DATABASE_OPEN_FAILED),
+            LocalStoreState.of(IllegalStateException("store unavailable")))
+    }
 }

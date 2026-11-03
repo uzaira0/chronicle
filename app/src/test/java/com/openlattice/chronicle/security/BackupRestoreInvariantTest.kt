@@ -50,7 +50,7 @@ class BackupRestoreInvariantTest {
     }
 
     @Test
-    fun legacyBackupRulesExcludeAllPrivateStorageDomains() {
+    fun preAndroid12BackupRulesExcludeAllPrivateStorageDomains() {
         val root = parse("src/main/res/xml/backup_rules.xml")
 
         assertEquals("full-backup-content", root.tagName)

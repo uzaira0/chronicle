@@ -9,6 +9,8 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.security.DigestInputStream
 import java.security.KeyStore
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -17,6 +19,7 @@ import javax.crypto.CipherOutputStream
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import java.security.SecureRandom
 
 private const val KEYSTORE_ALIAS = "chronicle_db_key"
 private const val RECOVERY_KEYSTORE_ALIAS = "chronicle_recovery_key_v1"
@@ -63,7 +66,7 @@ object DatabaseKeyManager {
         }
 
         val passphrase = ByteArray(32)
-        java.security.SecureRandom().nextBytes(passphrase)
+        SecureRandom().nextBytes(passphrase)
 
         try {
             val keystoreKey = getOrCreateKeystoreKey()
@@ -99,7 +102,7 @@ object DatabaseKeyManager {
      * The returned digest covers the original plaintext and is verified by decrypting the newly
      * written artifact before callers are allowed to reset the live store.
      */
-    internal fun encryptAndVerifyRecoveryArtifact(source: File, destination: File): String {
+    internal fun encryptAndVerifyRecoveryArtifact(source: InputStream, destination: File): String {
         destination.parentFile?.mkdirs()
         val key = getOrCreateRecoveryKey()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -107,25 +110,7 @@ object DatabaseKeyManager {
         val digest = MessageDigest.getInstance("SHA-256")
 
         try {
-            FileInputStream(source).use { input ->
-                FileOutputStream(destination).use { output ->
-                    val header = DataOutputStream(output)
-                    header.write(RECOVERY_FILE_MAGIC)
-                    header.writeByte(cipher.iv.size)
-                    header.write(cipher.iv)
-                    header.flush()
-                    CipherOutputStream(output, cipher).use { encrypted ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            digest.update(buffer, 0, count)
-                            encrypted.write(buffer, 0, count)
-                        }
-                    }
-                }
-            }
-
+            source.use { writeRecoveryArtifact(DigestInputStream(it, digest), destination, cipher) }
             val expected = digest.digest()
             check(verifyRecoveryArtifact(destination, key).contentEquals(expected)) {
                 "Encrypted recovery artifact verification failed"
@@ -248,3 +233,13 @@ object DatabaseKeyManager {
         (byte.toInt() and 0xff).toString(16).padStart(2, '0')
     }
 }
+
+private fun writeRecoveryArtifact(plaintext: InputStream, destination: File, cipher: Cipher) =
+    FileOutputStream(destination).use { output ->
+        val header = DataOutputStream(output)
+        header.write(RECOVERY_FILE_MAGIC)
+        header.writeByte(cipher.iv.size)
+        header.write(cipher.iv)
+        header.flush()
+        CipherOutputStream(output, cipher).use { plaintext.copyTo(it) }
+    }

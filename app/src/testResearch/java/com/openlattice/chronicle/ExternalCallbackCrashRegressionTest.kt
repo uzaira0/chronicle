@@ -15,7 +15,6 @@ import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.InteractionPolicy
 import com.openlattice.chronicle.collection.interaction.InteractionCollectionService
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.InteractionPolicySettings
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
@@ -24,6 +23,8 @@ import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.CollectionModuleStateEntity
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.interactionSampleDao
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,13 +34,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowToast
-import java.util.UUID
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28])
 class ExternalCallbackCrashRegressionTest {
+    @get:org.junit.Rule val workManagerRule = WorkManagerRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test fun privacyPolicyTapReportsMissingBrowserWithoutCrashing() {
@@ -66,17 +65,16 @@ class ExternalCallbackCrashRegressionTest {
         val prefs = context.getSharedPreferences("accessibility-bounds", Context.MODE_PRIVATE)
         prefs.edit().clear().putString(STUDY_ID, study.toString()).putString(PARTICIPANT_ID, "participant")
             .putString(PARTICIPATION_STATUS, "ENROLLED").commit()
-        val prefsField = EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-        prefsField.set(EncryptedPrefsHelper, prefs)
+        EnrollmentTestStores.prefs = prefs
         val db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
-        val dbField = ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }
-        dbField.set(null, db)
+        EnrollmentTestStores.db = db
         val service = Robolectric.buildService(InteractionCollectionService::class.java).create().get()
         try {
-            db.uploadServerDao().insert(UploadServerEntity(name = "study", url = "https://localhost", studyId = study.toString(),
-                participantId = "participant", sourceDeviceId = "device"))
+            db.uploadServerDao().insert(UploadServerEntity(name = "study",
+            url = "https://localhost", apiKey = "test-device-key", studyId = study.toString(),
+                participantId = "participant", sourceRandomDeviceId = "device"))
             db.collectionModuleStateDao().upsertAll(listOf(CollectionModuleStateEntity(CollectionModuleId.INTERACTION_EVENTS.id,
-                true, "ACCEPTED", 1, false, 1, null, null)))
+                true, "ACCEPTED", 1, false, 1)))
             ResearchPersistenceGate.initialize(context)
             val initialized = java.util.concurrent.CountDownLatch(1)
             ResearchPersistenceGate.executeAsync { initialized.countDown() }
@@ -84,7 +82,7 @@ class ExternalCallbackCrashRegressionTest {
             assertTrue(ResearchPersistenceGate.collectsNow(context, CollectionModuleId.INTERACTION_EVENTS))
             val policy = InteractionPolicySettings(context)
             assertTrue(policy.save(study, 1, true, InteractionPolicy.DEFAULT))
-            service.javaClass.getDeclaredField("policySettings").apply { isAccessible = true }.set(service, policy)
+            org.robolectric.util.ReflectionHelpers.callInstanceMethod<Unit>(service, "onServiceConnected")
             fun event(rect: Rect): AccessibilityEvent {
                 val node = AccessibilityNodeInfo.obtain().apply { setBoundsInScreen(rect) }
                 return AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_CLICKED).apply {
@@ -96,14 +94,13 @@ class ExternalCallbackCrashRegressionTest {
             service.onAccessibilityEvent(event(Rect(0, 100, 100, 0)))
             assertEquals(0, db.interactionSampleDao().count())
             service.onAccessibilityEvent(event(Rect(0, 0, 100, 100)))
-            val tasks = service.javaClass.getDeclaredField("writeExecutor").apply { isAccessible = true }.get(service)
-            val executor = tasks.javaClass.getDeclaredField("executor").apply { isAccessible = true }.get(tasks) as ExecutorService
-            executor.submit {}.get(5, TimeUnit.SECONDS)
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (db.interactionSampleDao().count() == 0 && System.nanoTime() < deadline) Thread.sleep(10)
             assertEquals(1, db.interactionSampleDao().count())
         } finally {
             service.onDestroy()
             InteractionPolicySettings.invalidateMemoryCache()
-            dbField.set(null, null); prefsField.set(EncryptedPrefsHelper, null); db.close()
+            EnrollmentTestStores.db = null; EnrollmentTestStores.prefs = null; db.close()
         }
     }
 }
