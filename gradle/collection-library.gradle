@@ -20,6 +20,9 @@ android {
     lint {
         abortOnError true
     }
+
+    // Collection code logs through android.util.Log; JVM unit tests get the stub defaults.
+    testOptions.unitTests.returnDefaultValues = true
 }
 
 dependencies {

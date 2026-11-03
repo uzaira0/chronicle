@@ -16,23 +16,23 @@ android {
             allWarningsAsErrors = true
         }
     }
-    defaultConfig {
-        javaCompileOptions {
-            annotationProcessorOptions {
-                arguments += ["room.schemaLocation": "$projectDir/schemas".toString()]
-            }
-        }
-    }
-
-    // Expose the exported Room schema JSONs to androidTest assets so MigrationTestHelper
-    // can load them and validate migrations (ChronicleDbMigrationTest).
-    sourceSets {
-        androidTest.assets.srcDirs += files("$projectDir/schemas")
-    }
 }
 
-ksp {
-    arg('room.schemaLocation', "$projectDir/schemas")
+// Room reads and rewrites the exported ChronicleDb/<version>.json. One directory for every
+// variant let kspDebugKotlin and kspReleaseKotlin, which run in parallel in one invocation, read
+// each other's half-written file ("Unexpected JSON token ... EOF"). Each KSP task gets its own.
+class RoomSchemaLocation implements CommandLineArgumentProvider {
+    @OutputDirectory
+    final File directory
+
+    RoomSchemaLocation(File directory) { this.directory = directory }
+
+    @Override
+    Iterable<String> asArguments() { ["room.schemaLocation=${directory.path}".toString()] }
+}
+
+tasks.withType(com.google.devtools.ksp.gradle.KspAATask).configureEach { task ->
+    task.commandLineArgumentProviders.add(new RoomSchemaLocation(file("$buildDir/room-schemas/${task.name}")))
 }
 
 dependencies {
@@ -41,6 +41,9 @@ dependencies {
     // so downstream modules keep resolving those packages transitively through
     // :collection-base exactly as before the split.
     api project(':collection-contracts')
+
+    // Internal queue splitting and lossless quarantine serialization.
+    implementation 'com.squareup.moshi:moshi-kotlin:1.15.2'
 
     api('com.openlattice:chronicle-models:0.1.0-SNAPSHOT') {
         exclude module: 'guava'
@@ -67,5 +70,4 @@ dependencies {
     // neither ext:junit nor room-testing brings it transitively (room-testing only
     // pulls androidx.test:monitor), so the test APK can't start without it.
     androidTestImplementation 'androidx.test:runner:1.7.0'
-    androidTestImplementation 'androidx.room:room-testing:2.8.4'
 }

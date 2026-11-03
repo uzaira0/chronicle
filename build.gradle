@@ -1,6 +1,12 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
 buildscript {
+    // Guava versions and the raise-only pin have one owner, ../gradles/guava.gradle, which the JVM
+    // repos (and so the included chronicle-models/chronicle-api builds) apply too. The metadata
+    // rule reaches every library that depends on Guava: AGP, R8, lint, data binding, test tooling.
+    apply from: '../gradles/guava.gradle'
+    dependencies.components.all(guavaPinMetadataRule)
+
     repositories {
         google()
         mavenCentral()
@@ -11,6 +17,14 @@ buildscript {
         // NOTE: Do not place your application dependencies here; they belong
         // in the individual module build.gradle files
 
+        // AGP 9.0.1 brings vulnerable versions of these onto the build classpath.
+        constraints {
+            classpath 'org.bitbucket.b_c:jose4j:0.9.6'
+            classpath 'org.jdom:jdom2:2.0.6.1'
+            classpath 'org.bouncycastle:bcprov-jdk18on:1.85'
+            classpath 'org.bouncycastle:bcpkix-jdk18on:1.85'
+            classpath 'org.apache.commons:commons-lang3:3.20.0'
+        }
     }
 }
 
@@ -18,14 +32,9 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url 'https://maven.pkg.github.com/uzaira0/chronicle'
-            credentials {
-                username = project.findProperty("gpr.user") ?: System.getenv("GITHUB_ACTOR") ?: ""
-                password = project.findProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN") ?: ""
-            }
-        }
     }
+
+    dependencies.components.all(rootProject.guavaPinMetadataRule)
 
     // Jackson annotations remain source-level metadata in chronicle-models. The Android app
     // excludes Jackson's parser/databind runtime and uses a Kotlin-aware Moshi boundary.
@@ -43,3 +52,6 @@ allprojects {
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
+
+// Shared by the app and collection worker runtime.
+ext.workManagerVersion = '2.11.2'
