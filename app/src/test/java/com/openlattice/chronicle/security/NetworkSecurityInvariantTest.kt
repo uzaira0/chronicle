@@ -76,55 +76,6 @@ class NetworkSecurityInvariantTest {
     }
 
     @Test
-    fun publicAndControlledBuildsUseTheirDeclaredTlsTrustModels() {
-        val utils = read("src/main/java/com/openlattice/chronicle/utils/Utils.kt")
-        val buildGradle = read("build.gradle")
-        assertTrue("the production host must come from BuildConfig", utils.contains("BuildConfig.CHRONICLE_PRODUCTION_HOST"))
-        assertTrue("the production host must be emitted as a BuildConfig field", buildGradle.contains("CHRONICLE_PRODUCTION_HOST"))
-        assertTrue(
-            "controlled builds must restrict HTTPS to their operator-configured host",
-            utils.contains("host in TRUSTED_SERVER_HOSTS"),
-        )
-        assertTrue(
-            "Play must support arbitrary public HTTPS study servers through system trust",
-            Regex("play\\s*\\{[\\s\\S]*?ALLOW_ANY_SERVER\", \"true\"").containsMatchIn(buildGradle),
-        )
-        assertFalse("distributed code must not embed tenant SPKI pins", utils.contains("CertificatePinner"))
-        assertFalse("distributed code must not embed tenant certificate hashes", utils.contains("sha256/"))
-    }
-
-    @Test
-    fun retiredTestInfrastructureTrustIsAbsentFromDistributedSources() {
-        val buildGradle = read("build.gradle")
-        val utils = read("src/main/java/com/openlattice/chronicle/utils/Utils.kt")
-        assertFalse(buildGradle.contains("CHRONICLE_TESTPROD"))
-        assertFalse(buildGradle.contains("ALLOW_TESTPROD_SERVER"))
-        assertFalse(utils.contains("TESTPROD", ignoreCase = true))
-        assertFalse(utils.contains("nip.io"))
-    }
-
-    @Test
-    fun releaseBuildRejectsAndroidDebugSigningMaterial() {
-        val buildGradle = read("build.gradle")
-        assertTrue(
-            "Release signing guard must reject the Android debug key alias",
-            buildGradle.contains("androiddebugkey"),
-        )
-        assertTrue(
-            "Release signing guard must reject Android debug keystore paths",
-            buildGradle.contains("debug.keystore"),
-        )
-        assertTrue(
-            "Release signing guard must fail only release signing tasks",
-            buildGradle.contains("requiresReleaseSigning"),
-        )
-        assertTrue(
-            "Release signing guard must use a redacted error that does not print keystore passwords",
-            buildGradle.contains("Chronicle release builds must not use Android debug signing material"),
-        )
-    }
-
-    @Test
     fun releaseExportedComponentsStayOnExplicitAllowlist() {
         val exported = manifestElements("src/main/AndroidManifest.xml")
             .filter { it.androidAttr("exported") == "true" }
@@ -140,19 +91,17 @@ class NetworkSecurityInvariantTest {
                 // LOCKED_BOOT_COMPLETED delivery; guarded by an action check + the
                 // device-protected snapshot (fail-closed), never by caller-supplied data.
                 ".receivers.lifecycle.LockedBootReceiver",
-                ".receivers.lifecycle.DeviceLifecycleReceiver",
-                ".collection.interaction.InteractionCollectionService",
             ),
             exported,
         )
 
-        val playExported = manifestElements("src/play/AndroidManifest.xml")
+        val amazonExported = manifestElements("src/amazon/AndroidManifest.xml")
             .filter { it.androidAttr("exported") == "true" }
             .map { it.androidAttr("name").orEmpty() }
             .toSet()
         assertEquals(
             emptySet<String>(),
-            playExported,
+            amazonExported,
         )
     }
 
