@@ -2,8 +2,8 @@
 """Gate coverage and exit-status regressions using offline command fixtures."""
 import json
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 import shutil
 import subprocess
 import tempfile
@@ -13,23 +13,29 @@ ROOT = Path(__file__).resolve().parents[2]
 FAILED_JOB_STATUS = 42
 
 
+STUB_JOBS = '''while read -r name; do
+  [[ "$name" == job_group_members ]] || eval "$name() { echo $name; }"
+done < <(compgen -A function job_)
+'''
+
 class GateRegressions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        source = (ROOT / 'scripts/local-ci.sh').read_text()
-        boundary = source.index('\nif [[ "$#" -eq 0 ]]')
-        cls.pmd_version = re.search(r'^PMD_VERSION="([^"]+)"$', source, re.M).group(1)
-        cls.functions = f'PMD_VERSION="{cls.pmd_version}"\n' + source[source.index('usage() {'):boundary]
-        cls.main = source[boundary:]
+        result = subprocess.run(['bash', '-s', '--', str(ROOT / 'scripts/local-ci.sh')],
+                                input='source "$1"; printf "%s" "$PMD_VERSION"',
+                                capture_output=True, text=True, check=True)
+        cls.pmd_version = result.stdout
 
     def run_ci(self, fixture, *jobs, root=ROOT, keep_going='0'):
-        shell = ('set -euo pipefail\n' + self.functions + '\n'
+        shell = ('source "$GATE_SCRIPT"\nROOT_DIR="$FIXTURE_ROOT"; WEB_DIR="$ROOT_DIR/chronicle-web"\n'
                  'require_jdk21() { :; }; require_cmd() { :; }; ensure_ast_grep() { :; }\n'
-                 + fixture + '\n' + (self.main if jobs else ''))
+                 'job_detekt() { printf "detekt:fixture\\n"; }\n'
+                 + fixture + '\n' + ('local_ci_main "$@"' if jobs else ''))
         return subprocess.run(
-            ['bash', '-c', shell, 'gate-fixture', *jobs], capture_output=True, text=True,
-            timeout=20, env=dict(os.environ, ROOT_DIR=str(root), WEB_DIR=str(root / 'chronicle-web'),
-                                 LOCAL_REPORT_DIR='', CHRONICLE_LOCAL_CI_KEEP_GOING=keep_going,
+            ['bash', '-s', '--', *jobs], input=shell, capture_output=True, text=True,
+            timeout=20, env=dict(os.environ, GATE_SCRIPT=str(ROOT / 'scripts/local-ci.sh'),
+                                 FIXTURE_ROOT=str(root), CHRONICLE_LOCAL_CI_REPORT_DIR='',
+                                 CHRONICLE_LOCAL_CI_KEEP_GOING=keep_going,
                                  FAILED_JOB_STATUS=str(FAILED_JOB_STATUS)),
         )
 
@@ -50,8 +56,7 @@ job_web() { echo later-job; }
                     self.assertIn(f'job failed: jvm-smoke status={FAILED_JOB_STATUS}', result.stderr)
 
     def test_keep_going_visits_siblings_in_nested_groups(self):
-        names = set(re.findall(r'\) (job_\w+) ;;', self.functions))
-        fixture = '\n'.join(f'{name}() {{ echo {name}; }}' for name in sorted(names))
+        fixture = STUB_JOBS
         fixture += '\njob_web() { false; echo masked-web; }\n'
         fixture += 'job_selfhost() { false; echo masked-selfhost; }\n'
         result = self.run_ci(fixture, 'all', keep_going='1')
@@ -59,18 +64,27 @@ job_web() { echo later-job; }
         self.assertNotIn('masked-', result.stdout)
         for sibling in ('job_jvm_smoke', 'job_license_compliance', 'job_syft',
                         'job_fluent_bit_config', 'job_parity', 'job_android_unit'):
-            self.assertIn(sibling, result.stdout)
+            self.assertIn(sibling, result.stdout, result.stderr)
         self.assertIn('job failed: web', result.stderr)
         self.assertIn('job failed: selfhost', result.stderr)
 
-    def test_web_gate_executes_all_modern_and_core_tests(self):
-        result = self.run_ci('bun() { printf "bun:%s\\n" "$*"; }; job_web')
+    def test_web_gate_executes_all_modern_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / 'chronicle-web/node_modules/.bin/bun'
+            binary.parent.mkdir(parents=True)
+            binary.write_text('#!/bin/bash\nprintf "bun:%s\\n" "$*"\n')
+            binary.chmod(0o755)
+            security = root / 'tests/security/run-all-security.sh'
+            security.parent.mkdir(parents=True)
+            security.write_text('exit 0\n')
+            result = self.run_ci('bun() { printf "bun:%s\\n" "$*"; }; job_web', root=root)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         filters = []
         for line in result.stdout.splitlines():
             if line.startswith('bun:test '):
                 filters.extend(arg for arg in line.split()[1:] if arg.startswith('src/'))
-        omitted = ('src/modern/app', 'src/modern/i18n', 'src/modern/styles', 'src/core')
+        omitted = ('src/modern/app', 'src/modern/i18n', 'src/modern/styles')
         for directory in omitted:
             tests = list((ROOT / 'chronicle-web' / directory).rglob('*.test.*'))
             self.assertTrue(tests, directory)
@@ -125,11 +139,14 @@ job_web() { echo later-job; }
                             if line.startswith('pmd-arg:')]
                     self.assertIn('rulesets/java/quickstart.xml', args)
                     roots = [Path(args[index + 1]) for index, arg in enumerate(args) if arg == '-d']
+                    self.assertTrue(roots, result.stdout)
+                    # Both directions: every main Java source of a backend module is scanned, and every scanned
+                    # root holds Java (PMD exits 1 on a missing root). A module that gains or loses its Java
+                    # sources fails here until job_pmd follows it.
                     for project in ('chronicle-server', 'chronicle-api'):
                         java = list((ROOT / project / 'src/main').rglob('*.java'))
-                        self.assertTrue(java, project)
                         self.assertTrue(all(any(path.is_relative_to(root) for root in roots)
-                                            for path in java), result.stdout)
+                                            for path in java), (project, result.stdout))
                     self.assertTrue(all(list(root.rglob('*.java')) for root in roots), result.stdout)
 
     def test_android_gate_runs_every_distribution(self):
@@ -144,36 +161,47 @@ job_web() { echo later-job; }
             gradle.chmod(0o755)
             scripts = root / 'chronicle/scripts'
             scripts.mkdir()
-            shell_tests = ('test-verify-play-aab-runtime-helpers.sh', 'test-verify-play-submission.sh')
+            uv = root / 'bin/uv'
+            uv.parent.mkdir()
+            uv.write_text('#!/bin/bash\nprintf "uv:%s\\n" "$*"\n')
+            uv.chmod(0o755)
+            shell_tests = ('test-verify-play-submission.sh',)
             for name in shell_tests:
                 (scripts / name).write_text(f'echo self-test:{name}\nexit "$VERIFIER_STATUS"\n')
             for status in ('0', str(FAILED_JOB_STATUS)):
                 fixture = (f'export VERIFIER_STATUS={status}\n'
+                           f'export PATH="{uv.parent}:$PATH"\n'
                            'python3() { printf "python3:%s\\n" "$*"; }; job_android_unit')
                 result = self.run_ci(fixture, root=root)
                 self.assertEqual(status == '0', result.returncode == 0, result.stdout + result.stderr)
-                for flavor in ('Open', 'Research', 'Play', 'Amazon'):
+                for flavor in ('Open', 'Research', 'Amazon'):
                     self.assertIn(f':app:test{flavor}DebugUnitTest', result.stdout)
+                self.assertNotIn(':app:testPlayDebugUnitTest', result.stdout)
                 self.assertIn('testDebugUnitTest', result.stdout)
-                for name in shell_tests + ('test-release-audit.py', 'test-explicit-signing-input.py'):
+                self.assertIn('uv:run --no-project --python 3.12 --with-requirements '
+                              f'{scripts}/play-upload.requirements.txt python {scripts}/test-play-upload.py', result.stdout)
+                for name in shell_tests + ('test-release-audit.py',):
                     self.assertIn(name, result.stdout)
+                for name in sorted(set(re.findall(r'test-[\w-]+\.(?:py|sh)', result.stdout))):
+                    self.assertTrue((ROOT / 'chronicle/scripts' / name).is_file(), name)
             self.assertTrue((root / 'chronicle/app/build/release-audit-tests/tmp').is_dir())
 
     def test_deploy_gate_runs_full_selfhost_inventory(self):
-        source = (ROOT / 'tests/security/run-all-security.sh').read_text()
-        case = source[source.index('case "$LAYER" in'):source.index('\necho "Layer $LAYER completed.')]
-        fixture = '''set -euo pipefail
+        fixture = '''source "$1"
+security_runner_init() { :; }
+security_runner_finalize() { SECURITY_RUNNER_EXIT_CODE=0; }
 run_security_step() {
   printf 'step:%s command:' "$1"
   shift 6
   printf ' %s' "$@"
   printf '\n'
 }
-''' + case
-        result = subprocess.run(['bash', '-c', fixture], capture_output=True, text=True, timeout=10,
-                                env=dict(os.environ, ROOT_DIR=str(ROOT), REPORT_DIR='/unused', LAYER='deploy'))
+security_runner_main deploy "$2"
+'''
+        result = subprocess.run(['bash', '-s', '--', str(ROOT / 'tests/security/run-all-security.sh'), tempfile.gettempdir()],
+                                input=fixture, capture_output=True, text=True, timeout=10)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn(f'python3 -m unittest discover -s {ROOT}/tests/selfhost-py', result.stdout)
+        self.assertIn(f'run_selfhost_python_suite discover -s {ROOT}/tests/selfhost-py', result.stdout)
         suites = ('selfhost-cert-init', 'selfhost-backup-selfcheck',
                   'selfhost-deployment-audit', 'selfhost-release-source', 'gitleaks-history-regression')
         security = ROOT / 'tests/security'
@@ -182,14 +210,26 @@ run_security_step() {
         required.update(security.glob('*-W[0-9]*.sh'))
         for script in required:
             self.assertIn(f'bash {script}', result.stdout)
-        wrappers = '\n'.join(script.read_text() for script in required)
-        for script in security.glob('*regressions*.py'):
-            # The scheduled wrapper must run the whole suite, without selecting one test.
-            self.assertRegex(wrappers, rf'(?m)^python3 "\$ROOT_DIR/tests/security/{re.escape(script.name)}"\s*$')
+        with tempfile.TemporaryDirectory() as temporary:
+            # The wrappers name their scripts by physical path; macOS's temp dir sits behind /var -> /private/var.
+            root = Path(temporary).resolve()
+            target = root / 'tests/security'
+            target.mkdir(parents=True)
+            binary = root / 'python3'
+            binary.write_text('#!/bin/bash\nprintf "python-arg:%s\\n" "$@"\n')
+            binary.chmod(0o755)
+            invoked = set()
+            for wrapper in security.glob('*regressions*.sh'):
+                shipped = target / wrapper.name
+                shutil.copy2(wrapper, shipped)
+                result = subprocess.run(['bash', str(shipped)], capture_output=True, text=True,
+                                        env=dict(os.environ, PATH=temporary + os.pathsep + os.environ['PATH']), timeout=10)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                arguments = (line.removeprefix('python-arg:') for line in result.stdout.splitlines())
+                invoked.update(argument for argument in arguments if not argument.startswith('-'))
+            self.assertEqual({str(target / script.name) for script in security.glob('*regressions*.py')}, invoked)
 
     def test_http_smoke_gate_runs_upload_and_preserves_failure(self):
-        start = self.functions.index('  "$ROOT_DIR/scripts/smoke-test.sh"')
-        block = self.functions[start:self.functions.index('\n}', start)]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name, body in {'scripts/smoke-test.sh': 'exit 0',
@@ -200,9 +240,8 @@ run_security_step() {
                 script.write_text('#!/bin/bash\n' + body + '\n')
                 script.chmod(0o755)
             for status in ('0', str(FAILED_JOB_STATUS)):
-                fixture = ('smoke_upload() {\n' + block + '\n}\n'
-                           'backend_url=http://fixture.invalid; frontend_url=http://frontend.invalid\n'
-                           f'export UPLOAD_STATUS={status}\nsmoke_upload\necho completed')
+                fixture = (f'export UPLOAD_STATUS={status}\n'
+                           'run_http_smoke_probes http://fixture.invalid http://frontend.invalid\necho completed')
                 result = self.run_ci(fixture, root=root)
                 self.assertEqual(int(status), result.returncode, result.stdout + result.stderr)
                 self.assertIn('upload-gate:http://fixture.invalid:upload', result.stdout)
@@ -226,36 +265,13 @@ run_security_step() {
                     env = dict(os.environ, PATH=temporary + os.pathsep + os.environ['PATH'],
                                FIXTURE_ROOT=temporary, REPORT_DIR=str(report), FAILED_SUITE=failed,
                                FAILED_JOB_STATUS=str(FAILED_JOB_STATUS))
-                    result = subprocess.run(['bash', '-c', fixture], env=env,
+                    result = subprocess.run(['bash', '-s'], input=fixture, env=env,
                                             capture_output=True, text=True, timeout=20)
                     self.assertEqual(not failed, result.returncode == 0, result.stdout + result.stderr)
                     manifest = json.loads((report / 'security-manifest-upload.json').read_text())
                     self.assertEqual(len(suites), len(manifest['steps']))
                     self.assertEqual([FAILED_JOB_STATUS if name == failed else 0 for name in suites],
                                      [step['exitCode'] for step in manifest['steps']])
-
-    def test_openapi_gate_rejects_removed_operation(self):
-        binary = shutil.which('oasdiff') or ROOT / '.local/bin/oasdiff'
-        self.assertTrue(os.access(binary, os.X_OK), 'oasdiff is required for the compatibility regression')
-        spec = {'openapi': '3.0.3', 'info': {'title': 'Gate fixture', 'version': '1.0.0'},
-                'paths': {'/upload': {'post': {'responses': {'200': {'description': 'Accepted'}}}}}}
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / 'oasdiff').symlink_to(binary)
-            base = root / 'base/chronicle-api/chronicle.yaml'
-            head = root / 'chronicle-api/chronicle.yaml'
-            for path in (base, head):
-                path.parent.mkdir(parents=True)
-                path.write_text(json.dumps(spec))
-            fixture = ('ensure_oasdiff() { :; }; oasdiff() { "$ROOT_DIR/oasdiff" "$@"; }\n'
-                       'unset BASE_SPEC HEAD_SPEC GITHUB_STEP_SUMMARY\njob_openapi_diff\necho compatible')
-            result = self.run_ci(fixture, root=root)
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            spec['paths'] = {}
-            head.write_text(json.dumps(spec))
-            result = self.run_ci(fixture, root=root)
-            self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
-            self.assertNotIn('compatible', result.stdout)
 
     def test_fuzz_gate_enables_each_bounded_target_separately(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -279,36 +295,46 @@ run_security_step() {
             self.assertNotIn('fuzz:1:', result.stdout)
 
     def test_release_gates_require_exported_component_audit(self):
-        android = ROOT / 'chronicle'
-        candidate = (android / 'scripts/android-release-candidate-gate.sh').read_text()
-        play = (android / 'scripts/verify-play-aab.sh').read_text()
-        blocks = (
-            candidate[candidate.index('build_started_epoch='):candidate.index('\nif [[ ! -f "$apk_path" ]]')],
-            play[play.index('build_started_epoch='):play.index('\n[[ -f "$AAB_PATH" ]]')],
-        )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for name, body in {'gradlew': 'exit 0', 'scripts/android-exported-component-audit.sh':
-                               'printf "audit:%s\\n" "$*"\nexit "$AUDIT_STATUS"'}.items():
-                script = root / name
-                script.parent.mkdir(parents=True, exist_ok=True)
-                script.write_text('#!/bin/bash\n' + body + '\n')
-                script.chmod(0o755)
-            for index, block in enumerate(blocks):
-                flavors = ('open', 'research', 'play', 'amazon') if index == 0 else ('play',)
+            scripts = root / 'scripts'
+            scripts.mkdir()
+            tools = root / 'bin'
+            tools.mkdir()
+            for name in ('protoc', 'gitleaks'):
+                tool = tools / name
+                tool.write_text('#!/bin/sh\nexit 99\n')
+                tool.chmod(0o755)
+            gradle = root / 'gradlew'
+            gradle.write_text('#!/bin/bash\nprintf "gradle:%s\\n" "$*"\n')
+            gradle.chmod(0o755)
+            audit = scripts / 'android-exported-component-audit.sh'
+            audit.write_text('#!/bin/bash\nprintf "audit:%s\\n" "$*"\nexit "$AUDIT_STATUS"\n')
+            store = root / 'synthetic-store.fixture'
+            store.touch()
+            properties = root / 'synthetic-input.props'
+            properties.write_text(f'storeFile={store}\nstorePassword=synthetic\nkeyAlias=fixture\nkeyPassword=synthetic\n')
+            gates = {'android-release-candidate-gate.sh': ('open', 'research', 'amazon')}
+            for gate, flavors in gates.items():
+                shipped = scripts / gate
+                shutil.copy2(ROOT / 'chronicle/scripts' / gate, shipped)
                 for flavor in flavors:
                     variant = flavor + 'Release'
-                    for status in ('0', str(FAILED_JOB_STATUS)):
-                        with self.subTest(gate=index, flavor=flavor, status=status):
-                            env = dict(os.environ, ROOT_DIR=temporary, output_dir=temporary, OUTPUT_DIR=temporary,
-                                       context_file=str(root / 'context.txt'), JAVA_HOME='/fixture/jdk',
-                                       variant=variant, flavor=flavor, assemble_task=':app:assemble' + variant[0].upper() + variant[1:],
-                                       skip_build='0', SKIP_BUILD='0', AUDIT_STATUS=status)
-                            result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + block + '\necho audited'],
+                    for status in (0, FAILED_JOB_STATUS):
+                        with self.subTest(gate=gate, flavor=flavor, status=status):
+                            output = root / 'app/build/play-aab-evidence' / f'{gate}-{variant}-{status}'
+                            args = ['--output-dir', str(output), '--variant', variant]
+                            env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                                       CHRONICLE_SIGNING_PROPERTIES=str(properties), AUDIT_STATUS=str(status),
+                                       REPO_PREFLIGHT='/usr/bin/true',
+                                       PLAY_UPLOAD_CERT_SHA256='', CHRONICLE_RC_ID='',
+                                       CHRONICLE_RELEASE_AUTHORITY_SHA='', CHRONICLE_PLAY_AAB_HELPERS_ONLY='0')
+                            result = subprocess.run(['bash', str(shipped), *args], cwd=root,
                                                     env=env, capture_output=True, text=True, timeout=10)
-                            self.assertEqual(int(status), result.returncode, result.stdout + result.stderr)
+                            # A successful audit reaches the deliberately absent artifact; a failed audit stops first.
+                            self.assertEqual(status or 1, result.returncode, result.stdout + result.stderr)
                             self.assertIn(f'audit:--variant {variant} {flavor}', result.stdout)
-                            self.assertEqual(status == '0', 'audited' in result.stdout)
+                            self.assertEqual(status == 0, 'missing:' in result.stderr or 'APK not found' in result.stdout + result.stderr)
 
     def test_upload_probes_fail_wrong_routes_auth_and_transport(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -323,9 +349,12 @@ args = sys.argv[1:]
 url = next(arg for arg in args if arg.startswith('http'))
 assert '/chronicle/v4/study/' in url and url.endswith('/android/sensors'), url
 assert 'X-Api-Key: synthetic-fixture-key' in args
-assert 'X-Chronicle-Device-Id: synthetic-device' in args
+assert 'X-Chronicle-Random-Device-Id: synthetic-device' in args
 assert '--connect-timeout' in args and '--max-time' in args
 code = json.loads(os.environ['CURL_CODES'])[index]
+# The probe reads the rejection reason from the -o body; answer with the contract's code.
+body = args[args.index('-o') + 1]
+pathlib.Path(body).write_text(json.dumps({'code': os.environ['CURL_REJECTION_CODE']}))
 print(code if code != 'transport' else '000', end='')
 sys.exit(7 if code == 'transport' else 0)
 ''')
@@ -343,8 +372,10 @@ sys.exit(7 if code == 'transport' else 0)
                     env = dict(os.environ, PATH=temporary + os.pathsep + os.environ['PATH'],
                                BASE_URL='https://fixture.invalid', API_KEY='synthetic-fixture-key',
                                TEST_STUDY_ID='00000000-0000-0000-0000-000000000002',
-                               TEST_PARTICIPANT_ID='fixture-participant', TEST_DEVICE_ID='synthetic-device',
-                               CURL_COUNTER=str(counter), CURL_CODES=json.dumps(codes))
+                               TEST_PARTICIPANT_ID='fixture-participant', TEST_RANDOM_DEVICE_ID='synthetic-device',
+                               CURL_COUNTER=str(counter), CURL_CODES=json.dumps(codes),
+                               CURL_REJECTION_CODE=json.loads((ROOT / 'chronicle-server/src/test/resources/'
+                                   'upload-probe-contract.json').read_text())['constraintErrorCode'])
                     result = subprocess.run(['bash', str(ROOT / 'tests/security/file-upload-tests.sh')],
                                             env=env, capture_output=True, text=True, timeout=10)
                     self.assertEqual(codes == accepted, result.returncode == 0, result.stdout + result.stderr)

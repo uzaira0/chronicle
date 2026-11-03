@@ -1,0 +1,5 @@
+# Direct imports of play-upload.py's `upload` command. Pin exact versions here; the locked,
+# hash-pinned closure is play-upload.requirements.txt (regenerate with the command in its header).
+google-api-python-client==2.201.0
+google-auth==2.62.0
+packaging==26.3

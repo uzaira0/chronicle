@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_ROOT="$(mktemp -d "$ROOT_DIR/app/build/play-submission-test.XXXXXX")"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-$ROOT_DIR/app/build}/play-submission-test.XXXXXX")"
 trap 'rm -rf -- "$TEST_ROOT"' EXIT HUP INT TERM
 
 fail() {
@@ -24,11 +24,29 @@ expect_failure() {
 
 copy_fixture() {
   local destination="$1"
-  mkdir -p "$destination/store/play" "$destination/app/src/play/assets"
+  mkdir -p "$destination/store/play" "$destination/app/src/open/assets"
   cp "$ROOT_DIR/store/play/"*.md "$destination/store/play/"
   cp "$ROOT_DIR/store/play/privacy.properties" "$destination/store/play/"
-  cp "$ROOT_DIR/app/src/play/assets/approved-module-registry.json" \
-    "$destination/app/src/play/assets/"
+  cp "$ROOT_DIR/app/src/open/assets/approved-module-registry.json" \
+    "$destination/app/src/open/assets/"
+  write_console_fixture "$destination"
+}
+
+write_console_fixture() {
+  python3 - "$1" "$ROOT_DIR/scripts/verify-play-submission.py" <<'PY'
+import csv
+from pathlib import Path
+import runpy
+import sys
+
+root = Path(sys.argv[1])
+owner = runpy.run_path(sys.argv[2])
+declared = owner["read_properties"](root / "store/play/privacy.properties")["deletion_request_supported"]
+with (root / "store/play/data-safety-console.csv").open("w", newline="", encoding="utf-8") as output:
+    writer = csv.writer(output)
+    writer.writerow([owner["DATA_SAFETY_QUESTION_COLUMN"], owner["DATA_SAFETY_RESPONSE_COLUMN"]])
+    writer.writerow([owner["DATA_SAFETY_DELETION_QUESTION"], declared.upper()])
+PY
 }
 
 set_property() {
@@ -52,26 +70,20 @@ PY
 
 refresh_source_hashes() {
   local fixture="$1"
-  python3 - "$fixture" <<'PY'
+  python3 - "$fixture" "$ROOT_DIR/scripts/verify-play-submission.py" <<'PY'
 from pathlib import Path
-import hashlib
+import runpy
 import sys
 
 root = Path(sys.argv[1])
 properties_path = root / "store/play/privacy.properties"
-paths = {
-    "approved_module_registry_sha256": "app/src/play/assets/approved-module-registry.json",
-    "listing_sha256": "store/play/listing.md",
-    "data_safety_sha256": "store/play/data-safety.md",
-    "health_apps_declaration_sha256": "store/play/health-apps-declaration.md",
-    "accessibility_declaration_sha256": "store/play/accessibility-declaration.md",
-    "foreground_service_declaration_sha256": "store/play/foreground-service-declaration.md",
-    "reviewer_instructions_sha256": "store/play/reviewer-instructions.md",
-    "play_console_inventory_sha256": "store/play/play-console-inventory-2026-08-26.md",
-}
+verifier = runpy.run_path(sys.argv[2])
+properties = verifier["read_properties"](properties_path)
+relative, _ = verifier["registry_contract"](properties)
+paths = {**verifier["SOURCE_HASHES"], "approved_module_registry_sha256": relative}
 lines = properties_path.read_text(encoding="utf-8").splitlines()
 for key, relative in paths.items():
-    digest = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+    digest = verifier["sha256"](root / relative)
     matches = [index for index, line in enumerate(lines) if line.startswith(f"{key}=")]
     if len(matches) != 1:
         raise SystemExit(f"expected exactly one property {key}")
@@ -81,66 +93,50 @@ PY
 }
 
 python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$ROOT_DIR" >/dev/null
-# The live tree is sealed only after owner approval; sealed success is covered by approved_fixture.
-
-pending_fixture="$TEST_ROOT/pending"
-copy_fixture "$pending_fixture"
-set_property "$pending_fixture/store/play/privacy.properties" submission_status pending_owner_approval
-expect_failure \
-  'sealed release requires submission_status=approved' \
-  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$pending_fixture" --sealed
 
 approved_fixture="$TEST_ROOT/approved"
 copy_fixture "$approved_fixture"
-python3 - "$approved_fixture" <<'PY'
+set_property "$approved_fixture/store/play/privacy.properties" play_variant openRelease
+refresh_source_hashes "$approved_fixture"
+python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$approved_fixture" >/dev/null
+
+legacy_variant="$TEST_ROOT/legacy-variant"
+cp -R "$approved_fixture" "$legacy_variant"
+set_property "$legacy_variant/store/play/privacy.properties" play_variant playRelease
+expect_failure \
+  'play_variant must be openRelease' \
+  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$legacy_variant"
+
+distribution_fixture="$TEST_ROOT/distribution"
+copy_fixture "$distribution_fixture"
+set_property "$distribution_fixture/store/play/privacy.properties" play_variant openRelease
+python3 - "$distribution_fixture/app/src/open/assets/approved-module-registry.json" <<'PY'
 from pathlib import Path
+import json
 import sys
 
-root = Path(sys.argv[1])
-data_safety = root / "store/play/data-safety.md"
-data_safety.write_text(
-    data_safety.read_text(encoding="utf-8").replace(
-        "This is the proposed Play Console declaration",
-        "This is the approved Play Console declaration",
-        1,
-    ),
-    encoding="utf-8",
-)
+path = Path(sys.argv[1])
+registry = json.loads(path.read_text(encoding="utf-8"))
+registry["distribution"] = "PLAY"
+path.write_text(json.dumps(registry), encoding="utf-8")
 PY
-
-for status_key in \
-  submission_status \
-  play_account_status \
-  package_ownership_status \
-  signing_lineage_status \
-  version_status \
-  store_category_status \
-  target_ages_status \
-  data_safety_status \
-  legal_copy_status \
-  retention_wording_status \
-  research_app_classification_status \
-  support_identity_status; do
-  set_property "$approved_fixture/store/play/privacy.properties" "$status_key" approved
-done
-set_property "$approved_fixture/store/play/privacy.properties" approved_by synthetic-release-owner
-set_property "$approved_fixture/store/play/privacy.properties" approved_at_utc 2026-08-22T12:00:00Z
-set_property "$approved_fixture/store/play/privacy.properties" release_candidate_id chronicle-play-v54-rc1
-set_property "$approved_fixture/store/play/privacy.properties" maximum_uploaded_version_code 53
-set_property "$approved_fixture/store/play/privacy.properties" upload_certificate_sha256 \
-  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-set_property "$approved_fixture/store/play/privacy.properties" play_app_signing_certificate_sha256 \
-  BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-set_property "$approved_fixture/store/play/privacy.properties" target_ages 18_and_over
-set_property "$approved_fixture/store/play/privacy.properties" data_sharing_answer shared
-refresh_source_hashes "$approved_fixture"
-python3 "$ROOT_DIR/scripts/verify-play-submission.py" \
-  --root "$approved_fixture" --sealed >/dev/null
+refresh_source_hashes "$distribution_fixture"
+expect_failure \
+  'approved-module registry distribution must be OPEN for openRelease' \
+  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$distribution_fixture"
 
 printf '\nchanged after owner approval\n' >>"$approved_fixture/store/play/listing.md"
 expect_failure \
   'listing_sha256 does not match store/play/listing.md' \
-  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$approved_fixture" --sealed
+  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$approved_fixture"
+
+deletion_fixture="$TEST_ROOT/deletion"
+copy_fixture "$deletion_fixture"
+set_property "$deletion_fixture/store/play/privacy.properties" play_variant openRelease
+set_property "$deletion_fixture/store/play/privacy.properties" deletion_request_supported false
+expect_failure \
+  'Play Console deletion answer differs from the shipped UI declaration' \
+  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$deletion_fixture"
 
 inventory_fixture="$TEST_ROOT/inventory"
 copy_fixture "$inventory_fixture"
@@ -152,15 +148,17 @@ expect_failure \
 
 semantic_fixture="$TEST_ROOT/semantic"
 copy_fixture "$semantic_fixture"
-python3 - "$semantic_fixture/store/play/listing.md" <<'PY'
+python3 - "$semantic_fixture/store/play/listing.md" "$ROOT_DIR/scripts/verify-play-submission.py" <<'PY'
 from pathlib import Path
 import re
+import runpy
 import sys
 
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
+disclosure = runpy.run_path(sys.argv[2])["DEFERRED_UPLOAD_DISCLOSURE"]
 updated, count = re.subn(
-    r"They are\s+uploaded after connectivity recovers and kept on the device until the study's retention period\s+ends or the data is erased\.",
+    r"\s+".join(re.escape(word) for word in disclosure.split()),
     "They remain only on the device.",
     source,
     count=1,
@@ -181,5 +179,29 @@ set_property "$module_fixture/store/play/privacy.properties" approved_module_ids
 expect_failure \
   'approved module list drifted' \
   python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$module_fixture"
+
+console_fixture="$TEST_ROOT/console"
+copy_fixture "$console_fixture"
+rm "$console_fixture/store/play/data-safety-console.csv"
+set_property "$console_fixture/store/play/privacy.properties" data_safety_status pending_owner_approval
+python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$console_fixture" >/dev/null
+set_property "$console_fixture/store/play/privacy.properties" data_safety_status approved
+expect_failure \
+  'data_safety_status=approved requires store/play/data-safety-console.csv' \
+  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$console_fixture"
+
+status_fixture="$TEST_ROOT/status"
+copy_fixture "$status_fixture"
+set_property "$status_fixture/store/play/privacy.properties" submission_status yes
+expect_failure \
+  'submission_status must be approved or pending_owner_approval' \
+  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$status_fixture"
+
+review_fixture="$TEST_ROOT/review"
+copy_fixture "$review_fixture"
+set_property "$review_fixture/store/play/privacy.properties" release_stage play_review
+expect_failure \
+  'Play review requires reviewer_environment_status=approved' \
+  python3 "$ROOT_DIR/scripts/verify-play-submission.py" --root "$review_fixture"
 
 printf 'Play submission verifier behavior tests passed.\n'

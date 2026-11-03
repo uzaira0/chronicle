@@ -76,13 +76,13 @@ public final class StoreReadinessVerifier {
                     "android.permission.BIND_ACCESSIBILITY_SERVICE",
                     "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE",
                     "HealthConnectRationaleActivity",
-                    "HardwareSensorService",
                     "InteractionCollectionService",
                     "NotificationListener")) {
                 require(!xml.contains(forbidden), "Play manifest contains excluded capability " + forbidden);
             }
             require(actual.stream().noneMatch(p -> p.startsWith("android.permission.health.")),
                 "Play manifest contains a Health Connect permission");
+            require(xml.contains("HardwareSensorService"), "Play manifest must retain approved sensors");
             require(xml.contains("DeviceUnlockMonitoringService"),
                 "Play manifest must retain unlock user monitoring");
             require(xml.contains("android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"),
@@ -91,13 +91,8 @@ public final class StoreReadinessVerifier {
                 "Play manifest must retain Usage Access for core app-usage collection");
             verifyPlayAssets(policyPath.getParent().resolve("assets"));
         }
-        if (channel.equals("play")) {
-            require("false".equals(policy.getProperty("deletion_request_supported")),
-                "Play must not claim an in-app or uninstall-triggered server deletion request");
-        } else {
-            require("true".equals(policy.getProperty("deletion_request_supported")),
-                "deletion workflow must be disclosed");
-        }
+        require("true".equals(policy.getProperty("deletion_request_supported")),
+            "deletion workflow must be disclosed");
         require("false".equals(policy.getProperty("sold")), "sold must be explicitly false");
         require("false".equals(policy.getProperty("advertising")), "advertising must be explicitly false");
         System.out.println("Store readiness manifest/disclosure checks passed for " + channel + ": " + manifestPath);

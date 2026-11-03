@@ -27,7 +27,7 @@ import xml.etree.ElementTree as ET
 
 manifest = sys.argv[1]
 flavor = sys.argv[2]
-if flavor not in {"open", "research", "play", "amazon"}:
+if flavor not in {"open", "research", "amazon"}:
     raise SystemExit("unknown distribution flavor")
 android = "{http://schemas.android.com/apk/res/android}"
 
@@ -38,7 +38,6 @@ allowed = {
     "com.openlattice.chronicle.HealthConnectRationaleActivity": ("activity", None),
     "com.openlattice.chronicle.ViewPermissionUsageActivity": ("activity-alias", "android.permission.START_VIEW_PERMISSION_USAGE"),
     "com.openlattice.chronicle.receivers.lifecycle.StartOnBoot": ("receiver", None),
-    "com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver": ("receiver", None),
     "com.openlattice.chronicle.receivers.lifecycle.LockedBootReceiver": ("receiver", None),
     "com.openlattice.chronicle.collection.interaction.InteractionCollectionService": ("service", "android.permission.BIND_ACCESSIBILITY_SERVICE"),
     "androidx.health.platform.client.impl.sdkservice.HealthDataSdkService": ("service", None),
@@ -51,16 +50,23 @@ required = {
     "com.openlattice.chronicle.MainActivity",
     "com.openlattice.chronicle.Enrollment",
     "com.openlattice.chronicle.receivers.lifecycle.StartOnBoot",
-    "com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver",
     "androidx.work.impl.background.systemjob.SystemJobService",
 }
+# Open and research ship direct boot; accessibility and Health Connect ship only in research.
+collector_exports = {
+    "com.openlattice.chronicle.receivers.lifecycle.LockedBootReceiver",
+}
 research_exports = {
+    "com.openlattice.chronicle.collection.interaction.InteractionCollectionService",
     "com.openlattice.chronicle.HealthConnectRationaleActivity",
     "com.openlattice.chronicle.ViewPermissionUsageActivity",
-    "com.openlattice.chronicle.receivers.lifecycle.LockedBootReceiver",
-    "com.openlattice.chronicle.collection.interaction.InteractionCollectionService",
 }
 if flavor in {"open", "research"}:
+    required |= collector_exports
+else:
+    for name in collector_exports:
+        allowed.pop(name, None)
+if flavor == "research":
     required |= research_exports
 else:
     for name in research_exports | {"androidx.health.platform.client.impl.sdkservice.HealthDataSdkService"}:

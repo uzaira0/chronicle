@@ -39,7 +39,7 @@ class StorePrivacyUrlParityTest {
 
         val storeUrlCount = urls.size
         val parser = DocumentBuilderFactory.newInstance().newDocumentBuilder()
-        for (sourceSet in listOf("main", "play", "googleServices")) {
+        for (sourceSet in listOf("main", "amazon", "googleServices", "research")) {
             val path = "src/$sourceSet/res/values/strings.xml"
             val document = parser.parse(InputSource(StringReader(File(path).readText())))
             val strings = document.getElementsByTagName("string")

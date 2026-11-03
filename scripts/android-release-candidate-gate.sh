@@ -2,11 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEFAULT_VARIANT="playRelease"
-DEFAULT_PACKAGE="com.bcm.chronicle"
+DEFAULT_VARIANT="openRelease"
 
 variant="$DEFAULT_VARIANT"
-package_name="$DEFAULT_PACKAGE"
+package_name=""
 serial=""
 output_dir="$ROOT_DIR/app/build/release-candidate-evidence/$(date +%Y%m%d-%H%M%S)"
 skip_build=0
@@ -21,8 +20,8 @@ Build and verify a signed non-debug Android beta/release APK, then optionally
 install it on an attached device and prove the installed base.apk matches.
 
 Options:
-  --variant <name>              Flavored build variant. Default: playRelease.
-  --package <application-id>    Package expected after install. Default: com.bcm.chronicle.
+  --variant <name>              Flavored build variant. Default: openRelease.
+  --package <application-id>    Package expected after install. Default: built APK application id.
   --serial <adb-serial>         Device serial for --install. If omitted, --install requires exactly one device.
   --output-dir <dir>            Evidence output directory. Default: app/build/release-candidate-evidence/<timestamp>.
   --skip-build                  Verify an already-built APK for the selected variant.
@@ -99,12 +98,12 @@ if not value:
 print(value[0].upper() + value[1:])
 PY
 )"
-if [[ "$variant" =~ ^(play|amazon|research|open)(Debug|Release|Dogfood|DebugMinified|ReleaseMinified)$ ]]; then
+if [[ "$variant" =~ ^(amazon|research|open)(Debug|Release|Dogfood|DebugMinified|ReleaseMinified)$ ]]; then
   flavor="${BASH_REMATCH[1]}"
   build_type_pascal="${BASH_REMATCH[2]}"
 else
   echo "ERROR: unsupported flavored variant: $variant" >&2
-  echo "Expected play, amazon, research, or open plus Debug, Release, Dogfood, DebugMinified, or ReleaseMinified." >&2
+  echo "Expected amazon, research, or open plus Debug, Release, Dogfood, DebugMinified, or ReleaseMinified." >&2
   exit 2
 fi
 build_type="$(printf '%s' "${build_type_pascal:0:1}" | tr '[:upper:]' '[:lower:]')${build_type_pascal:1}"
@@ -123,10 +122,6 @@ if [[ -n "$enrollment_url_file" && "$install_apk" -ne 1 ]]; then
   echo "ERROR: --enrollment-url-file requires --install so the exact release candidate is on device." >&2
   exit 2
 fi
-if [[ ! "$package_name" =~ ^[A-Za-z][A-Za-z0-9_.]*$ ]]; then
-  echo "ERROR: invalid Android package name: $package_name" >&2
-  exit 2
-fi
 
 mkdir -p "$output_dir"
 context_file="$output_dir/context.txt"
@@ -135,7 +130,6 @@ context_file="$output_dir/context.txt"
   echo "variant=$variant"
   echo "assemble_task=$assemble_task"
   echo "apk_path=$apk_path"
-  echo "package=$package_name"
 } | tee "$context_file"
 
 signing_file="${CHRONICLE_SIGNING_PROPERTIES:-$ROOT_DIR/app/signing.properties}"
@@ -223,6 +217,22 @@ if [[ ! -f "$apk_path" ]]; then
   exit 1
 fi
 
+if [[ -z "$package_name" ]]; then
+  # AGP owns application-id suffixes; use its output rather than duplicating build-type rules.
+  package_name="$(python3 - "$(dirname "$apk_path")/output-metadata.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[1]).read_text())["applicationId"])
+PY
+)"
+fi
+if [[ ! "$package_name" =~ ^[A-Za-z][A-Za-z0-9_.]*$ ]]; then
+  echo "ERROR: invalid Android package name: $package_name" >&2
+  exit 2
+fi
+echo "package=$package_name" | tee -a "$context_file"
+
 if [[ "$skip_build" -eq 0 ]]; then
   if stat -f '%m' "$apk_path" >/dev/null 2>&1; then
     apk_mtime="$(stat -f '%m' "$apk_path")"
@@ -236,14 +246,6 @@ if [[ "$skip_build" -eq 0 ]]; then
 fi
 
 shasum -a 256 "$apk_path" | tee "$output_dir/apk.sha256"
-# Store the candidate's exact variant inventory and sealed hash for owner approval.
-./gradlew :app:generateRuntimeSbom "-PsbomVariant=$variant" | tee "$output_dir/sbom-build.txt"
-version_code="$(sed -n 's/^[[:space:]]*versionCode \([0-9][0-9]*\).*/\1/p' "$ROOT_DIR/app/build.gradle" | head -n 1)"
-version_name="$(sed -n 's/^[[:space:]]*versionName "\([^"]*\)".*/\1/p' "$ROOT_DIR/app/build.gradle" | head -n 1)"
-python3 "$ROOT_DIR/scripts/bind-candidate-sbom.py" \
-  "$ROOT_DIR/app/build/reports/security/chronicle-android-runtime.cdx.json" \
-  "$apk_path" "$output_dir" "$variant" "$version_code" "$version_name"
-
 "$ROOT_DIR/scripts/verify-android-16kb-native-libs.sh" --release-abis-only "$apk_path" | tee "$output_dir/verify-apk-16kb.txt"
 
 find_apksigner() {

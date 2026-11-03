@@ -11,8 +11,9 @@ class BuildGateContractTest {
     @Test
     fun sensorReceiptsKeepTheirReflectiveShapeAndEveryReleaseRunsTheWireVerifier() {
         val rules = File("proguard-rules.pro").readText()
-        assertTrue(rules.contains("-keep class com.openlattice.chronicle.android.SensorUploadReceipt { *; }"))
-        val gates = appGradle.substringAfter("['play', 'amazon', 'research', 'open'].each { flavor ->")
+        assertTrue(rules.contains("-keep class com.openlattice.chronicle.android.UploadReceipt { *; }"))
+        assertTrue(appGradle.contains("def distributionFlavors = ['amazon', 'research', 'open']"))
+        val gates = appGradle.substringAfter("distributionFlavors.each { flavor ->", missingDelimiterValue = "")
         assertTrue(gates.contains("verify\${capitalized}ReleaseWireDtoNames"))
         assertTrue(gates.contains("dependsOn \"minify\${capitalized}ReleaseWithR8\""))
         assertTrue(gates.contains("scripts/verify-wire-dto-names.sh"))
@@ -25,8 +26,8 @@ class BuildGateContractTest {
     fun runtimeGatesCoverEveryShippedFlavorIncludingOpen() {
         assertTrue(
             appGradle.contains(
-                "def releaseRuntimeClasspaths = ['playReleaseRuntimeClasspath', 'amazonReleaseRuntimeClasspath', " +
-                    "'researchReleaseRuntimeClasspath', 'openReleaseRuntimeClasspath']",
+                "def releaseRuntimeClasspaths = ['amazonReleaseRuntimeClasspath', 'researchReleaseRuntimeClasspath', " +
+                    "'openReleaseRuntimeClasspath']",
             ),
         )
         // Runtime verification covers the shared list; the SBOM can select one candidate variant.

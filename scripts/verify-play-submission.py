@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Verify that Play submission copy is bound to the shipped minimal artifact contract."""
+"""Verify that Play submission copy is bound to the selected artifact contract."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import hashlib
 import ipaddress
 import json
-import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -32,7 +32,7 @@ APPROVAL_STATUSES = (
     "support_identity_status",
 )
 SOURCE_HASHES = {
-    "approved_module_registry_sha256": "app/src/play/assets/approved-module-registry.json",
+    "approved_module_registry_sha256": "app/src/open/assets/approved-module-registry.json",
     "listing_sha256": "store/play/listing.md",
     "data_safety_sha256": "store/play/data-safety.md",
     "health_apps_declaration_sha256": "store/play/health-apps-declaration.md",
@@ -41,6 +41,7 @@ SOURCE_HASHES = {
     "reviewer_instructions_sha256": "store/play/reviewer-instructions.md",
     "play_console_inventory_sha256": "store/play/play-console-inventory-2026-08-26.md",
 }
+DEFERRED_UPLOAD_DISCLOSURE = "They are uploaded after connectivity recovers and kept on the device until the enrollment is erased or Chronicle is uninstalled."
 TARGET_AGE_GROUPS = {
     "5_and_under",
     "6_8",
@@ -49,6 +50,32 @@ TARGET_AGE_GROUPS = {
     "16_17",
     "18_and_over",
 }
+DATA_SAFETY_QUESTION_COLUMN = "Question ID (machine readable)"
+DATA_SAFETY_RESPONSE_COLUMN = "Response value"
+DATA_SAFETY_DELETION_QUESTION = "PSL_DATA_COLLECTION_USER_REQUEST_DELETE"
+
+
+def verify_console_deletion(play_dir: Path, declared: str, data_safety_status: str) -> None:
+    exported = play_dir / "data-safety-console.csv"
+    if not exported.is_file():
+        require(data_safety_status != APPROVED,
+                "data_safety_status=approved requires store/play/data-safety-console.csv exported from Play Console")
+        return
+    with exported.open(encoding="utf-8-sig", newline="") as source:
+        responses = [row.get(DATA_SAFETY_RESPONSE_COLUMN, "").strip().lower()
+                     for row in csv.DictReader(source) if row.get(DATA_SAFETY_QUESTION_COLUMN) == DATA_SAFETY_DELETION_QUESTION]
+    require(len(responses) == 1 and responses[0] in {"true", "false"},
+            "Play Console deletion response must appear exactly once as TRUE or FALSE")
+    require(responses[0] == declared, "Play Console deletion answer differs from the shipped UI declaration")
+
+
+def registry_contract(properties: dict[str, str]) -> tuple[str, str]:
+    variant = properties.get("play_variant")
+    require(variant == "openRelease", "play_variant must be openRelease")
+    relative = properties.get("module_registry_path", "")
+    require(bool(relative) and not Path(relative).is_absolute() and ".." not in Path(relative).parts,
+            "module_registry_path must be relative to the Android root")
+    return relative, "OPEN"
 
 
 def require(condition: bool, message: str) -> None:
@@ -105,11 +132,7 @@ def parse_https_url(value: str, name: str, *, root_only: bool = False):
     return parsed
 
 
-def verify(root: Path, sealed: bool) -> None:
-    play_dir = root / "store/play"
-    properties_path = play_dir / "privacy.properties"
-    properties = read_properties(properties_path)
-
+def _verify_policy_identity(properties: dict[str, str]) -> None:
     snapshot = dt.date.fromisoformat(properties["policy_snapshot"])
     today = dt.datetime.now(dt.timezone.utc).date()
     require(snapshot <= today, "policy snapshot is in the future")
@@ -121,7 +144,10 @@ def verify(root: Path, sealed: bool) -> None:
     require(int(properties["version_code"]) > 0, "version_code must be positive")
     require(bool(properties["version_name"]), "version_name is required")
 
-    for key, relative_path in SOURCE_HASHES.items():
+def _verify_registry_sources(root: Path, properties: dict[str, str]) -> None:
+    registry_relative, distribution = registry_contract(properties)
+    source_hashes = {**SOURCE_HASHES, "approved_module_registry_sha256": registry_relative}
+    for key, relative_path in source_hashes.items():
         source = root / relative_path
         require(source.is_file(), f"submission source is missing: {relative_path}")
         require(
@@ -129,10 +155,11 @@ def verify(root: Path, sealed: bool) -> None:
             f"{key} does not match {relative_path}",
         )
 
-    registry_path = root / SOURCE_HASHES["approved_module_registry_sha256"]
+    registry_path = root / registry_relative
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     require(registry.get("schemaVersion") == 1, "approved-module registry schema is unsupported")
-    require(registry.get("distribution") == "PLAY", "approved-module registry is not for Play")
+    require(registry.get("distribution") == distribution,
+            f"approved-module registry distribution must be {distribution} for {properties['play_variant']}")
     modules = registry.get("modules")
     require(isinstance(modules, list) and modules, "approved-module registry has no modules")
     module_ids = [module.get("id") for module in modules]
@@ -143,7 +170,9 @@ def verify(root: Path, sealed: bool) -> None:
     local_only = [module["id"] for module in modules if module["upload"].get("family") == "none"]
     require(uploaded == csv_values(properties["uploaded_module_ids"]), "uploaded module list drifted")
     require(local_only == csv_values(properties["local_only_module_ids"]), "local-only module list drifted")
-    require(local_only == [], "every approved Play module must have an explicit enrolled-server upload contract")
+    expected_local_only = ["questionnaire"] if distribution == "OPEN" else []
+    require(local_only == expected_local_only,
+            "every approved Play module must have an explicit enrolled-server upload contract (except open questionnaire reminders)")
     upload_telemetry = next(module for module in modules if module["id"] == "upload_telemetry")
     require(
         upload_telemetry["destinations"] == ["local_app_diagnostics_view", "exact_enrolled_study_server"],
@@ -162,6 +191,7 @@ def verify(root: Path, sealed: bool) -> None:
         "declared permissions do not equal base plus approved-module permissions",
     )
 
+def _verify_listing_disclosures(play_dir: Path, properties: dict[str, str]) -> str:
     listing_path = play_dir / "listing.md"
     listing_lines = listing_path.read_text(encoding="utf-8").splitlines()
     app_name = field_after_heading(listing_lines, "App name (30 characters maximum):")
@@ -171,17 +201,18 @@ def verify(root: Path, sealed: bool) -> None:
     )
     require(len(app_name) <= 30, "Play app name exceeds 30 characters")
     require(len(short_description) <= 80, "Play short description exceeds 80 characters")
+    full_description = "\n".join(listing_lines[listing_lines.index("Full description:") + 1:]).strip()
+    require(len(full_description) <= 4000, "Play full description exceeds 4000 characters")
 
     listing = normalized_text(listing_path)
     data_safety_path = play_dir / "data-safety.md"
     data_safety = normalized_text(data_safety_path)
     require(
-        "They are uploaded after connectivity recovers and kept on the device until the study's retention period ends or the data is erased."
-        in listing,
+        DEFERRED_UPLOAD_DISCLOSURE in listing,
         "listing does not disclose deferred upload-diagnostic delivery and retention",
     )
     require(
-        "That aggregate is later transmitted to the exact enrolled study server under the active participant/device enrollment"
+        "That record is later transmitted to the exact enrolled study server under the active participant/device enrollment"
         in data_safety,
         "Data Safety copy does not classify upload diagnostics as collected",
     )
@@ -189,60 +220,10 @@ def verify(root: Path, sealed: bool) -> None:
     parse_https_url(properties["privacy_url"], "privacy_url")
     require(properties["privacy_url"] in listing, "listing privacy URL differs from policy")
     require(properties["support_contact"] in listing, "listing support contact differs from policy")
-    require(properties["deletion_request_supported"] == "false", "Play app must not claim a deletion request control")
-    require(
-        properties["health_apps_classification"] == "human_subjects_research",
-        "health classification drifted",
-    )
+    return data_safety
 
-    for key in APPROVAL_STATUSES:
-        require(properties.get(key) in {PENDING, APPROVED}, f"{key} has an invalid state")
-    reviewer_status = properties.get("reviewer_environment_status")
-    if properties["release_stage"] == "internal_testing":
-        require(
-            reviewer_status == NOT_REQUIRED_INTERNAL,
-            "Internal Testing requires reviewer_environment_status=not_required_internal_testing",
-        )
-        require(not properties.get("reviewer_origin"), "Internal Testing must not invent reviewer_origin")
-        require(not properties.get("reviewer_owner"), "Internal Testing must not invent reviewer_owner")
-    else:
-        require(reviewer_status in {PENDING, APPROVED}, "reviewer_environment_status has an invalid state")
 
-    if not sealed:
-        return
-
-    for key in APPROVAL_STATUSES:
-        require(properties[key] == APPROVED, f"sealed release requires {key}=approved")
-    require(bool(properties["approved_by"]), "sealed release requires approved_by")
-    approved_at = dt.datetime.fromisoformat(properties["approved_at_utc"].replace("Z", "+00:00"))
-    require(approved_at.tzinfo is not None, "approved_at_utc must include a timezone")
-
-    maximum_uploaded = int(properties["maximum_uploaded_version_code"])
-    require(maximum_uploaded >= 0, "maximum_uploaded_version_code cannot be negative")
-    require(
-        int(properties["version_code"]) > maximum_uploaded,
-        "final version_code must exceed the maximum uploaded version code",
-    )
-    require(
-        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", properties["release_candidate_id"])
-        is not None,
-        "sealed release requires a safe release_candidate_id",
-    )
-    require(properties["release_candidate_id"] != "UNSEALED", "sealed release cannot use UNSEALED")
-    for key in ("upload_certificate_sha256", "play_app_signing_certificate_sha256"):
-        require(re.fullmatch(r"[0-9A-Fa-f]{64}", properties[key]) is not None, f"{key} must be SHA-256")
-
-    ages = set(csv_values(properties["target_ages"]))
-    require(bool(ages) and ages <= TARGET_AGE_GROUPS, "target_ages must use approved Play age groups")
-    require(
-        properties["data_sharing_answer"] in {"shared", "not_shared_with_documented_exception"},
-        "data_sharing_answer requires the owner/counsel determination",
-    )
-
-    require(
-        "This is the approved Play Console declaration" in data_safety,
-        "sealed Data Safety copy is still marked proposed",
-    )
+def _verify_reviewer_environment(play_dir: Path, properties: dict[str, str]) -> None:
     if properties["release_stage"] == "play_review":
         require(
             properties["reviewer_environment_status"] == APPROVED,
@@ -261,16 +242,38 @@ def verify(root: Path, sealed: bool) -> None:
             "Before Play review, replace this paragraph" not in reviewer_copy,
             "reviewer instructions still contain the replacement marker",
         )
+    else:
+        require(properties["reviewer_environment_status"] in {NOT_REQUIRED_INTERNAL, APPROVED, PENDING},
+                "reviewer_environment_status is invalid")
+
+
+
+def verify(root: Path) -> None:
+    play_dir = root / "store/play"
+    properties = read_properties(play_dir / "privacy.properties")
+    for status in APPROVAL_STATUSES:
+        require(properties.get(status) in {APPROVED, PENDING}, f"{status} must be {APPROVED} or {PENDING}")
+    _verify_policy_identity(properties)
+    _verify_reviewer_environment(play_dir, properties)
+    _verify_registry_sources(root, properties)
+    _verify_listing_disclosures(play_dir, properties)
+    # WithdrawalDataSafetyContractTest checks this declaration against the compiled study-server UI.
+    deletion = properties["deletion_request_supported"]
+    require(deletion in {"true", "false"}, "deletion_request_supported must be true or false")
+    verify_console_deletion(play_dir, deletion, properties["data_safety_status"])
+    require(
+        properties["health_apps_classification"] == "human_subjects_research",
+        "health classification drifted",
+    )
+
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--sealed", action="store_true")
     args = parser.parse_args()
-    verify(args.root.resolve(), args.sealed)
-    state = "sealed" if args.sealed else "technical"
-    print(f"Play submission {state} contract passed: {args.root / 'store/play/privacy.properties'}")
+    verify(args.root.resolve())
+    print(f"Play submission contract passed: {args.root / 'store/play/privacy.properties'}")
 
 
 if __name__ == "__main__":

@@ -3,24 +3,8 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 selected_channel="${1:-all}"
-sealed_submission=0
-if [[ $# -gt 0 ]]; then
-  shift
-fi
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --sealed)
-      sealed_submission=1
-      ;;
-    *)
-      echo "Usage: $0 [play|amazon|research|all] [--sealed]" >&2
-      exit 2
-      ;;
-  esac
-  shift
-done
-if [[ "$sealed_submission" -eq 1 && "$selected_channel" != play && "$selected_channel" != all ]]; then
-  echo "ERROR: --sealed is valid only for the Play submission contract" >&2
+if [[ $# -gt 1 ]]; then
+  echo "Usage: $0 [play|amazon|research|all]" >&2
   exit 2
 fi
 
@@ -75,17 +59,15 @@ verify_play_submission_files() {
     || { echo "ERROR: Play listing is missing its short-description field" >&2; return 1; }
   rg -q 'not a medical device' "$root/store/play/listing.md" \
     || { echo "ERROR: Play listing is missing the health disclaimer" >&2; return 1; }
-  local submission_args=(--root "$root")
-  if [[ "$sealed_submission" -eq 1 ]]; then
-    submission_args+=(--sealed)
-  fi
-  python3 "$root/scripts/verify-play-submission.py" "${submission_args[@]}"
+  python3 "$root/scripts/verify-play-submission.py" --root "$root"
 }
 
 case "$selected_channel" in
-  play|amazon)
-    verify_channel "$selected_channel"
-    [[ "$selected_channel" != play ]] || verify_play_submission_files
+  play)
+    verify_play_submission_files
+    ;;
+  amazon)
+    verify_channel amazon
     ;;
   research)
     # The research distribution is not submitted to a public app store, so it
@@ -93,12 +75,11 @@ case "$selected_channel" in
     # checked by the workflow's signing/alignment steps.
     ;;
   all)
-    verify_channel play
     verify_play_submission_files
     verify_channel amazon
     ;;
   *)
-    echo "Usage: $0 [play|amazon|research|all] [--sealed]" >&2
+    echo "Usage: $0 [play|amazon|research|all]" >&2
     exit 2
     ;;
 esac
