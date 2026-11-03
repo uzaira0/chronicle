@@ -4,23 +4,16 @@ import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import com.google.common.base.Stopwatch
-import com.google.common.collect.ImmutableMap
-import com.openlattice.chronicle.api.ChronicleStudyApi
+import com.openlattice.chronicle.android.ChronicleSample
 import com.openlattice.chronicle.collection.sink.UsageEventSink
 import com.openlattice.chronicle.constants.TelemetryEvents
 import com.openlattice.chronicle.preferences.EnrollmentSettings
-import com.openlattice.chronicle.sensors.PROPERTY_TYPE_IDS
-import com.openlattice.chronicle.sensors.PROPERTY_TYPES
-import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.StorageQueue
 import com.openlattice.chronicle.storage.UserStorageQueue
 import com.openlattice.chronicle.telemetry.LocalTelemetry
-import com.openlattice.chronicle.utils.Utils
-import org.apache.olingo.commons.api.edm.FullQualifiedName
 import java.security.SecureRandom
 import java.util.TreeMap
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** Shared setup, failure reporting and post-write bookkeeping for both usage collectors. */
@@ -29,9 +22,6 @@ abstract class UsageCollectionDelegateBase(protected val context: Context) {
     protected val rand = SecureRandom()
     protected val serviceId = rand.nextLong()
 
-    private lateinit var chronicleApi: ChronicleStudyApi
-
-    protected lateinit var propertyTypeIds: Map<FullQualifiedName, UUID>
     protected lateinit var chronicleDb: ChronicleDb
     protected lateinit var storageQueue: StorageQueue
     protected lateinit var userStorageQueue: UserStorageQueue
@@ -41,15 +31,6 @@ abstract class UsageCollectionDelegateBase(protected val context: Context) {
         try {
             settings = EnrollmentSettings(context)
             chronicleDb = ChronicleDb.getInstance(context)
-            chronicleDb.uploadServerDao().getEnabledServer()
-                ?.takeIf { it.studyId == settings.getStudyId().toString() }
-                ?.let { primary ->
-                    chronicleApi = UploadWorker.getChronicleStudyApi(
-                        primary.url,
-                        primary.mobileSigningSecretOverride
-                    )
-                }
-            propertyTypeIds = loadPropertyTypeIds()
             storageQueue = chronicleDb.queueEntryData()
             userStorageQueue = chronicleDb.userQueueEntryData()
             val collected = monitorUsage()
@@ -71,7 +52,7 @@ abstract class UsageCollectionDelegateBase(protected val context: Context) {
     protected abstract fun monitorUsage(): Boolean
 
     protected fun finishUsageCollection(
-        queueEntry: List<com.openlattice.chronicle.android.ChronicleSample>,
+        queueEntry: List<ChronicleSample>,
         w: Stopwatch,
         users: TreeMap<Long, String>,
         currentPollTimestamp: Long,
@@ -87,9 +68,6 @@ abstract class UsageCollectionDelegateBase(protected val context: Context) {
             })
         }
 
-        // Update "items remaining" only after successfully persisting collected data.
-        Utils.updateUploadQueueSize(context, storageQueue.getSize())
-
         val lowestTimestamp = users.lowerEntry(currentPollTimestamp)?.key
         lowestTimestamp?.let {
             sink.withAdmission { userStorageQueue.deleteEntriesWithLowerTimestamp(currentPollTimestamp) }
@@ -99,21 +77,4 @@ abstract class UsageCollectionDelegateBase(protected val context: Context) {
         return true
     }
 
-    private fun loadPropertyTypeIds(): Map<FullQualifiedName, UUID> {
-        var propertyTypeIds = settings.getPropertyTypeIds()
-        if (propertyTypeIds.size != PROPERTY_TYPES.size) {
-            Log.i(javaClass.name, "Loading BCM property types cache")
-            propertyTypeIds = PROPERTY_TYPE_IDS
-                .filterKeys { it in PROPERTY_TYPES }
-                .ifEmpty {
-                    if (::chronicleApi.isInitialized) {
-                        chronicleApi.getPropertyTypeIds(PROPERTY_TYPES) ?: ImmutableMap.of()
-                    } else {
-                        ImmutableMap.of()
-                    }
-                }
-            settings.setPropertyTypeIds(propertyTypeIds)
-        }
-        return propertyTypeIds
-    }
 }

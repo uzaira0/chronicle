@@ -6,7 +6,7 @@ import com.openlattice.chronicle.sensors.UsageEventsChronicleSensor
 import java.util.NavigableMap
 
 /**
- * The poll-step seam for the usage events module (Phase 4, subphase 4A).
+ * The poll-step seam for the usage events module.
  *
  * The production usage collector — [UsageEventsChronicleSensor] — constructs a
  * [android.app.usage.UsageStatsManager] and an [com.openlattice.chronicle.preferences.EncryptedPrefsHelper]
@@ -39,15 +39,7 @@ public interface UsageEventPoller {
     ): ChronicleData?
 }
 
-/**
- * Production [UsageEventPoller] backed by [UsageEventsChronicleSensor].
- *
- * Holds no [Context] itself; it constructs the sensor lazily per [poll] call so the
- * "no Context in singleton fields" rule (design §1C, refactor plan §6.1 guardrail 2)
- * is honoured — the [Context] is passed in, never retained. This is exactly what the
- * legacy [com.openlattice.chronicle.services.usage.UsageCollectionDelegate] does today:
- * it constructs a fresh `UsageEventsChronicleSensor(context)` for each `execute()`.
- */
+/** Reads the platform provider through the module poll seam. */
 public class SystemUsageEventPoller(private val context: Context) : UsageEventPoller {
 
     override fun poll(

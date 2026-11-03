@@ -1,5 +1,9 @@
 package com.openlattice.chronicle.collection.usage
 
+import java.time.OffsetDateTime
+
+import com.openlattice.chronicle.android.fromInteractionType
+
 import com.openlattice.chronicle.android.ChronicleData
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import java.util.NavigableMap
@@ -48,10 +52,10 @@ class FakeUsageEventPoller(
         /** A single-event [ChronicleData] with the given activity class, for parity tests. */
         fun oneEvent(activityClass: String?): ChronicleData = ChronicleData(
             listOf(
-                ExtractedUsageEvent(
+                ExtractedUsageEvent(eventType = fromInteractionType("Activity Resumed"),
                     appPackageName = "com.example.app",
                     interactionType = "Activity Resumed",
-                    timestamp = java.time.OffsetDateTime.parse("2026-05-20T00:00:00Z"),
+                    timestamp = OffsetDateTime.parse("2026-05-20T00:00:00Z"),
                     timezone = "UTC",
                     user = "",
                     applicationLabel = "Example",

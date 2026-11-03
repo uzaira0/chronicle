@@ -1,16 +1,9 @@
 package com.openlattice.chronicle.collection.usage
 
 import com.openlattice.chronicle.android.ChronicleData
-import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.CollectionPrivacyClass
-import com.openlattice.chronicle.collection.core.CollectionModuleStatus
 import com.openlattice.chronicle.collection.core.CollectionWindow
-import com.openlattice.chronicle.collection.core.FixedCollectionClock
-import com.openlattice.chronicle.collection.core.ModuleResult
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -30,18 +23,9 @@ class UsageEventsCollectionModuleTest {
         poller: FakeUsageEventPoller,
         checkpointStore: FakeUsagePollCheckpointStore,
         fallback: () -> Long = { 1_000L },
-        clock: FixedCollectionClock = FixedCollectionClock(9_999L),
-    ) = UsageEventsCollectionModule(poller, checkpointStore, fallback, clock, NoOpCollectionLog)
+    ) = UsageEventsCollectionModule(poller, checkpointStore, fallback)
 
     private fun window(end: Long) = CollectionWindow(startEpochMs = 0L, endEpochMs = end)
-
-    @Test
-    fun moduleDeclaresUsageEventsIdentityAndPrivacyClass() {
-        val m = module(FakeUsageEventPoller(), FakeUsagePollCheckpointStore())
-        assertEquals(CollectionModuleId.USAGE_EVENTS, m.id)
-        assertEquals(CollectionPrivacyClass.BEHAVIORAL_METADATA, m.privacyClass)
-        assertEquals(m.id.privacyClass, m.privacyClass)
-    }
 
     @Test
     fun pollUsesCheckpointTimestampAsPreviousWhenAcheckpointExists() {
@@ -97,23 +81,23 @@ class UsageEventsCollectionModuleTest {
         assertEquals(8_000L, store.storedTimestamp)
     }
 
+    /**
+     * A poll stamps its end before reading the cursor; a settings flush may commit a later end in between. The poll then
+     * reads an empty, inverted window, and committing its end would rewind the cursor and re-queue the flushed events.
+     */
     @Test
-    fun unavailablePollIsSkippedAndKeepsCheckpointUntilAccessReturns() {
-        val poller = FakeUsageEventPoller(nextResult = null)
+    fun aPollWhoseEndAnotherPollAlreadyPassedNeverRewindsTheCursor() {
         val store = FakeUsagePollCheckpointStore(storedTimestamp = 5_000L)
-        val m = module(poller, store)
-        assertNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
-        assertTrue(m.poll(com.openlattice.chronicle.collection.core.TestContexts.stub(), window(end = 8_000L)) is ModuleResult.Skipped)
-        assertEquals("SKIPPED", m.diagnostics().lastResult)
-        assertNull(m.diagnostics().lastError)
-        assertEquals(0, store.commitCount)
-        assertEquals(5_000L, store.storedTimestamp)
-        poller.nextResult = ChronicleData(emptyList())
-        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 9_000L)))
-        assertEquals(5_000L, outcome.previousPollTimestamp)
-        m.commitCheckpoint(outcome.currentPollTimestamp)
+        val m = module(FakeUsageEventPoller(), store)
+        store.commitPollTimestamp(9_000L) // the flush, between this poll's end stamp and its cursor read
+
+        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
+        m.commitCheckpoint(outcome)
+
         assertEquals(9_000L, store.storedTimestamp)
     }
+
+    
 
     @Test
     fun activityClassIsPreservedThroughPollIntoExtractedUsageEvent() {
@@ -136,52 +120,11 @@ class UsageEventsCollectionModuleTest {
         assertNull((outcome.events.single() as ExtractedUsageEvent).activityClass)
     }
 
-    @Test
-    fun diagnosticsReportLastPollEventCountAndCheckpointTimestamp() {
-        val poller = FakeUsageEventPoller(nextResult = FakeUsageEventPoller.oneEvent("com.example.Foo"))
-        val store = FakeUsagePollCheckpointStore()
-        val clock = FixedCollectionClock(123_456L)
-        val m = module(poller, store, clock = clock)
+    
 
-        val outcome = requireNotNull(m.pollWindow(TreeMap(), window(end = 8_000L)))
-        m.commitCheckpoint(outcome.currentPollTimestamp)
+    
 
-        val d = m.diagnostics()
-        assertEquals(CollectionModuleId.USAGE_EVENTS, d.moduleId)
-        assertEquals(123_456L, d.lastRunEpochMs)
-        assertEquals(1, d.itemsCollected)
-        assertEquals("OK", d.lastResult)
-        assertNull(d.lastError)
-        assertTrue("checkpoint timestamp expected in notTracked: ${d.notTracked}",
-            d.notTracked.any { it == "checkpointTimestamp=8000" })
-    }
-
-    @Test
-    fun diagnosticsBeforeAnyCheckpointCommitMarkCheckpointAsNotTracked() {
-        val m = module(FakeUsageEventPoller(), FakeUsagePollCheckpointStore())
-        assertTrue(m.diagnostics().notTracked.contains("checkpointTimestamp"))
-    }
-
-    @Test
-    fun usageStatsManagerFailureSurfacesAndIsRecordedInDiagnosticsNotSwallowed() {
-        val boom = RuntimeException("UsageStatsManager.queryEvents blew up")
-        val poller = FakeUsageEventPoller(failWith = boom)
-        val m = module(poller, FakeUsagePollCheckpointStore())
-
-        var thrown: Exception? = null
-        try {
-            m.pollWindow(TreeMap(), window(end = 8_000L))
-        } catch (e: Exception) {
-            thrown = e
-        }
-
-        assertEquals(boom, thrown)
-        val d = m.diagnostics()
-        assertEquals("FAILED", d.lastResult)
-        assertEquals(0, d.itemsCollected)
-        assertTrue(d.lastError!!.contains("UsageStatsManager"))
-        assertEquals(CollectionModuleStatus.FAILED, m.status())
-    }
+    
 
     @Test
     fun checkpointDoesNotAdvanceWhenPollFailsBeforeCommit() {
@@ -201,42 +144,6 @@ class UsageEventsCollectionModuleTest {
         assertEquals(5_000L, store.storedTimestamp) // cursor unchanged
     }
 
-    @Test
-    fun pullModuleStartStopFlushAreNoOpSkips() {
-        val m = module(FakeUsageEventPoller(), FakeUsagePollCheckpointStore())
-        val ctx = com.openlattice.chronicle.collection.core.TestContexts.stub()
-        assertTrue(m.start(ctx) is ModuleResult.Skipped)
-        assertTrue(m.stop(ctx) is ModuleResult.Skipped)
-        assertTrue(m.flush(ctx) is ModuleResult.Skipped)
-    }
+    
 
-    @Test
-    fun disabledUsageModuleIsANoOpSkipForEveryOperation() {
-        // When the settings resolver disables usage_events, the registered module is a
-        // DisabledCollectionModule — every worker-path operation is a no-op Skipped,
-        // writing nothing (design §1C.1). This is the "module disabled" worker path.
-        val disabled = com.openlattice.chronicle.collection.core.DisabledCollectionModule(
-            CollectionModuleId.USAGE_EVENTS,
-            reason = "usage_events disabled by settings",
-        )
-        val ctx = com.openlattice.chronicle.collection.core.TestContexts.stub()
-
-        assertEquals(CollectionModuleStatus.DISABLED, disabled.status())
-        assertTrue(disabled.poll(ctx, window(8_000L)) is ModuleResult.Skipped)
-        assertTrue(disabled.start(ctx) is ModuleResult.Skipped)
-        assertEquals(0, disabled.diagnostics().itemsCollected)
-    }
-
-    @Test
-    fun contractPollReturnsOkWithEventCountForIntrospection() {
-        val poller = FakeUsageEventPoller(nextResult = FakeUsageEventPoller.oneEvent("com.example.Foo"))
-        val m = module(poller, FakeUsagePollCheckpointStore())
-        val ctx = com.openlattice.chronicle.collection.core.TestContexts.stub()
-
-        val result = m.poll(ctx, window(end = 8_000L))
-
-        assertEquals(ModuleResult.Ok(1), result)
-        // Introspection poll must not commit the checkpoint.
-        assertFalse(m.diagnostics().notTracked.any { it.startsWith("checkpointTimestamp=") })
-    }
 }

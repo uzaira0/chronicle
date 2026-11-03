@@ -2,7 +2,6 @@ package com.openlattice.chronicle.collection.usage
 
 import com.openlattice.chronicle.android.ChronicleSample
 import com.openlattice.chronicle.collection.core.CollectionWindow
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.models.ExtractedUsageEvent
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.openlattice.chronicle.services.usage.buildUsageQueueEntries
@@ -28,7 +27,6 @@ class UsageActivityClassPreservationTest {
             poller = poller,
             checkpointStore = FakeUsagePollCheckpointStore(),
             previousPollTimestampFallback = { 1_000L },
-            log = NoOpCollectionLog,
         )
 
         // 1. Poll through the module.
@@ -53,7 +51,6 @@ class UsageActivityClassPreservationTest {
             poller = poller,
             checkpointStore = FakeUsagePollCheckpointStore(),
             previousPollTimestampFallback = { 1_000L },
-            log = NoOpCollectionLog,
         )
 
         val outcome = requireNotNull(module.pollWindow(TreeMap(), CollectionWindow(0L, 8_000L)))

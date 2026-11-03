@@ -1,8 +1,8 @@
 package com.openlattice.chronicle.collection.usage
 
-import com.openlattice.chronicle.collection.core.NoOpCollectionLog
 import com.openlattice.chronicle.collection.sink.FakeStorageQueue
 import com.openlattice.chronicle.collection.sink.UsageEventSink
+import com.openlattice.chronicle.collection.state.CollectionPersistenceGuard
 import com.openlattice.chronicle.storage.QueueEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -41,7 +41,7 @@ class UsageModulePersistenceTest {
     @Test
     fun successfulWriteCommitsQueueRowsAndAdvancesCheckpointInOneTransaction() {
         val queue = FakeStorageQueue()
-        val sink = UsageEventSink(queue, NoOpCollectionLog)
+        val sink = UsageEventSink(queue)
         val store = FakeUsagePollCheckpointStore(storedTimestamp = 1_000L)
         val tx = FakeTransactionRunner()
 
@@ -51,7 +51,6 @@ class UsageModulePersistenceTest {
             sink = sink,
             commitCheckpoint = store::commitPollTimestamp,
             transaction = tx::run,
-            log = NoOpCollectionLog,
         )
 
         assertEquals(2, queue.getSize())
@@ -65,7 +64,7 @@ class UsageModulePersistenceTest {
     fun emptyWriteStillAdvancesCheckpointSoThePollWindowMovesForward() {
         // Empty-result behaviour: nothing to persist, but the checkpoint must advance.
         val queue = FakeStorageQueue()
-        val sink = UsageEventSink(queue, NoOpCollectionLog)
+        val sink = UsageEventSink(queue)
         val store = FakeUsagePollCheckpointStore(storedTimestamp = 1_000L)
         val tx = FakeTransactionRunner()
 
@@ -75,7 +74,6 @@ class UsageModulePersistenceTest {
             sink = sink,
             commitCheckpoint = store::commitPollTimestamp,
             transaction = tx::run,
-            log = NoOpCollectionLog,
         )
 
         assertEquals(0, queue.getSize())
@@ -88,7 +86,7 @@ class UsageModulePersistenceTest {
         // Crash-recovery parity: a write failure before the checkpoint commit must leave
         // the cursor untouched so the next worker run re-polls the same window.
         val queue = FakeStorageQueue().apply { failNextInsert = true }
-        val sink = UsageEventSink(queue, NoOpCollectionLog)
+        val sink = UsageEventSink(queue)
         val store = FakeUsagePollCheckpointStore(storedTimestamp = 5_000L)
         val tx = FakeTransactionRunner()
 
@@ -100,7 +98,6 @@ class UsageModulePersistenceTest {
                 sink = sink,
                 commitCheckpoint = store::commitPollTimestamp,
                 transaction = tx::run,
-                log = NoOpCollectionLog,
             )
         } catch (_: Throwable) {
             thrown = true
@@ -119,7 +116,7 @@ class UsageModulePersistenceTest {
         // (composite PK collision on dataQueue) must surface as a rolled-back failure,
         // not a silent partial write — the checkpoint must not advance on the failed run.
         val queue = FakeStorageQueue()
-        val sink = UsageEventSink(queue, NoOpCollectionLog)
+        val sink = UsageEventSink(queue)
         val store = FakeUsagePollCheckpointStore(storedTimestamp = 1_000L)
 
         val firstTx = FakeTransactionRunner()
@@ -129,7 +126,6 @@ class UsageModulePersistenceTest {
             sink = sink,
             commitCheckpoint = store::commitPollTimestamp,
             transaction = firstTx::run,
-            log = NoOpCollectionLog,
         )
         assertEquals(9_000L, store.storedTimestamp)
 
@@ -143,7 +139,6 @@ class UsageModulePersistenceTest {
                 sink = sink,
                 commitCheckpoint = store::commitPollTimestamp,
                 transaction = secondTx::run,
-                log = NoOpCollectionLog,
             )
         } catch (_: Throwable) {
             thrown = true
@@ -160,16 +155,16 @@ class UsageModulePersistenceTest {
         // Successive successful runs append rows with strictly increasing keys; the
         // dataQueue cursor (writeTimestamp, id) keeps every prior row.
         val queue = FakeStorageQueue()
-        val sink = UsageEventSink(queue, NoOpCollectionLog)
+        val sink = UsageEventSink(queue)
         val store = FakeUsagePollCheckpointStore()
 
         UsageModulePersistence.persist(
             listOf(entry(100, 1), entry(101, 2)), 9_000L, sink,
-            store::commitPollTimestamp, FakeTransactionRunner()::run, NoOpCollectionLog,
+            store::commitPollTimestamp, FakeTransactionRunner()::run,
         )
         UsageModulePersistence.persist(
             listOf(entry(200, 3), entry(201, 4)), 18_000L, sink,
-            store::commitPollTimestamp, FakeTransactionRunner()::run, NoOpCollectionLog,
+            store::commitPollTimestamp, FakeTransactionRunner()::run,
         )
 
         assertEquals(4, queue.getSize())
@@ -181,14 +176,14 @@ class UsageModulePersistenceTest {
     fun temporaryRefusalRetainsAcceptedWindowWithoutAdvancingCheckpoint() {
         val queue = FakeStorageQueue()
         val sink = UsageEventSink(
-            queue, NoOpCollectionLog,
-            persistenceGuard = com.openlattice.chronicle.collection.state.CollectionPersistenceGuard { false },
+            queue,
+            persistenceGuard = CollectionPersistenceGuard { false },
         )
         val store = FakeUsagePollCheckpointStore(storedTimestamp = 1_000L)
 
         UsageModulePersistence.persist(
             listOf(entry(100, 1)), 9_000L, sink,
-            store::commitPollTimestamp, FakeTransactionRunner()::run, NoOpCollectionLog,
+            store::commitPollTimestamp, FakeTransactionRunner()::run,
         )
 
         assertEquals(0, queue.getSize())

@@ -3,13 +3,11 @@ package com.openlattice.chronicle
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
-import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import com.openlattice.chronicle.utils.UsageAccess
 
@@ -69,7 +67,6 @@ fun hasUsageSettingPermission(context: Context): Boolean {
 }
 
 
-@RequiresApi(Build.VERSION_CODES.M)
 fun hasIgnoreBatteryOptimization(context: Context): Boolean {
     return try {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager;

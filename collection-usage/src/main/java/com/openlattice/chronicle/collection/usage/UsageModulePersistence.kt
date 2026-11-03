@@ -1,6 +1,6 @@
 package com.openlattice.chronicle.collection.usage
 
-import com.openlattice.chronicle.collection.core.CollectionLog
+import android.util.Log
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.collection.sink.UsageEventSink
 import com.openlattice.chronicle.collection.state.CollectionPersistenceResult
@@ -9,7 +9,7 @@ import com.openlattice.chronicle.storage.QueueEntry
 private const val TAG = "UsageModulePersistence"
 
 /**
- * The transactional write+checkpoint step of the Phase 4B module-manager usage path.
+ * The transactional write+checkpoint step of the module-manager usage path.
  *
  * This is extracted as a pure function so the atomicity contract is JVM-unit testable
  * without Room: the [transaction] runner and the [UsageEventSink] / commit lambdas are
@@ -17,8 +17,7 @@ private const val TAG = "UsageModulePersistence"
  * real `dataQueue` DAO, and [UsageEventsCollectionModule.commitCheckpoint]; tests pass
  * fakes.
  *
- * Atomicity contract — identical to the legacy
- * `UsageCollectionDelegate.persistUsageQueueAndCheckpoint`:
+ * Atomicity contract:
  *  - the queue write **and** the checkpoint commit run inside one [transaction];
  *  - if the sink write returns [ModuleResult.Failed], the underlying error is rethrown
  *    so the transaction rolls back — the checkpoint does **not** advance, and the next
@@ -36,6 +35,7 @@ public object UsageModulePersistence {
      * @param transaction a function that runs its body atomically (production:
      *   `ChronicleDb.runInTransaction`). The body's exception aborts the transaction.
      * @throws Throwable the sink failure cause, rethrown so [transaction] rolls back.
+     * @return false when admission refused the write.
      */
     public fun persist(
         entries: List<QueueEntry>,
@@ -43,13 +43,12 @@ public object UsageModulePersistence {
         sink: UsageEventSink,
         commitCheckpoint: (Long) -> Unit,
         transaction: (() -> Unit) -> Unit,
-        log: CollectionLog = CollectionLog.LOGCAT,
     ): Boolean {
         val admitted = sink.withAdmission {
             transaction {
                 val result = sink.writeAdmitted(entries)
                 if (result is ModuleResult.Failed) {
-                    log.error(TAG, "usage queue write failed; rolling back — checkpoint will not advance", result.error)
+                    Log.e(TAG, "usage queue write failed; rolling back — checkpoint will not advance", result.error)
                     // Surface the failure so the transaction rolls back; never swallow it.
                     throw result.error
                 }
