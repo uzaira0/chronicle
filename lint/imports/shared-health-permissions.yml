@@ -1,0 +1,10 @@
+id: android-shared-health-permissions
+language: kotlin
+severity: error
+message: Shared UI uses DistributionRestrictedRuntime; Health Connect permission implementation stays in research.
+note: |
+  Blind spots: aliases, fully qualified references and runtime loading need dependency-boundary and behavior tests.
+files:
+  - app/src/main/**/*.kt
+rule:
+  pattern: import com.openlattice.chronicle.collection.device.HealthConnectPermissions

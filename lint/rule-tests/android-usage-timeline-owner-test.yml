@@ -1,0 +1,7 @@
+id: android-usage-timeline-owner
+valid:
+  - 'val events = usageModule.pollWindow(users, window)'
+  - 'val events = otherSampler.poll(context)'
+invalid:
+  - 'val events = DeviceStateSampler(context).poll()'
+  - 'DeviceStateSampler(app).poll(window)'

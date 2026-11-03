@@ -1,0 +1,27 @@
+id: android-main-activity-async-navigation
+language: kotlin
+severity: error
+message: >-
+  Calls to Activity helpers inside a lifecycleScope job must go through navigateWhenStarted.
+  Helpers can navigate indirectly (resumeEnrolled -> dialogs, handleSelectTabExtra -> selectTab).
+  Only reviewed IO helpers and routeFromLocalEnrollment, which launches its own guarded job, are exempt.
+note: >-
+  Blind spots: launch calls through a lifecycleScope alias and navigation passed as a function
+  reference to a qualified delegate are not resolved. Review those forms explicitly; fixtures document
+  both gaps. Unqualified helper calls are denied even when their navigation is indirect.
+files:
+  - '**/src/main/**/MainActivity.kt'
+rule:
+  kind: call_expression
+  regex: '^(this(@MainActivity)?\.)?[a-z][A-Za-z0-9_]*(\(|\s*\{)'
+  inside:
+    stopBy: end
+    kind: call_expression
+    regex: '^(this(@MainActivity)?\.)?lifecycleScope\.launch'
+  not:
+    any:
+      - regex: '^(withContext|navigateWhenStarted|storageFailureHandler|routeFromLocalEnrollment|activeModuleAccessMissing)(\(|\s*\{)'
+      - inside:
+          stopBy: end
+          kind: call_expression
+          regex: '^navigateWhenStarted'

@@ -1,0 +1,27 @@
+id: android-inline-chronicle-fqn
+valid:
+- |
+  import com.openlattice.chronicle.collection.state.CollectionConsentCopy
+  val label = CollectionConsentCopy.label(context, battery)
+- |
+  package com.openlattice.chronicle.ui
+  import com.openlattice.chronicle.collection.state.ConsentPlan
+- |
+  @Implements(className = "com.openlattice.chronicle.collection.capability.PermissionStatusKt")
+  class ShadowPermissionStatus
+- |
+  // com.openlattice.chronicle.collection.state.CollectionConsentCopy is the copy owner.
+  val text = "com.openlattice.chronicle.storage.QueueEntry"
+invalid:
+- |
+  assertTrue(text.contains(
+      com.openlattice.chronicle.collection.state.CollectionConsentCopy.label(context, moduleId), ignoreCase = true))
+- |
+  assertTrue(text.contains(
+      com.openlattice.chronicle.collection.state.CollectionConsentCopy.label(context, battery), ignoreCase = true))
+- |
+  val plan = com.openlattice.chronicle.collection.state.ConsentPlan(modules)
+- |
+  val sql = "WHEN NEW.key <> '${com.openlattice.chronicle.storage.QUEUE_CAPTURE_VERSION_KEY}'"
+- |
+  com.openlattice.chronicle.collection.state.onPersistenceWorker { write() }

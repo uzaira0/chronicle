@@ -1,0 +1,20 @@
+id: android-test-private-member-access
+language: Kotlin
+severity: error
+message: Drive the public lifecycle, store or injected dependency instead of opening private members in tests.
+note: >-
+  Blind spots: indirect reflection wrappers and dynamically constructed member names are not resolved.
+  Metadata enumeration that leaves accessibility unchanged is allowed. Framework object construction
+  with ReflectionHelpers.setField and protected Android lifecycle delivery with callInstanceMethod
+  require review of the target; this rule does not infer their receiver types.
+files: ['**/src/test*/**', '**/src/androidTest/**']
+rule:
+  any:
+    - pattern: isAccessible = true
+    - pattern: $MEMBER.isAccessible = true
+    - pattern: $MEMBER.setAccessible(true)
+    - all:
+        - kind: call_expression
+        - has:
+            kind: navigation_expression
+            regex: '(^|[.])ReflectionHelpers[.](getField|getStaticField|setStaticField)$'

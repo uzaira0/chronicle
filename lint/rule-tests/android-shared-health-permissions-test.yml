@@ -1,0 +1,5 @@
+id: android-shared-health-permissions
+valid:
+  - 'import com.openlattice.chronicle.collection.DistributionRestrictedRuntime'
+invalid:
+  - 'import com.openlattice.chronicle.collection.device.HealthConnectPermissions'

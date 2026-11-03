@@ -1,0 +1,60 @@
+id: android-main-activity-async-navigation
+valid:
+- |
+  val scope = lifecycleScope
+  scope.launch { futureRoute() }
+- |
+  lifecycleScope.launch { callbacks.forEach(::futureRoute) }
+- |
+  fun handleSelectTabExtra(intent: Intent?) {
+      if (tab != 0) selectTab(tab)
+  }
+- |
+  lifecycleScope.launch {
+      val found = withContext(Dispatchers.IO) { repository.lookup() }
+      navigateWhenStarted {
+          if (found && !attempted) {
+              attempted = true
+              selectTab(R.id.nav_data_sharing)
+          }
+      }
+  }
+- |
+  routingJob = lifecycleScope.launch {
+      navigateWhenStarted { if (!::bottomNav.isInitialized) setupNavigation() }
+  }
+- |
+  routingJob = lifecycleScope.launch {
+      val enrolled = withContext(Dispatchers.IO) { repository.read() }
+      navigateWhenStarted { applyStartupRoute(enrolled) }
+  }
+invalid:
+- |
+  this.lifecycleScope.launch { futureRoute() }
+- |
+  this@MainActivity.lifecycleScope.launch { this@MainActivity.futureRoute() }
+- |
+  lifecycleScope.launch {
+      val pending = withContext(Dispatchers.IO) { lookup() }
+      if (pending) selectTab(R.id.nav_data_sharing)
+  }
+- |
+  routingJob = lifecycleScope.launch(storageFailureHandler()) {
+      if (!enrolled) return@launch
+      setupNavigation()
+  }
+- |
+  lifecycleScope.launch {
+      lifecycle.withStarted { showFragment(OverviewFragment()) }
+  }
+- |
+  routingJob = lifecycleScope.launch {
+      val enrolled = withContext(Dispatchers.IO) { repository.read() }
+      applyStartupRoute(enrolled)
+  }
+- |
+  fun resumeEnrolled() { selectTab(R.id.nav_data_sharing) }
+  lifecycleScope.launch { resumeEnrolled() }
+- |
+  fun futureRoute() { selectTab(R.id.nav_data_sharing) }
+  lifecycleScope.launch { this@MainActivity.futureRoute() }

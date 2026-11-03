@@ -1,0 +1,60 @@
+id: android-observation-admission-single-owner
+valid:
+- |
+  fun write() = guard.writeObservation { sink.write(rows) }
+- |
+  fun write() {
+      val result = guard.writeObservation { sink.write(rows) }
+      try { source.acknowledge() } catch (error: Exception) { failed(error) }
+  }
+- |
+  fun commit() = try {
+      persistLease {
+          val result = observation.writeObservation(write = write)
+          acknowledge(result)
+      }
+  } catch (error: Exception) {
+      failedLease(error)
+  }
+- |
+  fun recoverSource() = try {
+      source.read()
+  } catch (error: Exception) {
+      guard.writeObservation { sink.write(fallback) }
+  }
+invalid:
+- |
+  fun write() = try {
+      persistenceGuard.writeObservation(SINK_PERSISTENCE_REFUSAL) { dao.insertAll(rows) }
+  } catch (e: Exception) {
+      ModuleResult.Failed(e)
+  }
+- |
+  fun sample() {
+      val written = try {
+          observation.writeObservation { persist(reading, now) }
+      } catch (error: SQLException) {
+          failedAdmission(error)
+      }
+  }
+- |
+  fun writeSourceObservation() = try {
+      observation.writeObservation(write = write)
+  } catch (e: Exception) {
+      ModuleResult.Failed(e)
+  }
+- |
+  fun write() {
+      try {
+          return guard.writeObservation { sink.write(rows) }
+      } catch (error: Exception) {
+          failedAdmission(error)
+      }
+  }
+- |
+  fun write() = try {
+      val result = guard.writeObservation { sink.write(rows) }
+      account(result)
+  } catch (error: Exception) {
+      failedAdmission(error)
+  }

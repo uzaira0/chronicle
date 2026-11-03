@@ -1,0 +1,14 @@
+id: android-tenant-certificate-pins
+language: kotlin
+severity: error
+message: Distributed clients use system trust plus invitation-owned CAs, never embedded tenant certificate pins.
+note: |
+  Blind spots: aliases, reflective construction and dynamically assembled pin strings need transport behavior tests.
+files:
+  - app/src/main/**/*.kt
+rule:
+  any:
+    - pattern: import okhttp3.CertificatePinner
+    - all:
+        - kind: string_literal
+        - regex: 'sha256/'

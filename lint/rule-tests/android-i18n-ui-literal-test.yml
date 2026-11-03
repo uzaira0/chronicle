@@ -1,0 +1,39 @@
+id: android-i18n-ui-literal
+valid:
+- val title = translated
+invalid:
+- "package cases\n\nimport android.app.NotificationChannel\nimport android.app.NotificationManager\nimport android.content.Context\n\
+  import android.widget.TextView\nimport android.widget.Toast\nimport androidx.appcompat.app.AlertDialog\nimport\
+  \ androidx.core.app.NotificationCompat\nimport com.google.android.material.snackbar.Snackbar\n\n// Cases for android-i18n-ui-literal.\
+  \ A `FIRE:` marker names the finding expected on that line;\n// unmarked lines must be clean. A chained builder\
+  \ call is reported on the line where the chain\n// starts, once per matching setter.\nclass UiLiterals(private\
+  \ val context: Context, private val view: TextView, private val n: Int) {\n    var title: String = \"\"\n    var\
+  \ subtitle: String = \"\"\n    var summary: String = \"\"\n\n    fun show() {\n        Toast.makeText(context,\
+  \ \"Upload complete\", Toast.LENGTH_SHORT).show() // FIRE: android-i18n-ui-literal\n        Toast.makeText( //\
+  \ FIRE: android-i18n-ui-literal\n            context,\n            \"Saved successfully\",\n            Toast.LENGTH_LONG,\n\
+  \        ).show()\n        Snackbar.make(view, \"Undo the change\", Snackbar.LENGTH_SHORT).show() // FIRE: android-i18n-ui-literal\n\
+  \        view.text = \"Waiting for consent\" // FIRE: android-i18n-ui-literal\n        view.text = \"Uploaded\
+  \ $n items\" // FIRE: android-i18n-ui-literal\n        view.text = \"OK\" // FIRE: android-i18n-ui-literal\n \
+  \       view.text = \"Prefix: \" + n // FIRE: android-i18n-ui-literal\n        view.hint = \"Participant id\"\
+  \ // FIRE: android-i18n-ui-literal\n        view.contentDescription = \"Toggle module\" // FIRE: android-i18n-ui-literal\n\
+  \        view.error = \"Required field\" // FIRE: android-i18n-ui-literal\n        view.setText(\"Set via setter\"\
+  ) // FIRE: android-i18n-ui-literal\n        view.setHint(\"Hint via setter\") // FIRE: android-i18n-ui-literal\n\
+  \        view.setContentDescription(\"Description via setter\") // FIRE: android-i18n-ui-literal\n        this.title\
+  \ = \"Activity title\" // FIRE: android-i18n-ui-literal\n        this.subtitle = \"Activity subtitle\" // FIRE:\
+  \ android-i18n-ui-literal\n        this.summary = \"Preference summary\" // FIRE: android-i18n-ui-literal\n  \
+  \      AlertDialog.Builder(context) // FIRE: android-i18n-ui-literal, android-i18n-ui-literal, android-i18n-ui-literal\n\
+  \            .setTitle(\"Delete data?\")\n            .setMessage(\"This cannot be undone\")\n            .setPositiveButton(\"\
+  Delete\") { _, _ -> }\n            .setNegativeButton(R.string.cancel, null)\n            .setNeutralButton(context.getString(R.string.later),\
+  \ null)\n            .show()\n        AlertDialog.Builder(context).setNegativeButton(\"Keep\", null).setNeutralButton(\"\
+  Later\", null).show() // FIRE: android-i18n-ui-literal, android-i18n-ui-literal\n        NotificationCompat.Builder(context,\
+  \ \"reminders\") // FIRE: android-i18n-ui-literal, android-i18n-ui-literal, android-i18n-ui-literal, android-i18n-ui-literal\n\
+  \            .setContentTitle(\"Study reminder\")\n            .setContentText(\"Please complete the survey\"\
+  )\n            .setSubText(\"Study team\")\n            .setTicker(\"Reminder posted\")\n            .setStyle(NotificationCompat.BigTextStyle().bigText(\"\
+  Long reminder body\")) // FIRE: android-i18n-ui-literal\n            .build()\n        NotificationCompat.BigTextStyle().setBigContentTitle(\"\
+  Big title\").setSummaryText(\"Summary text\") // FIRE: android-i18n-ui-literal, android-i18n-ui-literal\n    \
+  \    NotificationChannel(\"reminders\", \"Study reminders\", NotificationManager.IMPORTANCE_DEFAULT) // FIRE:\
+  \ android-i18n-ui-literal\n        view.text = \"\"\"Raw prose here\"\"\" // FIRE: android-i18n-ui-literal\n \
+  \       title = \"Bare title assignment\" // FIRE: android-i18n-ui-literal\n        AlertDialog.Builder(context)\
+  \ // FIRE: android-i18n-ui-literal, android-i18n-ui-literal\n            // a comment inside the chain does not\
+  \ hide the setters\n            .setTitle(\"Comment above\") // nor does a trailing one\n            .setMessage(\"\
+  Comment between\")\n            .show()\n    }\n}\n"

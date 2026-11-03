@@ -1,0 +1,12 @@
+id: android-usage-timeline-owner
+language: kotlin
+severity: error
+message: UsageStats owns the usage sequence; supplemental device samples use their own collection path.
+note: >-
+  Blind spots: aliased sampler types, indirect helper calls, and usage entry points outside the two
+  listed files are not resolved; this rule covers direct DeviceStateSampler constructor-and-poll calls.
+files:
+  - app/src/main/java/com/openlattice/chronicle/services/usage/UsageMonitoringWorker.kt
+  - app/src/main/java/com/openlattice/chronicle/services/usage/UsageModuleCollectionDelegate.kt
+rule:
+  pattern: DeviceStateSampler($CONTEXT).poll($$$ARGS)

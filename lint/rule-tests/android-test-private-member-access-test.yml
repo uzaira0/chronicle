@@ -1,0 +1,14 @@
+id: android-test-private-member-access
+valid:
+  - 'fun annotations() = Worker::class.java.declaredMethods.map { it.annotations }'
+  - 'fun schema() = Record::class.java.declaredFields.map { it.name }'
+  - 'fun deliver(event: SensorEvent) { shadowOf(manager).sendSensorEventToListeners(event) }'
+  - 'fun connect(service: AccessibilityService) { ReflectionHelpers.callInstanceMethod<Unit>(service, "onServiceConnected") }'
+  - 'fun platform(group: NotificationChannelGroup) { ReflectionHelpers.setField(group, "mBlocked", true) }'
+invalid:
+  - 'fun inject() { Service::class.java.getDeclaredField("executor").apply { isAccessible = true }.set(service, executor) }'
+  - 'fun inject() { field.isAccessible = true }'
+  - 'fun inject() { field.setAccessible(true) }'
+  - 'fun inject() { ReflectionHelpers.setStaticField(Holder::class.java, "instance", null) }'
+  - 'fun inspect() = ReflectionHelpers.getStaticField<ExecutorService>(Service::class.java, "worker")'
+  - 'fun inspect() = org.robolectric.util.ReflectionHelpers.getField<ExecutorService>(service, "worker")'

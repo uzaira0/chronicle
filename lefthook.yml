@@ -2,6 +2,11 @@
 # the only gate on a commit here is that it carries no secret.
 pre-commit:
   commands:
+    kotlin-daemon-state:
+      # The Kotlin daemon rewrites .kotlin/sessions/*.salive on every build; .gitignore keeps it
+      # out of `git add -A`, and this refuses a force-added path.
+      glob: ".kotlin/**"
+      run: "printf 'Kotlin daemon state must not be committed: %s\\n' {staged_files} >&2; exit 1"
     gitleaks:
       run: gitleaks protect --staged --redact
       fail_text: Secrets detected in the staged changes; remove them before committing.

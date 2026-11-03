@@ -1,0 +1,20 @@
+id: android-test-workmanager-singleton
+language: kotlin
+severity: error
+message: >-
+  Robolectric shares WorkManager's process singleton across test classes, so a test that
+  initializes it hands its executors, schedulers and Processor to every later test. Declare
+  `@get:Rule val workManagerRule = WorkManagerRule()` instead; it installs a fresh WorkManager
+  for each test and tears it down afterwards.
+note: >-
+  Blind spots: aliased imports, reflection, and test helpers wrapping initialization are not resolved.
+  The rule covers direct calls to the listed WorkManager singleton APIs in unit-test roots.
+files:
+  - '**/src/test*/**'
+ignores:
+  - '**/WorkManagerRule.kt'
+rule:
+  any:
+    - pattern: WorkManager.initialize($$$)
+    - pattern: WorkManager.isInitialized()
+    - pattern: WorkManagerImpl.setDelegate($$$)

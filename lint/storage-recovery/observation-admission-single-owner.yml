@@ -1,0 +1,19 @@
+id: android-observation-admission-single-owner
+language: kotlin
+severity: error
+message: writeObservation owns admission failures; callers handle only their source or checkpoint failures.
+note: |
+  Blind spots: nested leases, helper calls, function references and data flow need behavioral tests.
+rule:
+  kind: call_expression
+  has:
+    kind: navigation_expression
+    regex: '\.writeObservation$'
+  inside:
+    kind: try_expression
+    stopBy:
+      any:
+        - kind: lambda_literal
+        - kind: function_declaration
+        - kind: catch_block
+        - kind: finally_block

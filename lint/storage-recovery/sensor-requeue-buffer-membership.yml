@@ -1,0 +1,18 @@
+id: android-sensor-requeue-buffer-membership
+language: Kotlin
+severity: error
+message: Requeue membership belongs in queuedIds; scanning the bounded sample queue repeats work for each failed sample.
+note: >-
+  Blind spots: aliases, helper methods, explicit iteration and other linear operations are not resolved.
+  This rule rejects direct contains/in membership on buffer in requeueEntry; it does not measure runtime operation counts.
+files: ['collection-sensors/src/main/**/SensorRuntimeController.kt']
+rule:
+  all:
+    - any:
+        - pattern: buffer.contains($ENTRY)
+        - pattern: $ENTRY in buffer
+        - pattern: $ENTRY !in buffer
+    - inside:
+        stopBy: end
+        kind: function_declaration
+        regex: 'fun requeueEntry\('

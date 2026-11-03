@@ -1,0 +1,15 @@
+id: android-inline-chronicle-fqn
+language: kotlin
+severity: error
+message: >-
+  Import Chronicle types instead of spelling their fully-qualified name inline. Import and
+  package lines and string arguments (Robolectric @Implements(className = ...)) are not code
+  references and are not matched.
+note: >-
+  Blind spots: type references whose parser nodes are not navigation expressions, reflection
+  strings, and other package roots are not matched; imports and package declarations are allowed.
+rule:
+  kind: navigation_expression
+  has:
+    kind: navigation_expression
+    regex: '^com\.openlattice\.chronicle$'

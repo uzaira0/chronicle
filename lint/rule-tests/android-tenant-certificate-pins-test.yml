@@ -1,0 +1,7 @@
+id: android-tenant-certificate-pins
+valid:
+  - 'val certificate = invitation.certificate'
+  - 'val digest = MessageDigest.getInstance("SHA-256")'
+invalid:
+  - 'import okhttp3.CertificatePinner'
+  - 'val pin = "sha256/embedded-tenant-certificate"'

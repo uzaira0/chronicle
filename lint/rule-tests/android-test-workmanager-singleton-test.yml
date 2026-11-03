@@ -1,0 +1,14 @@
+id: android-test-workmanager-singleton
+valid:
+- |
+  class Isolated {
+      @get:Rule val workManagerRule = WorkManagerRule()
+      @Test fun schedules() { WorkManager.getInstance(context).enqueue(request) }
+  }
+invalid:
+- |
+  @Before fun setUp() {
+      if (!WorkManager.isInitialized()) WorkManager.initialize(context, Configuration.Builder().build())
+  }
+- WorkManager.initialize(context, configuration)
+- WorkManagerImpl.setDelegate(manager)

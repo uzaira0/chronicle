@@ -1,0 +1,16 @@
+id: android-store-recovery-single-route
+language: kotlin
+severity: error
+message: >-
+  Open the store-recovery screen only through `openStoreRecovery(error)` (ui/StorageFailureBoundary.kt).
+  It keeps a full disk on the current screen with the storage-paused notice; a direct intent offers the
+  reset, which deletes data the phone has not uploaded yet.
+note: >-
+  Blind spots: aliased imports and direct Intent construction targeting the recovery activity are
+  not resolved; this rule enforces direct calls to its intent factory in production sources.
+files:
+  - '**/src/main/**'
+ignores:
+  - '**/ui/StorageFailureBoundary.kt'
+rule:
+  pattern: LocalStoreRecoveryActivity.intent($$$)

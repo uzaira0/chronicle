@@ -1,0 +1,10 @@
+id: android-store-recovery-single-route
+valid:
+- |
+  } catch (error: LocalStoreRecoveryRequiredException) {
+      if (openStoreRecovery(error)) finish()
+  }
+invalid:
+- startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
+- |
+  val intent = LocalStoreRecoveryActivity.intent(requireContext(), LocalStoreRecoveryReason.DATABASE_OPEN_FAILED)

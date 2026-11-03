@@ -7,6 +7,8 @@ message: >-
   app/src/main/res/values/strings.xml. A deliberate wire value or developer diagnostic may be
   marked with "// ast-grep-ignore: android-i18n-ui-literal" on its own line above.
 note: |
+  Blind spots: variables, indirect wrapper APIs, and literals selected by conditional expressions
+  require copy review; this rule inspects the listed UI APIs and literal arguments only.
   Matched by node shape rather than by text pattern, so comments and line breaks inside a call
   chain do not hide a setter. Only a direct string literal (or "literal" + expr) counts; a
   template such as "$label: 42" has no English of its own, and a literal chosen by an if/else

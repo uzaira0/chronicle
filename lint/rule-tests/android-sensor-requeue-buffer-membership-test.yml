@@ -1,0 +1,9 @@
+id: android-sensor-requeue-buffer-membership
+valid:
+  - 'private fun requeueEntry(entry: Entry, allowed: Boolean) { if (queuedIds.add(entry.id)) buffer.offer(entry) }'
+  - 'private fun otherOperation(entry: Entry) { buffer.contains(entry) }'
+  - 'private fun requeueEntry(entry: Entry, allowed: Boolean) { acceptedIds.contains(entry.id) }'
+invalid:
+  - 'private fun requeueEntry(entry: Entry, allowed: Boolean) { if (!buffer.contains(entry)) buffer.offer(entry) }'
+  - 'private fun requeueEntry(entry: Entry, allowed: Boolean) { if (entry !in buffer) buffer.offer(entry) }'
+  - 'private fun requeueEntry(entry: Entry, allowed: Boolean) { if (entry in buffer) return }'
