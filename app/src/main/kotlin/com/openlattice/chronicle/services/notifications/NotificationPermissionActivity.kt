@@ -20,6 +20,7 @@ import com.openlattice.chronicle.Enrollment
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.doMainActivity
 import com.openlattice.chronicle.utils.DeviceSettingsNavigator
+import com.openlattice.chronicle.utils.Utils
 
 class NotificationPermissionActivity : AppCompatActivity() {
     private lateinit var openSettingsBtn: Button
@@ -39,7 +40,7 @@ class NotificationPermissionActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_permission_notification)
-        com.openlattice.chronicle.utils.Utils.createNotificationChannel(this)
+        Utils.createNotificationChannel(this)
         if (hasNotificationPermission(this)) {
             doMainActivity(this, intent)
             finish()
@@ -66,21 +67,17 @@ class NotificationPermissionActivity : AppCompatActivity() {
     }
 
     private fun requestPostNotificationsPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                !hasPostNotificationsRuntimePermission(this)
-            ) {
-                requestPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                val packageName = applicationContext.packageName
-                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                    putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-                }
-                startActivityForResult(DeviceSettingsNavigator.resolvedIntent(this, intent), 1)
-            }
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !hasPostNotificationsRuntimePermission(this)
+        ) {
+            requestPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            updateViewForOldVersions()
+            val packageName = applicationContext.packageName
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            }
+            startActivityForResult(DeviceSettingsNavigator.resolvedIntent(this, intent), 1)
         }
 
         //These permissions is actually for NotificationListenerService
@@ -100,16 +97,6 @@ class NotificationPermissionActivity : AppCompatActivity() {
             startActivityForResult(DeviceSettingsNavigator.resolvedIntent(this, settingsIntent), 1)
         }
     }
-
-    /**
-     * For version newer than [Build.VERSION_CODES.O] we can access notification settings via intent
-     * or via the request permission launcher. For older versions, we simply inform the user that
-     * they must manually grant permissions for notifications.
-     */
-    private fun updateViewForOldVersions() {
-        val permissionsText = findViewById<TextView>(R.id.notificationPermissionsText)
-        permissionsText.text = getString(R.string.manual_notification_settings_permission)
-    }
 }
 
 fun hasPostNotificationsRuntimePermission(context: Context): Boolean =
@@ -125,9 +112,8 @@ fun hasNotificationPermission(context: Context, channelId: String = CHANNEL_ID):
         NotificationManagerCompat.from(context).areNotificationsEnabled() &&
         channelDelivers(context, channelId)
 
-/** Android 8+: the channel exists, is not muted, and its group (Android 9+) is not blocked. */
+/** The channel exists, is not muted, and its group (Android 9+) is not blocked. */
 private fun channelDelivers(context: Context, channelId: String): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
     val manager = context.getSystemService(NotificationManager::class.java) ?: return false
     val channel = manager.getNotificationChannel(channelId) ?: return false
     if (channel.importance == NotificationManager.IMPORTANCE_NONE) return false
@@ -140,7 +126,6 @@ private fun channelDelivers(context: Context, channelId: String): Boolean {
  * screen" off, only lands in the shade, so a prompt shown after unlock goes unseen.
  */
 fun notificationPopsUp(context: Context, channelId: String): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
     val importance = context.getSystemService(NotificationManager::class.java)
         ?.getNotificationChannel(channelId)?.importance ?: return true
     return importance >= NotificationManager.IMPORTANCE_HIGH
@@ -153,7 +138,7 @@ fun notificationPopsUp(context: Context, channelId: String): Boolean {
 fun notificationSettingsIntent(context: Context, channelId: String): Intent {
     val appLevelOn = hasPostNotificationsRuntimePermission(context) &&
         NotificationManagerCompat.from(context).areNotificationsEnabled()
-    return if (appLevelOn && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    return if (appLevelOn) {
         Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
             .putExtra(Settings.EXTRA_CHANNEL_ID, channelId)

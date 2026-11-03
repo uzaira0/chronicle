@@ -3,7 +3,7 @@ package com.openlattice.chronicle.collection.notifications
 /**
  * The reconciliation decision [QuestionnaireCollectionModule] reaches for one
  * [QuestionnaireSchedule] — whether its `AlarmManager` notification should be
- * (re)scheduled or cancelled (refactor plan §9, Phase 9).
+ * (re)scheduled or cancelled.
  *
  * This is the *intent*, free of any Android type. [QuestionnaireCollectionModule]
  * computes it; the platform seams ([QuestionnaireScheduler]) translate it into the

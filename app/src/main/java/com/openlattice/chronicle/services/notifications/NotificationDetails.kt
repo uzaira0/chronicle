@@ -11,8 +11,10 @@ data class NotificationDetails(
     val serverUrl: String? = null,
     val accessCode: String? = null,
     val scheduledAtMillis: Long? = null,
-    /** The occurrence's ISO local date in the zone it was armed in; a later zone change must not move it. */
-    val localDate: String? = null,
+    /** Zone the rule recurs in (the study zone for the survey); null recurs in the phone's own zone. */
+    val timeZone: String? = null,
+    /** Survey only: on the last fetch an ended day still had apps to answer; the reminder is posted only then. */
+    val unansweredDays: Boolean = false,
 ) {
     /** Stable across refreshed one-time codes so PendingIntent updates replace old alarms. */
     fun requestCode(): Int = "$id|${type.name}|$recurrenceRule".hashCode()

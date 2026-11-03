@@ -3,7 +3,7 @@ package com.openlattice.chronicle.collection.notifications
 /**
  * A single study questionnaire's notification schedule, in a form free of the
  * olingo `FullQualifiedName` / EDM map shape the legacy `getStudyQuestionnaires`
- * endpoint returns (refactor plan §9, Phase 9 — questionnaire-notification module).
+ * endpoint returns.
  *
  * `NotificationsWorker` receives study questionnaires as
  * `Map<UUID, Map<FullQualifiedName, Set<Any>>>`. That olingo-coupled shape stays in

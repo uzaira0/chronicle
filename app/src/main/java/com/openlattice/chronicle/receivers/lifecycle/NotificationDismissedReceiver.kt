@@ -1,13 +1,14 @@
 package com.openlattice.chronicle.receivers.lifecycle
 
+import com.openlattice.chronicle.EnrolledWork
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.identification.DeviceUser
 import com.openlattice.chronicle.collection.identification.TargetUserRouter
-import com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
@@ -30,10 +31,10 @@ class NotificationDismissedReceiver : BroadcastReceiver() {
                     try {
                         val result = TargetUserRouter.setTargetUser(
                             context.applicationContext,
-                            context.getString(R.string.user_unassigned),
+                            DeviceUser.NOT_SET,
                         )
                         if (result is ModuleResult.Ok) {
-                            scheduleChronicleSyncWork(context.applicationContext)
+                            EnrolledWork.rescheduleSync(context.applicationContext)
                         } else {
                             Log.w(TAG, "Target-user reset failed: ${result.label}")
                         }

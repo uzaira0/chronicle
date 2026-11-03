@@ -27,7 +27,7 @@ private const val TAG = "QuestionnaireModuleHolder"
 
 /**
  * Holds the single app-scoped [QuestionnaireCollectionModule] instance and constructs it
- * with its production [QuestionnaireScheduler] seam (refactor plan §9, Phase 9).
+ * with its production [QuestionnaireScheduler] seam.
  *
  * **Why a holder, not an `object` field of `Context`.** Design §1C / refactor plan §6.1
  * guardrail 2 forbid storing an Android `Context` in a singleton field. `:collection-

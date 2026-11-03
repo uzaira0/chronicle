@@ -1,6 +1,5 @@
 package com.openlattice.chronicle.services.notifications
 
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -8,7 +7,12 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.viewModels
 import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.CollectionModuleId
@@ -17,62 +21,90 @@ import com.openlattice.chronicle.constants.NotificationType
 import com.openlattice.chronicle.participantaccess.CreateParticipantFormAccessCodeRequest
 import com.openlattice.chronicle.participantaccess.MobileReminderConfiguration
 import com.openlattice.chronicle.participantaccess.ParticipantFormKind
-import com.openlattice.chronicle.security.CallDeadline
-import com.openlattice.chronicle.serialization.ChronicleCallException
 import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.security.CallDeadline
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.services.upload.completeServerForIdentity
-import com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.utils.Utils.createNotificationTargetUrl
-import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Opens a reminder's form with a fresh one-time code. The server revokes a device's earlier
- * unused codes whenever reminders are re-synced (every 15 minutes), so the code a reminder was
- * posted with is usually dead by the time the participant taps it.
+ * Opens a reminder's form with a fresh one-time code. A posted reminder carries no code: each tap
+ * mints one for its own form, after the current schedule confirms the form is still offered.
  */
-class ReminderLinkActivity : Activity() {
+class ReminderLinkActivity : ComponentActivity() {
     private var resumed = false
+    private lateinit var details: NotificationDetails
+    private var scope: String? = null
+    private val request: LinkRequest by viewModels()
+
+    /** [settled] is false when the enrollment was not published before the wait ended: no answer yet, not a retirement. */
+    internal class ReminderResult(val owner: UploadServerEntity?, val url: Result<String>, val settled: Boolean)
+
+    internal class LinkRequest : ViewModel() {
+        private var started = false
+        val outcome = MutableLiveData<ReminderResult>()
+
+        /**
+         * False when another tap on this reminder already has a request in flight: a second code would
+         * revoke the first tab's code. The claim lives as long as the request, so recreation keeps it.
+         */
+        fun start(context: Context, details: NotificationDetails, scope: String?): Boolean {
+            if (started) return true
+            if (!inFlight.add(details.requestCode())) return false
+            started = true
+            val appContext = context.applicationContext
+            viewModelScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val settled = runCatching { ResearchPersistenceGate.awaitAuthorization(appContext, AUTHORIZATION_WAIT_MS) }
+                        .getOrDefault(false)
+                    val owner = if (!settled) null else runCatching {
+                        ResearchPersistenceGate.captureOwner(appContext)
+                            ?.takeIf { scope != null && scope == currentScope(appContext) }
+                    }.getOrNull()
+                    val url = if (owner == null) Result.failure<String>(IllegalStateException("No active enrollment"))
+                        else runCatching { freshReminderUrlFor(appContext, owner, details) }
+                    url.onFailure { Log.w(TAG, "Reminder link unavailable", it) }
+                    ReminderResult(owner, url, settled)
+                }
+                outcome.value = result
+            }.invokeOnCompletion { inFlight.remove(details.requestCode()) }
+            return true
+        }
+
+        private companion object {
+            val inFlight: MutableSet<Int> = ConcurrentHashMap.newKeySet()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val details = intent.getStringExtra(NOTIFICATION_DETAILS)
+        val notification = intent.getStringExtra(NOTIFICATION_DETAILS)
             ?.let { runCatching { Gson().fromJson(it, NotificationDetails::class.java) }.getOrNull() }
-        // The enrollment scope the receiver admitted this reminder under.
-        val scope = intent.getStringExtra(SURVEY_ENROLLMENT_SCOPE)
-        // A second tap (or a rotation) while this reminder's code is being fetched is ignored.
-        if (details == null || !inFlight.add(details.requestCode())) {
+        if (notification == null) {
+            Toast.makeText(applicationContext, R.string.reminder_form_unavailable, Toast.LENGTH_LONG).show()
             finish()
             return
         }
-        val appContext = applicationContext
-        Thread {
-            // A reminder admitted under another enrollment scope never reaches the server.
-            val owner = runCatching {
-                ResearchPersistenceGate.awaitAuthorization(appContext, AUTHORIZATION_WAIT_MS)
-                ResearchPersistenceGate.captureOwner(appContext)?.takeIf { scope != null && scope == currentScope(appContext) }
-            }.getOrNull()
-            val result = if (owner == null) Result.failure<String>(IllegalStateException("No active enrollment"))
-                else runCatching { freshReminderUrlFor(appContext, owner, details) }
-            val url = result
-                .onFailure { Log.w(TAG, "Reminder link unavailable", it) }
-                .getOrNull()
-            runOnUiThread {
-                try {
-                    openOrKeep(appContext, details, owner, scope, url, result.exceptionOrNull())
-                } finally {
-                    inFlight.remove(details.requestCode())
-                    finish()
-                }
-            }
-        }.start()
+        details = notification
+        scope = intent.getStringExtra(SURVEY_ENROLLMENT_SCOPE)
+        Toast.makeText(applicationContext, R.string.dashboard_loading, Toast.LENGTH_SHORT).show()
+        if (!request.start(applicationContext, notification, scope)) {
+            finish()
+            return
+        }
+        request.outcome.observe(this) { openResultIfResumed() }
     }
 
     override fun onResume() {
         super.onResume()
         resumed = true
+        openResultIfResumed()
     }
 
     override fun onPause() {
@@ -80,34 +112,41 @@ class ReminderLinkActivity : Activity() {
         super.onPause()
     }
 
+    private fun openResultIfResumed() {
+        if (!resumed || isFinishing) return
+        val result = request.outcome.value ?: return
+        try {
+            if (result.settled) openOrKeep(applicationContext, details, result.owner, scope, result.url)
+            // Unsettled is no answer yet; the reminder stays so the participant can tap it again.
+            else Toast.makeText(applicationContext, R.string.reminder_link_unavailable, Toast.LENGTH_LONG).show()
+        } finally {
+            finish()
+        }
+    }
+
     private fun openOrKeep(
         appContext: Context,
         details: NotificationDetails,
         owner: UploadServerEntity?,
         scope: String?,
-        url: String?,
-        error: Throwable?,
+        result: Result<String>,
     ) {
-        // Withdrawn or replaced since the tap: the link belongs to an enrollment that is gone.
-        // Both reads are of the published snapshot, so MAIN never blocks here.
-        val current = ResearchPersistenceGate.captureOwner(appContext)
-        if (owner == null || current == null || !sameEnrollment(owner, current) || currentScope(appContext) != scope) {
+        // The published scope binds both enrollment identity and module generation without MAIN-thread IO.
+        if (owner == null || currentScope(appContext) != scope) {
             NotificationManagerCompat.from(appContext).cancel(SURVEY_NOTIFICATION_TAG, details.requestCode())
             Toast.makeText(appContext, R.string.reminder_form_unavailable, Toast.LENGTH_LONG).show()
             return
         }
+        val url = result.getOrNull()
         if (url != null) {
-            // Left meanwhile: Android drops a background launch without an error, so keep the
-            // reminder for another foreground tap instead of cancelling it unopened.
-            if (!resumed || isFinishing) return
             try {
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
             } catch (e: ActivityNotFoundException) {
-                Toast.makeText(appContext, R.string.reminder_link_unavailable, Toast.LENGTH_LONG).show()
+                Toast.makeText(appContext, R.string.reminder_browser_unavailable, Toast.LENGTH_LONG).show()
                 return
             }
             NotificationManagerCompat.from(appContext).cancel(SURVEY_NOTIFICATION_TAG, details.requestCode())
-        } else if (error is ReminderFormUnavailableException) {
+        } else if (result.exceptionOrNull() is ReminderFormUnavailableException) {
             NotificationManagerCompat.from(appContext).cancel(SURVEY_NOTIFICATION_TAG, details.requestCode())
             Toast.makeText(appContext, R.string.reminder_form_unavailable, Toast.LENGTH_LONG).show()
         } else {
@@ -116,21 +155,12 @@ class ReminderLinkActivity : Activity() {
     }
 
     private companion object {
-        val inFlight: MutableSet<Int> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         const val AUTHORIZATION_WAIT_MS = 5_000L
 
         fun currentScope(context: Context) =
-            ResearchPersistenceGate.observationScope(context, CollectionModuleId.QUESTIONNAIRE)?.first
-
-        fun sameEnrollment(a: UploadServerEntity, b: UploadServerEntity) =
-            a.id == b.id && a.createdAt == b.createdAt && a.studyId == b.studyId &&
-                a.participantId == b.participantId && a.sourceDeviceId == b.sourceDeviceId &&
-                a.enrollmentIssuedAtEpochMillis == b.enrollmentIssuedAtEpochMillis
+            ResearchPersistenceGate.observationScope(context, CollectionModuleId.QUESTIONNAIRE)?.key
     }
 }
-
-/** Servers without the route: 404/405, or 500 from the catch-all exception handler of releases through 2026.10.3. */
-private val LEGACY_REMINDER_SERVER_CODES = setOf(404, 405, 500)
 
 /** Overall bound on a tap's server calls, which run under [ResearchPersistenceGate]'s read lease. */
 internal const val REMINDER_LINK_DEADLINE_MS = 20_000L
@@ -156,32 +186,17 @@ internal fun freshReminderUrl(context: Context, details: NotificationDetails): S
     val server = requireNotNull(
         completeServerForIdentity(ChronicleDb.getInstance(context).uploadServerDao().getConfiguredServer(), studyId, participantId),
     ) { "No study server for the enrolled participant" }
-    require(server.authMode == AUTH_MODE_API_KEY) { "Reminder links need a device-bound enrollment" }
     val apiKey = requireNotNull(server.apiKey)
-    val api = UploadWorker.getChronicleStudyApi(server.url, server.mobileSigningSecretOverride)
+    val api = UploadWorker.getChronicleStudyApi(server.url)
     val kind = if (details.type == NotificationType.QUESTIONNAIRE) ParticipantFormKind.QUESTIONNAIRE else ParticipantFormKind.APP_USAGE
     fun tapped(configuration: MobileReminderConfiguration) = configuration.forms.firstOrNull {
         it.formKind == kind && (it.resourceId?.toString() ?: studyId.toString()) == details.id
     } ?: throw ReminderFormUnavailableException()
-    // The schedule read is the availability check. Releases through 2026.10.3 answer it with 500
-    // but already mint single forms, so only the check is skipped there.
-    val resourceId = try {
-        tapped(api.getMobileReminderSchedule(studyId, participantId, server.sourceDeviceId, apiKey)).resourceId
-    } catch (error: ChronicleCallException) {
-        if (error.code !in LEGACY_REMINDER_SERVER_CODES) throw error
-        if (kind == ParticipantFormKind.QUESTIONNAIRE) UUID.fromString(details.id) else null
-    }
-    // Mint only the tapped form: the manifest re-issues every form's code and so revokes a code
-    // another tap already handed to the browser. It is the fallback for servers without the mint.
-    val accessCode = try {
-        api.createParticipantFormAccessCode(
-            studyId, participantId, server.sourceDeviceId, apiKey,
-            CreateParticipantFormAccessCodeRequest(kind, resourceId),
-        ).accessCode
-    } catch (error: ChronicleCallException) {
-        if (error.code !in LEGACY_REMINDER_SERVER_CODES) throw error
-        tapped(api.getMobileReminderConfiguration(studyId, participantId, server.sourceDeviceId, apiKey)).accessCode
-    }
+    val resourceId = tapped(api.getMobileReminderSchedule(studyId, participantId, server.sourceRandomDeviceId, apiKey)).resourceId
+    val accessCode = api.createParticipantFormAccessCode(
+        studyId, participantId, server.sourceRandomDeviceId, apiKey,
+        CreateParticipantFormAccessCodeRequest(kind, resourceId),
+    ).accessCode
     return createNotificationTargetUrl(details.copy(serverUrl = server.url, accessCode = accessCode), studyId.toString(), participantId)
 }
 

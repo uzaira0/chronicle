@@ -1,12 +1,12 @@
 package com.openlattice.chronicle.ui
 
-import com.openlattice.chronicle.BuildConfig
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.capability.DistributionChannel
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
-import org.junit.Test
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.Test
 
 class NotificationAccessDisclosureTest {
     @Test
@@ -16,8 +16,8 @@ class NotificationAccessDisclosureTest {
     }
 
     @Test
-    fun playBuildRejectsNotificationAccessDisclosureForExcludedModule() {
-        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL == "PLAY")
+    fun amazonBuildRejectsNotificationAccessDisclosureForExcludedModule() {
+        assumeTrue(DistributionChannel.current() == DistributionChannel.AMAZON)
         val copy = notificationAccessDisclosure(setOf(CollectionModuleId.AUDIO_CONTENT))
 
         assertEquals("Access unavailable", copy.title)
@@ -26,8 +26,8 @@ class NotificationAccessDisclosureTest {
     }
 
     @Test
-    fun playBuildRejectsMixedNotificationAccessDisclosure() {
-        assumeTrue(BuildConfig.DISTRIBUTION_CHANNEL == "PLAY")
+    fun amazonBuildRejectsMixedNotificationAccessDisclosure() {
+        assumeTrue(DistributionChannel.current() == DistributionChannel.AMAZON)
         val copy = notificationAccessDisclosure(
             setOf(
                 CollectionModuleId.AUDIO_ACTIVITY,
@@ -36,6 +36,6 @@ class NotificationAccessDisclosureTest {
         )
 
         assertEquals("Access unavailable", copy.title)
-        assertTrue(copy.body.contains("Play release"))
+        assertTrue(copy.body.contains("This release"))
     }
 }

@@ -9,18 +9,18 @@
 <androidx.constraintlayout.widget.ConstraintLayout
     android:paddingStart="@dimen/page_horizontal_padding"
     android:paddingEnd="@dimen/page_horizontal_padding"
-    android:layout_width="match_parent"
+    style="@style/Chronicle.Content"
     android:layout_height="wrap_content"
     tools:context="com.openlattice.chronicle.services.notifications.NotificationPermissionActivity">
 
-    <TextView
+    <TextView android:accessibilityHeading="true"
         android:id="@+id/notificationPermissionsText"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="@dimen/eq_space_4"
         android:text="@string/notification_permission"
         android:textAlignment="center"
-        android:textSize="18sp"
+        android:textAppearance="@style/Chronicle.SectionTitle"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
@@ -29,8 +29,8 @@
         android:id="@+id/open_notification_settings_btn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:layout_marginBottom="24dp"
+        android:layout_marginTop="@dimen/eq_space_5"
+        android:layout_marginBottom="@dimen/eq_space_5"
         android:text="@string/open_settings"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
