@@ -1,52 +1,61 @@
 package com.openlattice.chronicle.collection.device
 
+import android.app.AppOpsManager
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.Configuration
-import androidx.work.WorkManager
-import androidx.work.WorkerParameters
-import androidx.work.WorkerFactory
+import androidx.work.Data
+import androidx.work.ForegroundUpdater
 import androidx.work.ListenableWorker
 import androidx.work.ProgressUpdater
-import androidx.work.ForegroundUpdater
-import androidx.work.Data
+import androidx.work.WorkerFactory
+import androidx.work.WorkerParameters
 import androidx.work.impl.utils.taskexecutor.WorkManagerTaskExecutor
+import com.openlattice.chronicle.EnrollmentTestStores
+import com.openlattice.chronicle.WorkManagerRule
 import com.openlattice.chronicle.api.ChronicleStudyApi
-import com.openlattice.chronicle.collection.CollectionDataDisposition
 import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.core.ModuleResult
+import com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink
+import com.openlattice.chronicle.collection.state.BackgroundPersistenceRule
 import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
+import com.openlattice.chronicle.collection.state.ResearchPersistenceBarrier
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.ResearchErasureFence
 import com.openlattice.chronicle.data.ParticipationStatus
-import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
 import com.openlattice.chronicle.preferences.PARTICIPANT_ID
 import com.openlattice.chronicle.preferences.PARTICIPATION_STATUS
 import com.openlattice.chronicle.preferences.STUDY_ID
-import com.openlattice.chronicle.services.upload.UploadWorker
+import com.openlattice.chronicle.services.upload.UploadQueueSingleFlight
 import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
 import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalWorker
 import com.openlattice.chronicle.services.withdrawal.WithdrawalState
 import com.openlattice.chronicle.services.withdrawal.WithdrawalStateStore
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.UploadServerEntity
-import com.openlattice.chronicle.utils.Utils
 import java.lang.reflect.Proxy
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.coroutines.EmptyCoroutineContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
@@ -55,30 +64,29 @@ import org.robolectric.util.ReflectionHelpers
 @RunWith(RobolectricTestRunner::class)
 @Config(shadows = [AppNetworkEnrollmentPersistenceTest.StatsManager::class, AppNetworkEnrollmentPersistenceTest.EmptyStats::class])
 class AppNetworkEnrollmentPersistenceTest {
-    @get:org.junit.Rule val backgroundPersistence = com.openlattice.chronicle.collection.state.BackgroundPersistenceRule()
+    @get:Rule val workManagerRule = WorkManagerRule()
+    @get:Rule val backgroundPersistence = BackgroundPersistenceRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
+    private val gate = ReentrantReadWriteLock(true)
     private lateinit var db: ChronicleDb
     private lateinit var source: AndroidAppNetworkUsageSource
     private val checkpoint get() = context.getSharedPreferences("chronicle_app_network_usage", Context.MODE_PRIVATE)
     private val study = "11111111-1111-1111-1111-111111111111"
     private lateinit var server: UploadServerEntity
-    private lateinit var apiCache: MutableMap<String, ChronicleStudyApi>
-    private lateinit var apiKey: String
-    private var previousApi: ChronicleStudyApi? = null
 
     @Before fun setUp() {
         val prefs = context.getSharedPreferences("app-network-enrollment-test", Context.MODE_PRIVATE)
         prefs.edit().clear().putString(STUDY_ID, study).putString(PARTICIPANT_ID, "participant")
             .putString(PARTICIPATION_STATUS, ParticipationStatus.ENROLLED.name).commit()
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }
-            .set(EncryptedPrefsHelper, prefs)
+        EnrollmentTestStores.prefs = prefs
         checkpoint.edit().clear().commit()
         StatsManager.windows.clear()
+        StatsManager.afterQuery = null
         db = Room.inMemoryDatabaseBuilder(context, ChronicleDb::class.java).allowMainThreadQueries().build()
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, db)
+        EnrollmentTestStores.db = db
         val id = db.uploadServerDao().insert(UploadServerEntity(
             name = "study", url = "https://localhost", studyId = study, participantId = "participant",
-            sourceDeviceId = "device", apiKey = "test-key", createdAt = Instant.ofEpochMilli(System.currentTimeMillis() - 60_000).toString(),
+            sourceRandomDeviceId = "device", apiKey = "test-key", createdAt = Instant.ofEpochMilli(System.currentTimeMillis() - 60_000).toString(),
         ))
         server = db.uploadServerDao().getById(id)!!
         source = AndroidAppNetworkUsageSource(object : ContextWrapper(context) {
@@ -87,24 +95,18 @@ class AppNetworkEnrollmentPersistenceTest {
                 if (name == Context.NETWORK_STATS_SERVICE) ReflectionHelpers.newInstance(NetworkStatsManager::class.java)
                 else super.getSystemService(name)
         })
-        if (!WorkManager.isInitialized()) WorkManager.initialize(context, Configuration.Builder().setExecutor(Executor { }).build())
-        @Suppress("UNCHECKED_CAST")
-        val cache = UploadWorker::class.java.getDeclaredField("studyApiCache").apply { isAccessible = true }
-            .get(null) as MutableMap<String, ChronicleStudyApi>
-        apiCache = cache
-        apiKey = server.url + "|" + Utils.mobileSigningSecretFingerprint(null)
-        previousApi = apiCache[apiKey]
-        apiCache[apiKey] = Proxy.newProxyInstance(ChronicleStudyApi::class.java.classLoader,
+        EnrollmentTestStores.api = Proxy.newProxyInstance(ChronicleStudyApi::class.java.classLoader,
             arrayOf(ChronicleStudyApi::class.java)) { _, method, _ ->
             check(method.name == "withdrawCurrentEnrollment")
             null
         } as ChronicleStudyApi
+        ResearchPersistenceGate.initialize(context, ResearchPersistenceBarrier(gate))
     }
 
     @After fun tearDown() {
-        previousApi?.let { apiCache[apiKey] = it } ?: apiCache.remove(apiKey)
-        ChronicleDb::class.java.getDeclaredField("INSTANCE").apply { isAccessible = true }.set(null, null)
-        EncryptedPrefsHelper::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(EncryptedPrefsHelper, null)
+        EnrollmentTestStores.api = null
+        EnrollmentTestStores.db = null
+        EnrollmentTestStores.prefs = null
         db.close()
     }
 
@@ -133,72 +135,95 @@ class AppNetworkEnrollmentPersistenceTest {
         Thread.sleep(2)
         source.read()
         val pending = checkpoint.getLong("pending_end_millis", -1)
-        val appOps = context.getSystemService(android.app.AppOpsManager::class.java)
-        val shadow = org.robolectric.Shadows.shadowOf(appOps)
-        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
-            android.app.AppOpsManager.MODE_IGNORED)
+        val appOps = context.getSystemService(AppOpsManager::class.java)
+        val shadow = Shadows.shadowOf(appOps)
+        shadow.setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
+            AppOpsManager.MODE_IGNORED)
         StatsManager.windows.clear()
         Thread.sleep(2)
         val module = AppNetworkUsageCollectionModule(
-            com.openlattice.chronicle.collection.sink.AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao()),
-            source, { true }, log = com.openlattice.chronicle.collection.core.NoOpCollectionLog)
-        assertEquals(com.openlattice.chronicle.collection.core.ModuleResult.Ok(0), module.sample())
-        assertNull(AndroidAppNetworkUsageSource::class.java.getDeclaredField("pendingEndMillis").apply { isAccessible = true }.get(source))
+            AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao()),
+            source, { true })
+        assertEquals(ModuleResult.Ok(0), module.sample())
+        source.acknowledgeRead()
         assertTrue("no summary without Usage Access", StatsManager.windows.isEmpty())
         assertEquals(last, checkpoint.getLong("last_end_millis", -1))
         assertEquals(pending, checkpoint.getLong("pending_end_millis", -1))
-        shadow.setMode(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
-            android.app.AppOpsManager.MODE_ALLOWED)
+        shadow.setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
+            AppOpsManager.MODE_ALLOWED)
         source.read()
         assertTrue(StatsManager.windows.isNotEmpty() && StatsManager.windows.all { it.first == last && it.second == pending })
     }
 
+    @Test @Config(sdk = [26, 36]) fun accessRevokedDuringEitherSummaryRetainsTheExactWindowForRetry() {
+        val appOps = Shadows.shadowOf(context.getSystemService(AppOpsManager::class.java))
+        for (revokeAfter in 1..2) {
+            appOps.setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
+                AppOpsManager.MODE_ALLOWED)
+            StatsManager.afterQuery = null
+            source.read()
+            source.acknowledgeRead()
+            val last = checkpoint.getLong("last_end_millis", -1)
+            Thread.sleep(2)
+            StatsManager.windows.clear()
+            StatsManager.afterQuery = {
+                if (StatsManager.windows.size == revokeAfter) appOps.setMode(AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    context.applicationInfo.uid, context.packageName, AppOpsManager.MODE_IGNORED)
+            }
+            val module = AppNetworkUsageCollectionModule(
+                AppNetworkUsageSampleSink(db.appNetworkUsageSampleDao()),
+                source, { true })
+            assertEquals(ModuleResult.Ok(0), module.sample())
+            val pending = checkpoint.getLong("pending_end_millis", -1)
+            assertEquals(last, checkpoint.getLong("last_end_millis", -1))
+            assertTrue(pending > last)
+            assertEquals(0, db.appNetworkUsageSampleDao().count())
+            StatsManager.afterQuery = null
+            appOps.setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, context.applicationInfo.uid, context.packageName,
+                AppOpsManager.MODE_ALLOWED)
+            StatsManager.windows.clear()
+            source.read()
+            assertEquals(listOf(last to pending, last to pending), StatsManager.windows)
+            source.acknowledgeRead()
+        }
+    }
+
     @Test fun withdrawalCompletesWithBoundaryWriterWaitingForQueue() {
         assertTrue(ParticipantWithdrawalManager.begin(context))
-        val inHttp = java.util.concurrent.CountDownLatch(1)
-        val acknowledge = java.util.concurrent.CountDownLatch(1)
-        apiCache[apiKey] = Proxy.newProxyInstance(ChronicleStudyApi::class.java.classLoader,
+        val inHttp = CountDownLatch(1)
+        val acknowledge = CountDownLatch(1)
+        EnrollmentTestStores.api = Proxy.newProxyInstance(ChronicleStudyApi::class.java.classLoader,
             arrayOf(ChronicleStudyApi::class.java)) { _, method, _ ->
             check(method.name == "withdrawCurrentEnrollment")
             inHttp.countDown()
-            check(acknowledge.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            check(acknowledge.await(10, TimeUnit.SECONDS))
             null
         } as ChronicleStudyApi
-        val barrier = ResearchPersistenceGate::class.java.getDeclaredField("barrier")
-            .apply { isAccessible = true }.get(ResearchPersistenceGate)
-        val gate = barrier.javaClass.getDeclaredField("lock").apply { isAccessible = true }
-            .get(barrier) as java.util.concurrent.locks.ReentrantReadWriteLock
-        val queue = com.openlattice.chronicle.services.upload.UploadQueueSingleFlight::class.java
-            .getDeclaredField("mutationLock").apply { isAccessible = true }
-            .get(com.openlattice.chronicle.services.upload.UploadQueueSingleFlight) as java.util.concurrent.locks.ReentrantReadWriteLock
-        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
-        val boundaryThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val pool = Executors.newFixedThreadPool(2)
+        val boundaryEntered = CountDownLatch(1)
         val withdrawal = pool.submit<ListenableWorker.Result> { withdrawalWorker().doWork() }
-        var boundary: java.util.concurrent.Future<*>? = null
+        var boundary: Future<*>? = null
         try {
-            assertTrue(inHttp.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue(inHttp.await(5, TimeUnit.SECONDS))
             assertTrue("withdrawal HTTP must release the persistence gate", gate.readLock().tryLock())
             gate.readLock().unlock()
             boundary = pool.submit {
                 gate.writeLock().lockInterruptibly()
                 try {
-                    boundaryThread.set(Thread.currentThread())
-                    queue.writeLock().lockInterruptibly()
-                    queue.writeLock().unlock()
+                    boundaryEntered.countDown()
+                    UploadQueueSingleFlight.withExclusiveMutation {}
                 } finally { gate.writeLock().unlock() }
             }
-            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
-            while (boundaryThread.get()?.let(queue::hasQueuedThread) != true && System.nanoTime() < deadline) Thread.sleep(1)
-            assertTrue("boundary writer must be waiting for withdrawal's queue", boundaryThread.get()?.let(queue::hasQueuedThread) == true)
+            assertTrue("boundary writer must own the gate before the HTTP acknowledgment", boundaryEntered.await(5, TimeUnit.SECONDS))
             acknowledge.countDown()
-            assertEquals(ListenableWorker.Result.success(), withdrawal.get(3, java.util.concurrent.TimeUnit.SECONDS))
-            boundary.get(3, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(ListenableWorker.Result.success(), withdrawal.get(3, TimeUnit.SECONDS))
+            boundary.get(3, TimeUnit.SECONDS)
             assertEquals(WithdrawalState.COMPLETE, WithdrawalStateStore(context).state())
         } finally {
             acknowledge.countDown()
             boundary?.cancel(true)
             pool.shutdown()
-            if (!pool.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) pool.shutdownNow()
+            if (!pool.awaitTermination(10, TimeUnit.SECONDS)) pool.shutdownNow()
         }
     }
 
@@ -248,8 +273,8 @@ class AppNetworkEnrollmentPersistenceTest {
         assertEquals(WithdrawalState.COMPLETE, WithdrawalStateStore(context).state())
         assertFalse(checkpoint.contains("pending_end_millis"))
         assertFalse(checkpoint.contains("last_end_millis"))
-        assertNull(AndroidAppNetworkUsageSource::class.java.getDeclaredField("pendingEndMillis").apply { isAccessible = true }.get(source))
         source.acknowledgeRead()
+        assertFalse("a stale acknowledgment cannot restore an erased pending window", checkpoint.contains("pending_end_millis"))
         assertFalse("a stale acknowledgment cannot restore an erased checkpoint", checkpoint.contains("last_end_millis"))
     }
 
@@ -258,13 +283,14 @@ class AppNetworkEnrollmentPersistenceTest {
         source.acknowledgeRead()
         source.read()
         ResearchPersistenceGate.stop {
-            CollectionLoopCoordinator::class.java.getDeclaredMethod("applyDisposition",
-                CollectionModuleId::class.java, CollectionDataDisposition::class.java).apply { isAccessible = true }
-                .invoke(CollectionLoopCoordinator(context), CollectionModuleId.APP_NETWORK_USAGE, CollectionDataDisposition.DISCARD_AND_STOP)
+            ResearchErasureFence(context).erase(setOf(CollectionModuleId.APP_NETWORK_USAGE),
+                ownerKey = ResearchErasureFence.enrollmentKey(server))
+            CollectionLoopCoordinator(context).replayPendingErasures()
         }
         assertFalse(checkpoint.contains("pending_end_millis"))
         assertFalse(checkpoint.contains("last_end_millis"))
-        assertNull(AndroidAppNetworkUsageSource::class.java.getDeclaredField("pendingEndMillis").apply { isAccessible = true }.get(source))
+        source.acknowledgeRead()
+        assertFalse("acknowledgment cannot undo module erasure", checkpoint.contains("last_end_millis"))
     }
 
     @Test fun replacementEnrollmentCannotReadPredecessorsPendingWindow() {
@@ -278,14 +304,6 @@ class AppNetworkEnrollmentPersistenceTest {
         assertTrue(checkpoint.getLong("pending_end_millis", -1) >= end + 1)
     }
 
-    @Test fun upgradeKeepsUntaggedCheckpointSoSentWindowsAreNotReadAgain() {
-        // Build 63 wrote last_end_millis without an enrollment tag.
-        val sentUpTo = System.currentTimeMillis() - 10_000
-        checkpoint.edit().putLong("last_end_millis", sentUpTo).commit()
-        source.read()
-        assertEquals(2, StatsManager.windows.size)
-        assertTrue(StatsManager.windows.all { it.first == sentUpTo })
-    }
 
     @Test fun retryKeepsTheExactWindowWithinOneEnrollment() {
         source.read()
@@ -300,7 +318,7 @@ class AppNetworkEnrollmentPersistenceTest {
         source.read()
         source.acknowledgeRead()
         // An acknowledged endpoint ahead of the current clock models a backward correction.
-        val sentThrough = System.currentTimeMillis() + java.util.concurrent.TimeUnit.HOURS.toMillis(1)
+        val sentThrough = System.currentTimeMillis() + TimeUnit.HOURS.toMillis(1)
         checkpoint.edit().putLong("last_end_millis", sentThrough).commit()
         StatsManager.windows.clear()
 
@@ -312,7 +330,7 @@ class AppNetworkEnrollmentPersistenceTest {
             assertTrue("acknowledged traffic must not be queried again", StatsManager.windows.isEmpty())
         }
 
-        val nextEnd = sentThrough + java.util.concurrent.TimeUnit.MINUTES.toMillis(1)
+        val nextEnd = sentThrough + TimeUnit.MINUTES.toMillis(1)
         checkpoint.edit().putLong("pending_end_millis", nextEnd).commit()
         source.read()
         assertEquals(listOf(sentThrough to nextEnd, sentThrough to nextEnd), StatsManager.windows)
@@ -320,32 +338,17 @@ class AppNetworkEnrollmentPersistenceTest {
         assertEquals(nextEnd, checkpoint.getLong("last_end_millis", -1))
     }
 
-    @Test fun upgradeAdoptsLegacyTaggedScopeAndPreservesBothWindowEndpoints() {
-        val sent = System.currentTimeMillis() - 20_000
-        val pending = sent + 10_000
-        val legacy = "${server.id}:${server.createdAt}:${server.studyId}:${server.participantId}:${server.sourceDeviceId}"
-        checkpoint.edit().putString("enrollment_epoch", legacy).putLong("last_end_millis", sent)
-            .putLong("pending_end_millis", pending).commit()
-        val current = com.openlattice.chronicle.collection.state.ResearchErasureFence.enrollmentKey(server) + ":1"
-        val scopedSource = AndroidAppNetworkUsageSource(object : ContextWrapper(context) {
-            override fun getApplicationContext(): Context = this
-            override fun getSystemService(name: String): Any? =
-                if (name == Context.NETWORK_STATS_SERVICE) ReflectionHelpers.newInstance(NetworkStatsManager::class.java)
-                else super.getSystemService(name)
-        }, consentEpoch = { current to 0L })
-        scopedSource.read()
-        assertEquals(listOf(sent to pending, sent to pending), StatsManager.windows)
-        assertEquals(current, checkpoint.getString("enrollment_epoch", null))
-        assertEquals(sent, checkpoint.getLong("last_end_millis", -1))
-        assertEquals(pending, checkpoint.getLong("pending_end_millis", -1))
-    }
 
     @Implements(NetworkStatsManager::class)
     class StatsManager {
-        companion object { val windows = mutableListOf<Pair<Long, Long>>() }
+        companion object {
+            val windows = mutableListOf<Pair<Long, Long>>()
+            var afterQuery: (() -> Unit)? = null
+        }
         @Implementation fun querySummary(@Suppress("UNUSED_PARAMETER") type: Int,
             @Suppress("UNUSED_PARAMETER") subscriber: String?, start: Long, end: Long): NetworkStats {
             windows += start to end
+            afterQuery?.invoke()
             return ReflectionHelpers.newInstance(NetworkStats::class.java)
         }
     }

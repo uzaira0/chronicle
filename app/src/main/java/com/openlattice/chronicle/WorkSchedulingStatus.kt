@@ -3,11 +3,15 @@ package com.openlattice.chronicle
 import android.util.Log
 import android.content.Context
 import android.annotation.SuppressLint
+import androidx.annotation.VisibleForTesting
 import androidx.work.impl.WorkManagerImpl
 import androidx.work.impl.utils.ForceStopRunnable
 import androidx.work.impl.WorkDatabasePathHelper
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.atomic.AtomicReference
 
 /** Initialization failures retry locally; only successful scheduling clears the failure hint. */
 internal object WorkSchedulingStatus {
@@ -17,7 +21,7 @@ internal object WorkSchedulingStatus {
     private val retries = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "work-scheduling-retry").apply { isDaemon = true }
     }
-    private var retry: java.util.concurrent.ScheduledFuture<*>? = null
+    private var retry: ScheduledFuture<*>? = null
     private var attempt = 0
     @Volatile private var startupRecoveryRequired = false
 
@@ -33,7 +37,7 @@ internal object WorkSchedulingStatus {
             synchronized(this) { retry = null }
             try {
                 if (startupRecoveryRequired) reconcileStartup(context.applicationContext)
-                com.openlattice.chronicle.services.sync.scheduleChronicleSyncWork(context.applicationContext)
+                EnrolledWork.rescheduleSync(context.applicationContext)
             } catch (error: Exception) {
                 initializationFailed(error, context)
             }
@@ -44,8 +48,8 @@ internal object WorkSchedulingStatus {
     private fun reconcileStartup(context: Context) {
         val wm = WorkManagerImpl.getInstance(context)
         // CountDownLatch, not CompletableFuture: minSdk 23 has no CompletableFuture.
-        val done = java.util.concurrent.CountDownLatch(1)
-        val failure = java.util.concurrent.atomic.AtomicReference<Exception>()
+        val done = CountDownLatch(1)
+        val failure = AtomicReference<Exception>()
         // Use WorkManager's serial executor and its startup reconciliation, including RUNNING
         // work and stale progress. UPDATE alone deliberately preserves a running periodic row.
         wm.workTaskExecutor.executeOnTaskThread {
@@ -70,5 +74,20 @@ internal object WorkSchedulingStatus {
         attempt = 0
         retry?.cancel(false)
         retry = null
+    }
+
+    /** Test isolation: drops a pending retry, waits out a running one, then forgets every failure. */
+    @VisibleForTesting
+    fun reset() {
+        synchronized(this) { retry?.cancel(false) }
+        // Single-thread executor: this no-op runs only after an in-flight retry has returned.
+        retries.submit {}.get(10, TimeUnit.SECONDS)
+        synchronized(this) {
+            retry?.cancel(false)
+            retry = null
+            attempt = 0
+            unavailable = false
+            startupRecoveryRequired = false
+        }
     }
 }

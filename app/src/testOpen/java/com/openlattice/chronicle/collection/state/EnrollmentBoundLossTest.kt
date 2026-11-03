@@ -2,8 +2,8 @@ package com.openlattice.chronicle.collection.state
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.openlattice.chronicle.audit.AuditStores
 import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.layout.TestStores
 import com.openlattice.chronicle.storage.ChronicleDb
 import java.io.IOException
 import org.junit.Assert.assertEquals
@@ -17,12 +17,12 @@ import org.robolectric.RobolectricTestRunner
 /** Lost and refused writes are counted only for the enrollment that produced them. */
 @RunWith(RobolectricTestRunner::class)
 class EnrollmentBoundLossTest {
-    @get:org.junit.Rule val backgroundPersistence = com.openlattice.chronicle.collection.state.BackgroundPersistenceRule()
+    @get:org.junit.Rule val backgroundPersistence = BackgroundPersistenceRule()
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val db get() = ChronicleDb.getInstance(context)
 
     @Before fun setUp() {
-        TestStores.install(context, enrolled = true)
+        AuditStores.install(context, enrolled = true)
         ResearchPersistenceGate.initialize(context)
     }
 
@@ -48,8 +48,11 @@ class EnrollmentBoundLossTest {
 
         // Not among the fixture's enabled modules, so the module gate refuses.
         val persisted = ResearchPersistenceGate.persistIfCollecting(
-            context, CollectionModuleId.NOTIFICATION_ACTIVITY, records = 2,
-            expectedOwner = owner, onRefused = { refused += it },
+            context,
+            ResearchWriteRequest(
+                moduleId = CollectionModuleId.NOTIFICATION_ACTIVITY, records = 2,
+                expectedOwner = owner, onRefused = { refused += it },
+            ),
         ) { error("must not persist") }
 
         assertFalse(persisted)
@@ -65,8 +68,11 @@ class EnrollmentBoundLossTest {
         val refused = mutableListOf<Int>()
 
         val persisted = ResearchPersistenceGate.persistIfCollecting(
-            context, CollectionModuleId.USAGE_EVENTS, records = 2,
-            expectedOwner = oldOwner, onRefused = { refused += it },
+            context,
+            ResearchWriteRequest(
+                moduleId = CollectionModuleId.USAGE_EVENTS, records = 2,
+                expectedOwner = oldOwner, onRefused = { refused += it },
+            ),
         ) { error("must not persist") }
 
         assertFalse(persisted)

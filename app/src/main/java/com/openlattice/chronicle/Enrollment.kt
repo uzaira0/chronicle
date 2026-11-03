@@ -1,27 +1,34 @@
 package com.openlattice.chronicle
 
+import com.openlattice.chronicle.security.CallDeadline
+import com.openlattice.chronicle.security.InvitedServerCa
+
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.View
-import android.view.inputmethod.InputMethodManager
-import android.widget.ProgressBar
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.textfield.TextInputEditText
-import com.google.android.material.textfield.TextInputLayout
+import androidx.lifecycle.viewModelScope
+import com.openlattice.chronicle.api.EnrollmentPreviewResponse
+import com.openlattice.chronicle.api.MobileEnrollmentManifest
+import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
+import com.openlattice.chronicle.collection.CollectionModuleId
+import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
+import com.openlattice.chronicle.collection.state.CollectionOrientationActivity
+import com.openlattice.chronicle.collection.state.ConsentPlan
+import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
+import com.openlattice.chronicle.collection.state.UnsupportedStudyModulesException
 import com.openlattice.chronicle.constants.TelemetryEvents
-import com.openlattice.chronicle.preferences.DeviceInstanceIdentity
 import com.openlattice.chronicle.preferences.EnrollmentSettings
-import com.openlattice.chronicle.preferences.SensorSettings
 import com.openlattice.chronicle.preferences.getDevice
+import com.openlattice.chronicle.serialization.ChronicleJson
 import com.openlattice.chronicle.services.upload.UploadWorker
 import com.openlattice.chronicle.storage.ChronicleDb
 import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
@@ -30,20 +37,18 @@ import com.openlattice.chronicle.storage.SingleEnrollmentResolution
 import com.openlattice.chronicle.storage.UploadServerEntity
 import com.openlattice.chronicle.storage.resolveSingleEnrollment
 import com.openlattice.chronicle.telemetry.LocalTelemetry
-import com.openlattice.chronicle.api.EnrollmentPreviewResponse
-import com.openlattice.chronicle.collection.AndroidDataCollectionSetting
-import com.openlattice.chronicle.collection.CollectionModuleId
-import com.openlattice.chronicle.collection.DistributionRestrictedRuntime
-import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
-import com.openlattice.chronicle.collection.state.CollectionOrientationActivity
-import com.openlattice.chronicle.serialization.ChronicleJson
+import com.openlattice.chronicle.ui.openStoreRecovery
 import com.openlattice.chronicle.utils.Utils
 import java.time.OffsetDateTime
-import java.util.*
+import java.util.UUID
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-class Enrollment : AppCompatActivity() {
-    private val executor = Executors.newSingleThreadExecutor()
+class Enrollment(private val executor: ExecutorService = Executors.newSingleThreadExecutor()) : AppCompatActivity() {
     private val mHandler = object : Handler(Looper.getMainLooper()) {}
 
     private fun postIfCurrent(action: () -> Unit) {
@@ -51,24 +56,33 @@ class Enrollment : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        val durableAttempt = screen is EnrollmentScreen.Submitting || screen is EnrollmentScreen.Recovery
+        if (isFinishing && ::wizard.isInitialized && !durableAttempt) {
+            executor.execute {
+                try {
+                    val trustGeneration = wizard.invitationTrustGeneration ?: return@execute
+                    ResearchPersistenceGate.enrollmentMutation(applicationContext) {
+                        if (ChronicleDb.getInstance(applicationContext).uploadServerDao().getConfiguredServer() == null) {
+                            InvitedServerCa.clear(applicationContext, trustGeneration)
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.e(javaClass.simpleName, "Abandoned invitation cleanup failed (${error.javaClass.simpleName})")
+                }
+            }
+        }
         executor.shutdown()
         mHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
-    private lateinit var studyIdText: TextInputEditText
-    private lateinit var participantIdText: TextInputEditText
-    private lateinit var studyIdTextView: TextView
-    private lateinit var participantIdTextView: TextView
-    private lateinit var statusMessageText: TextView
-    private lateinit var progressBar: ProgressBar
-    private lateinit var submitBtn: MaterialButton
-    private lateinit var doneBtn: MaterialButton
-    private lateinit var studyIdTextLayout: TextInputLayout
-    private lateinit var participantIdTextLayout: TextInputLayout
-    private lateinit var serverUrlText: TextInputEditText
-    private lateinit var serverSigningSecretText: TextInputEditText
-    private lateinit var serverSigningSecretTextLayout: TextInputLayout
+    private lateinit var form: EnrollmentForm
+    private var screen: EnrollmentScreen = EnrollmentScreen.Editing()
+
+    private fun render(state: EnrollmentScreen) {
+        screen = state
+        form.render(state)
+    }
 
     /**
      * Context held across the disclosure / orientation wizard launches so the result callback can
@@ -76,44 +90,42 @@ class Enrollment : AppCompatActivity() {
      * fetch). Held in a ViewModel so a configuration change (rotation during the wizard) keeps it;
      * memory only — the one-time credential never goes into a saved-state Bundle, disk or logs.
      */
-    internal class WizardState : ViewModel() {
-        var studyId: UUID? = null
-        var participantId: String? = null
-        var serverUrl: String? = null
-        var mobileSigningSecretOverride: String? = null
-        var fetched: AndroidDataCollectionSetting? = null
-        var preview: EnrollmentPreviewResponse? = null
-        var accessCode: String? = null
-        var pendingAccessCode: String? = null
-        /** The link's credential from the moment it is stripped until [handleIntent] adopts it. */
+    internal class WizardState(private val reviewDispatcher: CoroutineDispatcher = Dispatchers.IO) : ViewModel() {
+        @Volatile var invitationTrustGeneration: Long? = null
+        var step: WizardStep = WizardStep.Idle
+        val submissionState = MutableLiveData<EnrollmentScreen?>()
+        var pendingReview: EnrollmentInvitation? = null
+        val reviewResult = MutableLiveData<EnrollmentReview?>()
+        /** The link's credential from the moment it is stripped until handleIntent adopts it. */
         var detachedAccessCode: String? = null
+        val accessCode: String?
+            get() = when (val current = step) {
+                WizardStep.Idle -> null
+                is WizardStep.Invited -> current.accessCode
+                is WizardStep.Reviewed -> current.invitation.accessCode
+            }
+
+        fun clear() {
+            invitationTrustGeneration = null
+            step = WizardStep.Idle
+            detachedAccessCode = null
+            pendingReview = null
+            reviewResult.postValue(null)
+        }
+
+        fun review(context: Context, invitation: EnrollmentInvitation) {
+            if (pendingReview != null) return
+            pendingReview = invitation
+            val appContext = context.applicationContext
+            viewModelScope.launch {
+                reviewResult.value = withContext(reviewDispatcher) {
+                    try { resolveEnrollmentReview(appContext, invitation) }
+                    catch (error: LocalStoreRecoveryRequiredException) { EnrollmentReview.StorageFailed(error) }
+                }
+            }
+        }
     }
     private lateinit var wizard: WizardState
-    private var pendingStudyId: UUID?
-        get() = wizard.studyId
-        set(value) { wizard.studyId = value }
-    private var pendingParticipantId: String?
-        get() = wizard.participantId
-        set(value) { wizard.participantId = value }
-    private var pendingServerUrl: String?
-        get() = wizard.serverUrl
-        set(value) { wizard.serverUrl = value }
-    private var pendingMobileSigningSecretOverride: String?
-        get() = wizard.mobileSigningSecretOverride
-        set(value) { wizard.mobileSigningSecretOverride = value }
-    private var pendingFetched: AndroidDataCollectionSetting?
-        get() = wizard.fetched
-        set(value) { wizard.fetched = value }
-    private var pendingPreview: EnrollmentPreviewResponse?
-        get() = wizard.preview
-        set(value) { wizard.preview = value }
-    private var enrollmentAccessCode: String?
-        get() = wizard.accessCode
-        set(value) { wizard.accessCode = value }
-    private var pendingEnrollmentAccessCode: String?
-        get() = wizard.pendingAccessCode
-        set(value) { wizard.pendingAccessCode = value }
-    private var cancelPendingRecoveryOnDone = false
 
     private val orientationLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -126,55 +138,46 @@ class Enrollment : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         wizard = ViewModelProvider(this)[WizardState::class.java]
-        try {
-            ChronicleDb.getInstance(applicationContext)
-        } catch (error: LocalStoreRecoveryRequiredException) {
-            startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
-            finish()
-            return
+        // Opening the encrypted store derives its key, so it runs on the executor ahead of every
+        // other enrollment task; a store that needs recovery routes there before any of them posts.
+        executor.execute {
+            try {
+                ChronicleDb.getInstance(applicationContext)
+            } catch (error: LocalStoreRecoveryRequiredException) {
+                postIfCurrent { showStorageRecovery(error) }
+            }
         }
         setContentView(R.layout.activity_enrollment)
 
-        studyIdText = findViewById(R.id.studyIdText)
-        participantIdText = findViewById(R.id.participantIdText)
-        statusMessageText = findViewById(R.id.statusMessage)
-        progressBar = findViewById(R.id.enrollmentProgress)
-        submitBtn = findViewById(R.id.button)
-        doneBtn = findViewById(R.id.doneButton)
-        participantIdTextView = findViewById(R.id.participantIdTextView)
-        studyIdTextView = findViewById(R.id.studyIdTextView)
+        form = EnrollmentForm(this, onSubmit = { if (screen is EnrollmentScreen.Recovery) retryRecovery() else reviewThenEnroll() }, onDone = {
+            if ((screen as? EnrollmentScreen.Recovery)?.kind?.canCancel == true) cancelPendingEnrollmentRecovery() else handleOnClickDone()
+        })
 
-        studyIdTextLayout = findViewById(R.id.studyIdTextLayout)
-        participantIdTextLayout = findViewById(R.id.participantIdTextLayout)
-        serverUrlText = findViewById(R.id.serverUrlText)
-        serverSigningSecretText = findViewById(R.id.serverSigningSecretText)
-        serverSigningSecretTextLayout = findViewById(R.id.serverSigningSecretTextLayout)
-
-        if (BuildConfig.DISTRIBUTION_CHANNEL != "RESEARCH") {
-            // Public distributions bootstrap with a one-time enrollment link. A global
-            // signing-key override must never be participant-facing or stored on these devices.
-            serverSigningSecretTextLayout.visibility = View.GONE
+        wizard.submissionState.observe(this) { state ->
+            if (state == null) return@observe
+            if (state !is EnrollmentScreen.Submitting) wizard.clear()
+            render(state)
         }
-        doneBtn.setOnClickListener {
-            if (cancelPendingRecoveryOnDone) {
-                cancelPendingEnrollmentRecovery()
-            } else {
-                handleOnClickDone()
-            }
-        }
-
-        submitBtn.setOnClickListener {
-            reviewThenEnroll()
+        wizard.reviewResult.observe(this) { review ->
+            if (review == null) return@observe
+            val invitation = wizard.pendingReview ?: return@observe
+            wizard.pendingReview = null
+            wizard.reviewResult.value = null
+            onInvitationReviewed(invitation, review)
         }
 
         // Enrollment must load the study's configuration and show its per-module consent before
         // asking for sensitive OS access. Usage Access is requested later from Data Sharing, and
         // only when an accepted, active module actually needs it.
-        if (savedInstanceState != null && (enrollmentAccessCode != null || pendingPreview != null)) {
+        if (wizard.submissionState.value != null) {
+            render(checkNotNull(wizard.submissionState.value))
+        } else if (savedInstanceState != null && wizard.step != WizardStep.Idle) {
             // Configuration change: the stripped Intent no longer carries the credential, so do not
             // re-handle it. The retained invitation / wizard state stays, and the launchers deliver
             // the pending disclosure or orientation result to this new instance.
-            submitBtn.isEnabled = pendingPreview == null
+            render(if (wizard.pendingReview != null) EnrollmentScreen.Reviewing()
+                else if (wizard.step is WizardStep.Reviewed) EnrollmentScreen.Reviewing(loading = false)
+                else EnrollmentScreen.Editing())
         } else {
             // A recreation before handleIntent ran finds the credential already stripped.
             resumeIssuedEnrollmentOrHandleIntent(
@@ -184,12 +187,23 @@ class Enrollment : AppCompatActivity() {
         }
     }
 
+    /** Coming back to a recovery screen retries it, as opening the app does. */
+    override fun onRestart() {
+        super.onRestart()
+        if (screen is EnrollmentScreen.Recovery) retryRecovery()
+    }
+
+    private fun retryRecovery() {
+        if ((screen as? EnrollmentScreen.Recovery)?.kind?.canRetry == true) {
+            resumeIssuedEnrollmentOrHandleIntent(intent, wizard.detachedAccessCode)
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val detachedAccessCode = detachEnrollmentCredential(intent)
-        if (pendingPreview != null || progressBar.visibility == View.VISIBLE) {
-            statusMessageText.text = getString(R.string.enrollment_finish_current_first)
-            statusMessageText.visibility = View.VISIBLE
+        if (wizard.step is WizardStep.Reviewed || screen.isBusy) {
+            render(screen.withMessage(R.string.enrollment_finish_current_first))
             return
         }
         resumeIssuedEnrollmentOrHandleIntent(intent, detachedAccessCode)
@@ -201,107 +215,63 @@ class Enrollment : AppCompatActivity() {
     ) {
         wizard.detachedAccessCode = detachedAccessCode
         val invitationOpened = sourceIntent.action == Intent.ACTION_VIEW && sourceIntent.data != null
-        submitBtn.isEnabled = false
-        progressBar.visibility = View.VISIBLE
+        render(EnrollmentScreen.Reviewing(message = screen.message))
         executor.execute {
             val recovery = EnrollmentRecoveryManager.resumeIfNeeded(applicationContext)
             val enrollmentAlreadyComplete = recovery == EnrollmentRecoveryResult.NONE &&
-                runCatching { EnrollmentSettings(applicationContext).isEnrolled() }.getOrDefault(false)
+                runCatching { EnrollmentSettings(applicationContext).hasConfiguredEnrollmentOrThrow() }.getOrDefault(false)
+            val enrolled = enrollmentAlreadyComplete || recovery == EnrollmentRecoveryResult.COMPLETED
+            val existingMessage = if (invitationOpened && enrolled) existingInvitationMessage(applicationContext, sourceIntent) else null
             postIfCurrent {
-                progressBar.visibility = View.INVISIBLE
                 when (recovery) {
-                    EnrollmentRecoveryResult.NONE -> {
-                        if (enrollmentAlreadyComplete) {
-                            if (invitationOpened) {
-                                showExistingEnrollmentRejection()
-                            } else {
-                                showEnrollmentSuccess()
-                            }
-                        } else {
-                            submitBtn.isEnabled = true
-                            handleIntent(sourceIntent, detachedAccessCode)
-                        }
+                    EnrollmentRecoveryResult.NONE, EnrollmentRecoveryResult.COMPLETED -> if (enrolled) {
+                        showEnrollmentResult(existingMessage ?: R.string.device_enroll_success)
+                    } else {
+                        render(EnrollmentScreen.Editing())
+                        handleIntent(sourceIntent, detachedAccessCode)
                     }
-                    EnrollmentRecoveryResult.COMPLETED -> {
-                        if (invitationOpened) {
-                            showExistingEnrollmentRejection()
-                        } else {
-                            showEnrollmentSuccess()
-                        }
-                    }
-                    EnrollmentRecoveryResult.RETRY_REQUIRED -> showIssuedEnrollmentRecoveryRetry()
+                    EnrollmentRecoveryResult.RETRY_REQUIRED,
+                    EnrollmentRecoveryResult.STATUS_UNAVAILABLE -> showIssuedEnrollmentRecoveryRetry(recovery)
                     EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED ->
                         showPendingEnrollmentRecoveryRetry()
-                    EnrollmentRecoveryResult.TERMINAL_FAILURE -> {
-                        clearPendingEnrollmentState()
-                        cancelPendingRecoveryOnDone = false
-                        doneBtn.visibility = View.INVISIBLE
-                        submitBtn.isEnabled = true
+                    EnrollmentRecoveryResult.TERMINAL_FAILURE,
+                    EnrollmentRecoveryResult.CANCELLED,
+                    EnrollmentRecoveryResult.STUDY_CHANGED,
+                    EnrollmentRecoveryResult.SERVER_INCOMPATIBLE,
+                    EnrollmentRecoveryResult.SERVER_REFUSED -> {
+                        wizard.clear()
                         handleIntent(sourceIntent, detachedAccessCode)
-                        statusMessageText.text =
-                            getString(R.string.enrollment_recovery_unrecoverable)
-                        statusMessageText.visibility = View.VISIBLE
+                        render(EnrollmentScreen.Editing(recoveryEndMessage(recovery) ?: R.string.enrollment_recovery_unrecoverable))
                     }
                 }
             }
         }
     }
 
-    /** Removes a one-time invitation capability before this Activity can retain the Intent. */
-    private fun detachEnrollmentCredential(intent: Intent): String? {
-        val data = intent.data ?: return null
-        val accessCode = EnrollmentLinkCredential.fromFragment(data.fragment)
-        if (data.fragment != null) {
-            intent.data = data.buildUpon().fragment(null).build()
-        }
-        return accessCode
-    }
-
     private fun handleIntent(intent: Intent, detachedAccessCode: String?) {
-        val appLinkIntent = intent
-        val appLinkAction = appLinkIntent.action
-        val appLinkData = appLinkIntent.data
-
-        if (Intent.ACTION_VIEW == appLinkAction && appLinkData != null) {
-            if (!appLinkData.isHierarchical || appLinkData.scheme != "chronicle" ||
-                appLinkData.host != "enroll" || !appLinkData.path.isNullOrEmpty()) {
-                Log.w(javaClass.simpleName, "Rejecting invalid enrollment destination")
-                statusMessageText.text = getString(R.string.enrollment_invitation_unverified)
-                statusMessageText.visibility = View.VISIBLE
-                return
+        wizard.submissionState.value = null
+        val uri = intent.data
+        if (intent.action != Intent.ACTION_VIEW || uri == null) return
+        when (val link = parseEnrollmentLink(uri.toString(), detachedAccessCode)) {
+            is EnrollmentLink.Invalid -> {
+                endInvitation(link.message)
             }
-            val studyId = appLinkData.getQueryParameter("studyId")?.take(36)
-            val participantId = appLinkData.getQueryParameter("participantId")?.take(256)
-            enrollmentAccessCode = detachedAccessCode
-
-            // Validate studyId format from deep link before populating UI
-            if (!studyId.isNullOrBlank() && !Utils.isValidUUID(studyId)) {
-                Log.w(Enrollment::class.java.name, "Rejecting invalid studyId from deep link")
-                statusMessageText.text = getString(R.string.invalid_study_id_format)
-                statusMessageText.visibility = View.VISIBLE
-                return
+            is EnrollmentLink.Prefill -> {
+                // Before any request: the preview fetch already needs the invited root.
+                render(EnrollmentScreen.Reviewing())
+                executor.execute {
+                    try {
+                        wizard.invitationTrustGeneration = InvitedServerCa.replace(applicationContext, link.serverUrl, link.serverCa)
+                        postIfCurrent {
+                            wizard.step = link.accessCode?.let(WizardStep::Invited) ?: WizardStep.Idle
+                            form.prefill(link)
+                            render(EnrollmentScreen.Editing(screen.message))
+                        }
+                    } catch (error: LocalStoreRecoveryRequiredException) {
+                        postIfCurrent { showStorageRecovery(error) }
+                    }
+                }
             }
-
-            studyIdText.setText(studyId)
-            participantIdText.setText(participantId)
-
-            val serverUrl = appLinkData.getQueryParameter("serverUrl")
-            serverUrlText.setText("")
-            if (serverUrl.isNullOrBlank()) {
-                enrollmentAccessCode = null
-                statusMessageText.text = getString(R.string.enrollment_missing_server_url)
-                statusMessageText.visibility = View.VISIBLE
-                return
-            }
-            val trustedServerUrl = Utils.normalizeTrustedServerUrl(serverUrl)
-            if (trustedServerUrl == null) {
-                enrollmentAccessCode = null
-                Log.e(Enrollment::class.java.name, "Rejecting untrusted server URL from deep link")
-                statusMessageText.text = getString(R.string.enrollment_untrusted_server_url)
-                statusMessageText.visibility = View.VISIBLE
-                return
-            }
-            serverUrlText.setText(trustedServerUrl)
         }
     }
 
@@ -314,264 +284,90 @@ class Enrollment : AppCompatActivity() {
     }
 
     private fun cancelPendingEnrollmentRecovery() {
-        doneBtn.isEnabled = false
-        progressBar.visibility = View.VISIBLE
+        render(EnrollmentScreen.Recovery(RecoveryKind.CANCELLING,
+            screen.message ?: R.string.enrollment_pending_retry))
         executor.execute {
             val cancelled = EnrollmentRecoveryManager.cancelPendingAttempt(applicationContext)
             postIfCurrent {
-                progressBar.visibility = View.INVISIBLE
-                doneBtn.isEnabled = true
                 if (cancelled) {
-                    clearPendingEnrollmentState()
-                    cancelPendingRecoveryOnDone = false
-                    doneBtn.visibility = View.INVISIBLE
-                    submitBtn.visibility = View.VISIBLE
-                    submitBtn.isEnabled = true
-                    statusMessageText.text =
-                        getString(R.string.enrollment_attempt_cancelled)
-                } else {
-                    statusMessageText.text =
-                        getString(R.string.enrollment_cancel_failed)
+                    wizard.clear()
                 }
-                statusMessageText.visibility = View.VISIBLE
+                render(if (cancelled) EnrollmentScreen.Editing(R.string.enrollment_attempt_cancelled)
+                    else EnrollmentScreen.Recovery(RecoveryKind.CANCELLATION_FAILED))
             }
         }
     }
 
     private fun showPendingEnrollmentRecoveryRetry() {
-        progressBar.visibility = View.INVISIBLE
-        submitBtn.visibility = View.INVISIBLE
-        submitBtn.isEnabled = false
-        cancelPendingRecoveryOnDone = true
-        doneBtn.text = getString(R.string.cancel_pending_enrollment)
-        doneBtn.visibility = View.VISIBLE
-        statusMessageText.text =
-            getString(R.string.enrollment_pending_retry)
-        statusMessageText.visibility = View.VISIBLE
+        render(EnrollmentScreen.Recovery(RecoveryKind.PENDING))
     }
 
-    private fun showIssuedEnrollmentRecoveryRetry() {
-        progressBar.visibility = View.INVISIBLE
-        submitBtn.visibility = View.INVISIBLE
-        submitBtn.isEnabled = false
-        cancelPendingRecoveryOnDone = false
-        doneBtn.visibility = View.INVISIBLE
-        statusMessageText.text =
-            getString(R.string.enrollment_issued_retry)
-        statusMessageText.visibility = View.VISIBLE
+    private fun showIssuedEnrollmentRecoveryRetry(result: EnrollmentRecoveryResult = EnrollmentRecoveryResult.RETRY_REQUIRED) {
+        render(EnrollmentScreen.Recovery(if (result == EnrollmentRecoveryResult.RETRY_REQUIRED)
+            RecoveryKind.ISSUED else RecoveryKind.STATUS_UNAVAILABLE))
     }
 
-    private fun showEnrollmentSuccess() {
-        clearPendingEnrollmentState()
-        cancelPendingRecoveryOnDone = false
-        studyIdTextLayout.visibility = View.GONE
-        participantIdTextLayout.visibility = View.GONE
-        serverSigningSecretTextLayout.visibility = View.GONE
-        submitBtn.visibility = View.GONE
-        studyIdTextView.visibility = View.GONE
-        participantIdTextView.visibility = View.GONE
-        progressBar.visibility = View.GONE
-        statusMessageText.text = getString(R.string.device_enroll_success)
-        statusMessageText.visibility = View.VISIBLE
-        doneBtn.text = getString(R.string.enrollment_done)
-        doneBtn.visibility = View.VISIBLE
+    private fun showEnrollmentResult(message: Int) {
+        wizard.clear()
+        render(EnrollmentScreen.Result(message))
     }
 
-    private fun showExistingEnrollmentRejection() {
-        clearPendingEnrollmentState()
-        cancelPendingRecoveryOnDone = false
-        studyIdTextLayout.visibility = View.GONE
-        participantIdTextLayout.visibility = View.GONE
-        serverSigningSecretTextLayout.visibility = View.GONE
-        submitBtn.visibility = View.GONE
-        studyIdTextView.visibility = View.GONE
-        participantIdTextView.visibility = View.GONE
-        progressBar.visibility = View.GONE
-        statusMessageText.text =
-            getString(R.string.enrollment_existing_study_rejection)
-        statusMessageText.visibility = View.VISIBLE
-        doneBtn.text = getString(R.string.enrollment_done)
-        doneBtn.visibility = View.VISIBLE
-    }
-
-    private fun clearPendingEnrollmentState() {
-        pendingStudyId = null
-        pendingParticipantId = null
-        pendingServerUrl = null
-        pendingMobileSigningSecretOverride = null
-        pendingFetched = null
-        pendingPreview = null
-        enrollmentAccessCode = null
-        pendingEnrollmentAccessCode = null
-        wizard.detachedAccessCode = null
-    }
-
-    private fun validateInput(studyId: String, participantId: String): Boolean {
-
-        if (studyId.isBlank()) {
-            studyIdText.error = getString(R.string.invalid_study_id_blank)
-
-        } else if (!Utils.isValidUUID(studyId)) {
-            studyIdText.error = getString(R.string.invalid_study_id_format)
-        }
-
-        if (participantId.isBlank()) {
-            participantIdText.error = getString(R.string.invalid_participant)
-        }
-
-        return studyIdText.error.isNullOrBlank() && participantIdText.error.isNullOrBlank()
-    }
-
-    private fun closeKeyBoard() {
-        val view = this.currentFocus
-        if (view != null) {
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(view.windowToken, 0)
+    private fun showStorageRecovery(error: LocalStoreRecoveryRequiredException) {
+        // Only a damaged store ends the attempt. A full disk keeps the wizard and its answers on a screen that is not
+        // busy, so the participant can retry or re-open the invitation after freeing space.
+        if (openStoreRecovery(error)) {
+            wizard.clear()
+            finish()
+        } else {
+            render(EnrollmentScreen.Editing(R.string.settings_control_storage_paused))
         }
     }
+
+    /** Before reservation, cancelling the consent wizard ends the invitation's trust too. */
+    private fun endInvitation(@StringRes message: Int) {
+        val trustGeneration = wizard.invitationTrustGeneration
+        wizard.clear()
+        render(EnrollmentScreen.Editing(message))
+        executor.execute {
+            try {
+                if (trustGeneration != null) InvitedServerCa.clear(applicationContext, trustGeneration)
+            } catch (error: LocalStoreRecoveryRequiredException) {
+                postIfCurrent { showStorageRecovery(error) }
+            }
+        }
+    }
+
     /** Resolve the invitation to an authoritative disclosure before any enrollment request. */
     private fun reviewThenEnroll() {
-        val studyIdStr: String = studyIdText.text.toString().trim()
-        val participantId: String = participantIdText.text.toString().trim()
-        if (!validateInput(studyIdStr, participantId)) return
+        val invitation = form.enrollmentInvitation(wizard.accessCode) ?: return
+        render(EnrollmentScreen.Reviewing())
+        wizard.review(applicationContext, invitation)
+    }
 
-        val studyId = try {
-            UUID.fromString(studyIdStr)
-        } catch (e: Exception) {
-            statusMessageText.text = getString(R.string.invalid_study_id_format)
-            statusMessageText.visibility = View.VISIBLE
-            return
-        }
-        val rawServerUrl = serverUrlText.text.toString().trim()
-        if (rawServerUrl.isBlank()) {
-            statusMessageText.text = getString(R.string.enrollment_missing_server_url)
-            statusMessageText.visibility = View.VISIBLE
-            return
-        }
-        val serverUrl = Utils.normalizeTrustedServerUrl(rawServerUrl)
-        if (serverUrl == null) {
-            statusMessageText.text = getString(R.string.enrollment_untrusted_server_url)
-            statusMessageText.visibility = View.VISIBLE
-            return
-        }
-        val mobileSigningSecretOverride = serverSigningSecretText.text.toString().trim()
-            .takeIf { it.isNotBlank() }
-        val accessCode = enrollmentAccessCode
-        if (accessCode == null) {
-            statusMessageText.text = getString(R.string.enrollment_link_required)
-            statusMessageText.visibility = View.VISIBLE
-            return
-        }
-
-        statusMessageText.visibility = View.INVISIBLE
-        submitBtn.isEnabled = false
-        progressBar.visibility = View.VISIBLE
-        closeKeyBoard()
-
-        executor.execute {
-            val existingEnrollment = try {
-                ChronicleDb.getInstance(applicationContext).uploadServerDao().getAll()
-            } catch (e: Exception) {
-                Log.e(javaClass.canonicalName, "Failed to read the local enrollment slot", e)
-                null
-            }
-            if (existingEnrollment == null) {
-                postIfCurrent {
-                    progressBar.visibility = View.INVISIBLE
-                    submitBtn.isEnabled = true
-                    statusMessageText.text = getString(R.string.device_enroll_failure)
-                    statusMessageText.visibility = View.VISIBLE
-                }
-                return@execute
-            }
-            if (
-                resolveSingleEnrollment(
-                    existingEnrollment,
-                    serverUrl,
-                    studyId.toString(),
-                    participantId,
-                ) is SingleEnrollmentResolution.Reject
-            ) {
-                postIfCurrent {
-                    progressBar.visibility = View.INVISIBLE
-                    submitBtn.isEnabled = true
-                    statusMessageText.text =
-                        getString(R.string.enrollment_already_enrolled)
-                    statusMessageText.visibility = View.VISIBLE
-                }
-                return@execute
-            }
-            // Capability-protected preview validates the invitation without consuming it. It is
-            // the authority for identity, policy, and settings; URL text is never consent copy.
-            val previewOutcome = try {
-                EnrollmentPreviewOutcome.Verified(UploadWorker.getChronicleStudyApi(serverUrl, mobileSigningSecretOverride)
-                    .getEnrollmentPreview(studyId, participantId, accessCode))
-            } catch (e: Exception) {
-                Log.w(javaClass.canonicalName, "Failed to resolve the enrollment invitation", e)
-                val status = com.openlattice.chronicle.services.upload.uploadHttpStatus(e)
-                if (status != null && status in 400..499 && status !in setOf(408, 429))
-                    EnrollmentPreviewOutcome.Invalid else EnrollmentPreviewOutcome.Retryable
-            }
-            val preview = (previewOutcome as? EnrollmentPreviewOutcome.Verified)?.preview
-            val previewMatchesInvitation = preview != null &&
-                preview.manifest.studyId == studyId &&
-                preview.manifest.participantId == participantId &&
-                Utils.normalizeTrustedServerUrl(preview.manifest.serverOrigin) == serverUrl
-            val fetched = preview?.manifest?.collectionSettings?.takeIf { previewMatchesInvitation }
-            val plan = fetched?.let {
-                try {
-                    CollectionLoopCoordinator(applicationContext).consentPlanFor(it)
-                } catch (e: Exception) {
-                    Log.w(javaClass.canonicalName, "Failed to resolve consent plan", e)
-                    null
-                }
-            }
-            postIfCurrent {
-                progressBar.visibility = View.INVISIBLE
-                submitBtn.isEnabled = true
-                if (preview == null || fetched == null || plan == null) {
-                    statusMessageText.text =
-                        getString(if (previewOutcome is EnrollmentPreviewOutcome.Retryable)
-                            R.string.enrollment_preview_unavailable else R.string.enrollment_invitation_unverified)
-                    statusMessageText.visibility = View.VISIBLE
-                    return@postIfCurrent
-                }
-                // Hold the exact authenticated disclosure, then obtain an affirmative study-level
-                // decision before asking for module-specific choices.
-                pendingStudyId = studyId
-                pendingParticipantId = participantId
-                pendingServerUrl = serverUrl
-                pendingMobileSigningSecretOverride = mobileSigningSecretOverride
-                pendingFetched = fetched
-                pendingPreview = preview
-                pendingEnrollmentAccessCode = accessCode
-                submitBtn.isEnabled = false
-                disclosureLauncher.launch(StudyDisclosureActivity.intent(this, preview))
+    private fun onInvitationReviewed(invitation: EnrollmentInvitation, review: EnrollmentReview) {
+        when (review) {
+            is EnrollmentReview.StorageFailed -> showStorageRecovery(review.error)
+            is EnrollmentReview.Existing -> showEnrollmentResult(existingEnrollmentMessage(
+                review.owner, invitation.serverUrl, invitation.studyId, invitation.participantId))
+            is EnrollmentReview.Failed -> render(EnrollmentScreen.Editing(review.message))
+            is EnrollmentReview.Ready -> {
+                wizard.step = WizardStep.Reviewed(invitation, review.preview)
+                render(EnrollmentScreen.Reviewing(loading = false))
+                disclosureLauncher.launch(StudyDisclosureActivity.intent(this, review.preview))
             }
         }
     }
 
     private fun onDisclosureResult(resultCode: Int) {
-        val fetched = pendingFetched
-        val preview = pendingPreview
-        if (resultCode != RESULT_OK || fetched == null || preview == null) {
-            clearPendingEnrollmentState()
-            submitBtn.isEnabled = true
-            statusMessageText.text = getString(R.string.enrollment_cancelled_nothing_collected)
-            statusMessageText.visibility = View.VISIBLE
+        val reviewed = wizard.step as? WizardStep.Reviewed
+        if (resultCode != RESULT_OK || reviewed == null) {
+            endInvitation(R.string.enrollment_cancelled_nothing_collected)
             return
         }
-        val plan = try {
-            CollectionLoopCoordinator(applicationContext).consentPlanFor(fetched)
-        } catch (e: Exception) {
-            Log.w(javaClass.canonicalName, "Failed to resolve consent plan", e)
-            null
-        }
+        val (plan, unsupportedModules) = resolveConsentPlan(applicationContext, reviewed.preview.manifest.collectionSettings)
         if (plan == null) {
-            clearPendingEnrollmentState()
-            submitBtn.isEnabled = true
-            statusMessageText.text = getString(R.string.enrollment_consent_plan_failed)
-            statusMessageText.visibility = View.VISIBLE
+            endInvitation(if (unsupportedModules) R.string.enrollment_study_modules_unsupported
+                else R.string.enrollment_consent_plan_failed)
             return
         }
         if (plan.isEmpty) {
@@ -587,289 +383,222 @@ class Enrollment : AppCompatActivity() {
      * decline, which the wizard returns as RESULT_CANCELED) → abort, nothing enrolled.
      */
     private fun onOrientationResult(resultCode: Int, data: Intent?) {
-        val studyId = pendingStudyId
-        val participantId = pendingParticipantId
-        val serverUrl = pendingServerUrl
-        val mobileSigningSecretOverride = pendingMobileSigningSecretOverride
-        val fetched = pendingFetched
-        val accessCode = pendingEnrollmentAccessCode
-        val preview = pendingPreview
-        if (resultCode != RESULT_OK || studyId == null || participantId == null ||
-            serverUrl == null || fetched == null || accessCode == null || preview == null
-        ) {
-            clearPendingEnrollmentState()
-            submitBtn.isEnabled = true
-            statusMessageText.text =
-                getString(R.string.enrollment_cancelled_nothing_collected)
-            statusMessageText.visibility = View.VISIBLE
+        if (resultCode != RESULT_OK || wizard.step !is WizardStep.Reviewed) {
+            endInvitation(R.string.enrollment_cancelled_nothing_collected)
             return
         }
-        completePendingEnrollment(
-            CollectionOrientationActivity.acceptedFrom(data),
-            CollectionOrientationActivity.declinedFrom(data),
-        )
+        completePendingEnrollment(CollectionOrientationActivity.acceptedFrom(data), CollectionOrientationActivity.declinedFrom(data))
     }
 
-    private fun completePendingEnrollment(
-        accepted: Set<CollectionModuleId>,
-        declined: Set<CollectionModuleId>,
-    ) {
-        val studyId = pendingStudyId
-        val participantId = pendingParticipantId
-        val serverUrl = pendingServerUrl
-        val accessCode = pendingEnrollmentAccessCode
-        val fetched = pendingFetched
-        val preview = pendingPreview
-        if (studyId == null || participantId == null || serverUrl == null || accessCode == null ||
-            fetched == null || preview == null
-        ) {
-            submitBtn.isEnabled = true
-            statusMessageText.text = getString(R.string.enrollment_state_expired)
-            statusMessageText.visibility = View.VISIBLE
-            return
-        }
-        val partition = try {
-            CollectionLoopCoordinator(applicationContext).enrollmentModulePartitionFor(
-                fetched = fetched,
-                accepted = accepted,
-                declined = declined,
-            )
+    private fun completePendingEnrollment(accepted: Set<CollectionModuleId>, declined: Set<CollectionModuleId>) {
+        val submission = try {
+            (wizard.step as? WizardStep.Reviewed)?.submission(applicationContext, accepted, declined)
         } catch (error: IllegalArgumentException) {
-            clearPendingEnrollmentState()
-            submitBtn.isEnabled = true
-            statusMessageText.text =
-                getString(R.string.enrollment_modules_mismatch)
-            statusMessageText.visibility = View.VISIBLE
+            endInvitation(R.string.enrollment_modules_mismatch)
             return
         }
-        doEnrollment(
-            studyId,
-            participantId,
-            serverUrl,
-            pendingMobileSigningSecretOverride,
-            accessCode,
-            fetched,
-            preview,
-            partition,
-        )
+        if (submission == null) {
+            endInvitation(R.string.enrollment_state_expired)
+            return
+        }
+        doEnrollment(submission)
     }
 
-    /**
-     * Phase 2: actually enroll. Reached only after the participant agreed in [showConsentDialog],
-     * so this is the first point the server learns of the device. The modules the participant
-     * consented to are activated synchronously from the [fetched] setting we already have (no
-     * second network fetch that could fail and leave the device stuck awaiting acknowledgment).
-     */
-    private fun doEnrollment(
-        studyId: UUID,
-        participantId: String,
-        serverUrl: String,
-        mobileSigningSecretOverride: String?,
-        enrollmentAccessCode: String,
-        fetched: AndroidDataCollectionSetting,
-        preview: EnrollmentPreviewResponse,
-        partition: com.openlattice.chronicle.collection.state.EnrollmentModulePartition,
-    ) {
-        if (!OffsetDateTime.now().isBefore(preview.manifest.expiresAt)) {
-            clearPendingEnrollmentState()
-            submitBtn.visibility = View.VISIBLE
-            submitBtn.isEnabled = true
-            statusMessageText.text = getString(R.string.enrollment_disclosure_expired)
-            statusMessageText.visibility = View.VISIBLE
-            return
-        }
+    /** The server decides whether the invitation expired: the phone's clock may differ from its own. */
+    private fun doEnrollment(submission: EnrollmentSubmission) {
+        wizard.submissionState.value = EnrollmentScreen.Submitting()
+        executor.execute { submitEnrollment(submission) }
+    }
+
+    private fun submitEnrollment(submission: EnrollmentSubmission) {
+        var serverAccepted = false
         try {
-            val deviceInstanceId = DeviceInstanceIdentity.getOrCreate(applicationContext)
-
-            statusMessageText.visibility = View.INVISIBLE
-            submitBtn.visibility = View.INVISIBLE
-            progressBar.visibility = View.VISIBLE
-            closeKeyBoard()
-
-            executor.execute {
-                try {
-                    val serverName = preview.manifest.studyTitle.take(30)
-                    val manifestJson = ChronicleJson.moshi
-                        .adapter(com.openlattice.chronicle.api.MobileEnrollmentManifest::class.java)
-                        .toJson(preview.manifest)
-                    val enrollmentAttemptId = UUID.randomUUID().toString()
-                    val proposedApiKey = generateProposedEnrollmentApiKey()
-                    val sourceDeviceJson = encodePendingEnrollmentSourceDevice(
-                        getDevice(deviceInstanceId),
-                    )
-                    try {
-                        com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
-                            ChronicleDb.getInstance(applicationContext).uploadServerDao()
-                                .reserveSingleEnrollment(
-                                    UploadServerEntity(
-                                        name = serverName,
-                                        url = serverUrl,
-                                        studyId = studyId.toString(),
-                                        participantId = participantId,
-                                        sourceDeviceId = deviceInstanceId,
-                                        mobileSigningSecretOverride = mobileSigningSecretOverride,
-                                        studyDisclosureJson = manifestJson,
-                                        disclosureVersion = preview.manifest.participantPolicy.version,
-                                        manifestDigest = preview.manifestDigest,
-                                        pendingAcceptedModuleIds =
-                                            encodePendingEnrollmentModules(partition.accepted),
-                                        pendingDeclinedModuleIds =
-                                            encodePendingEnrollmentModules(partition.declined),
-                                        pendingUnavailableModuleIds =
-                                            encodePendingEnrollmentModules(partition.unavailable),
-                                        pendingEnrollmentAttemptId = enrollmentAttemptId,
-                                        pendingEnrollmentAccessCode = enrollmentAccessCode,
-                                        pendingEnrollmentInviteExpiresAtEpochMillis =
-                                            preview.manifest.expiresAt.toInstant().toEpochMilli(),
-                                        pendingProposedApiKey = proposedApiKey,
-                                        pendingEnrollmentSourceDeviceJson = sourceDeviceJson,
-                                        enabled = false,
-                                        createdAt = OffsetDateTime.now().toString(),
-                                    ),
-                                )
-                        }
-                    } catch (error: SingleEnrollmentConflictException) {
-                        postIfCurrent {
-                            clearPendingEnrollmentState()
-                            progressBar.visibility = View.INVISIBLE
-                            submitBtn.visibility = View.VISIBLE
-                            submitBtn.isEnabled = true
-                            statusMessageText.text =
-                                getString(R.string.enrollment_conflict_pending)
-                            statusMessageText.visibility = View.VISIBLE
-                        }
-                        return@execute
-                    }
-
-                    // The invitation and proposed credential are now durable in SQLCipher. Remove
-                    // Activity references before the first network request; recovery owns them now.
-                    clearPendingEnrollmentState()
-                    when (EnrollmentRecoveryManager.resumeIfNeeded(applicationContext)) {
-                        EnrollmentRecoveryResult.COMPLETED -> Unit
-                        EnrollmentRecoveryResult.RETRY_REQUIRED -> {
-                            postIfCurrent { showIssuedEnrollmentRecoveryRetry() }
-                            return@execute
-                        }
-                        EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED -> {
-                            postIfCurrent { showPendingEnrollmentRecoveryRetry() }
-                            return@execute
-                        }
-                        EnrollmentRecoveryResult.TERMINAL_FAILURE -> {
-                            LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_FAILURE, null)
-                            postIfCurrent {
-                                progressBar.visibility = View.INVISIBLE
-                                submitBtn.visibility = View.VISIBLE
-                                submitBtn.isEnabled = true
-                                doneBtn.visibility = View.INVISIBLE
-                                statusMessageText.text =
-                                    getString(R.string.enrollment_attempt_rejected)
-                                statusMessageText.visibility = View.VISIBLE
-                            }
-                            return@execute
-                        }
-                        EnrollmentRecoveryResult.NONE -> {
-                            postIfCurrent { showIssuedEnrollmentRecoveryRetry() }
-                            return@execute
-                        }
-                    }
-
-                    val sourceDeviceId = deviceInstanceId
-                    val issuedApiKey = proposedApiKey
-                    val studyApi = UploadWorker.getChronicleStudyApi(
-                        serverUrl,
-                        mobileSigningSecretOverride,
-                    )
-                    Log.i(javaClass.canonicalName, "Enrollment succeeded")
-                    LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_SUCCESS, null)
-                    // Legacy device-wide AndroidSensor path — runs ONLY for studies that have NOT
-                    // migrated to the per-sensor model. For a per-sensor study this would persist a
-                    // device-wide legacy sensor blob that the resolver's legacy bridge could later
-                    // use to re-enable sensors the per-sensor config omits — making a researcher's
-                    // mid-study sensor removal silently no-op. Per-sensor studies are owned end-to-end
-                    // by seedAndApplyDecisions + the coordinator sync below, so the legacy fetch/save
-                    // is skipped for them (defence-in-depth atop CollectionSettingsResolver's
-                    // per-sensor authority — see AndroidDataCollectionSetting.hasAnySensorModule).
-                    if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
-                        !fetched.hasAnySensorModule()
-                    ) try {
-                        val sensorSetting = studyApi.getAndroidSensorSettings(studyId)
-                        val sensorSettings = SensorSettings(applicationContext)
-                        sensorSettings.save(sensorSetting)
-                        if (sensorSettings.isEnabled()) {
-                            DistributionRestrictedRuntime.startHardwareSensors(applicationContext)
-                            Log.i(javaClass.canonicalName, "Sensor collection started with ${sensorSetting.sensors.size} sensors")
-                        }
-                        // Report sensor availability after enrollment. Reporter swallows its
-                        // own exceptions and returns false; the periodic SensorSettingsRefreshWorker
-                        // will retry and persist the error on the server row.
-                        if (sensorSetting.sensors.isNotEmpty()) {
-                            val ok = DistributionRestrictedRuntime.reportSensorAvailability(
-                                applicationContext,
-                                studyId,
-                                participantId,
-                                sourceDeviceId,
-                                issuedApiKey,
-                                sensorSetting.sensors,
-                                serverUrl,
-                                mobileSigningSecretOverride
-                            )
-                            if (!ok) {
-                                Log.w(javaClass.canonicalName, "Initial sensor availability report failed; will retry on schedule")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(javaClass.canonicalName, "Could not fetch sensor settings", e)
-                    }
-
-                    if (BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS) {
-                        DistributionRestrictedRuntime.scheduleSensorSettingsRefresh(applicationContext)
-                    } else {
-                        SensorSettings(applicationContext).clear()
-                    }
-
-                    // Persist enrollment and settle the participant's per-module decisions
-                    // synchronously here on the enrollment thread — BEFORE navigating to the
-                    // dashboard. The participant already decided every module in the orientation
-                    // wizard, so [accepted] go straight to ACTIVE and [declined] to DECLINED, from
-                    // the very [fetched] setting the wizard was shown for — NOT a second network
-                    // fetch that could fail and strand the device awaiting a decision. The decision
-                    // snapshot is reported to the study (trigger = ENROLLMENT). The periodic worker
-                    // still picks up any module a researcher ADDS later.
-                    com.openlattice.chronicle.collection.state.CollectionSettingsSyncWorker
-                        .schedulePeriodic(applicationContext)
-                    com.openlattice.chronicle.collection.state.CollectionSettingsSyncWorker
-                        .enqueueNow(applicationContext)
-
-                    postIfCurrent {
-                        showEnrollmentSuccess()
-                    }
-                } catch (error: Exception) {
-                    Log.e(
-                        javaClass.canonicalName,
-                        "Enrollment setup failed safely (${error.javaClass.simpleName})",
-                    )
-                    postIfCurrent {
-                        clearPendingEnrollmentState()
-                        progressBar.visibility = View.INVISIBLE
-                        submitBtn.visibility = View.VISIBLE
-                        submitBtn.isEnabled = true
-                        doneBtn.visibility = View.INVISIBLE
-                        statusMessageText.text = getString(R.string.device_enroll_failure)
-                        statusMessageText.visibility = View.VISIBLE
-                    }
-                }
+            try {
+                reserveEnrollment(applicationContext, submission)
+            } catch (error: SingleEnrollmentConflictException) {
+                wizard.submissionState.postValue(EnrollmentScreen.Failure(R.string.enrollment_conflict_pending))
+                return
             }
+            // Recovery owns the durable invitation before the first network request.
+            wizard.clear()
+            val recovery = EnrollmentRecoveryManager.resumeIfNeeded(applicationContext)
+            if (recovery != EnrollmentRecoveryResult.COMPLETED) {
+                wizard.submissionState.postValue(enrollmentRecoveryScreen(recovery))
+                return
+            }
+            serverAccepted = true
+            finishEnrollment()
+            wizard.submissionState.postValue(EnrollmentScreen.Result(R.string.device_enroll_success))
         } catch (error: Exception) {
-            statusMessageText.text = getString(R.string.device_enroll_failure)
-            statusMessageText.visibility = View.VISIBLE
-            submitBtn.visibility = View.VISIBLE
-            doneBtn.visibility = View.INVISIBLE
-            Log.e(javaClass.canonicalName, "Unable to prepare enrollment (${error.javaClass.simpleName})")
+            Log.e(javaClass.canonicalName, "Enrollment setup failed safely (${error.javaClass.simpleName})")
+            wizard.submissionState.postValue(EnrollmentScreen.Failure(
+                if (serverAccepted) R.string.enrollment_issued_retry else R.string.device_enroll_failure))
         }
+    }
+
+    private fun enrollmentRecoveryScreen(recovery: EnrollmentRecoveryResult): EnrollmentScreen = when (recovery) {
+        EnrollmentRecoveryResult.COMPLETED -> EnrollmentScreen.Result(R.string.device_enroll_success)
+        EnrollmentRecoveryResult.RETRY_REQUIRED -> EnrollmentScreen.Recovery(RecoveryKind.ISSUED)
+        EnrollmentRecoveryResult.STATUS_UNAVAILABLE, EnrollmentRecoveryResult.NONE -> EnrollmentScreen.Recovery(RecoveryKind.STATUS_UNAVAILABLE)
+        EnrollmentRecoveryResult.PENDING_RETRY_REQUIRED -> EnrollmentScreen.Recovery(RecoveryKind.PENDING)
+        EnrollmentRecoveryResult.TERMINAL_FAILURE,
+        EnrollmentRecoveryResult.SERVER_INCOMPATIBLE,
+        EnrollmentRecoveryResult.SERVER_REFUSED -> {
+            LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_FAILURE, null)
+            EnrollmentScreen.Failure(recoveryEndMessage(recovery) ?: R.string.enrollment_attempt_rejected)
+        }
+        EnrollmentRecoveryResult.CANCELLED,
+        EnrollmentRecoveryResult.STUDY_CHANGED -> EnrollmentScreen.Editing(recoveryEndMessage(recovery))
+    }
+
+}
+
+/**
+ * An attempt the server ended for a reason the participant can act on: a cancel, a study edit during review, or a
+ * refusal only the study team can resolve (this app version and the server disagree, or the server refused outright).
+ */
+@StringRes
+internal fun recoveryEndMessage(recovery: EnrollmentRecoveryResult): Int? = when (recovery) {
+    EnrollmentRecoveryResult.CANCELLED -> R.string.enrollment_attempt_cancelled
+    EnrollmentRecoveryResult.STUDY_CHANGED -> R.string.enrollment_study_changed
+    EnrollmentRecoveryResult.SERVER_INCOMPATIBLE -> R.string.enrollment_server_incompatible
+    EnrollmentRecoveryResult.SERVER_REFUSED -> R.string.enrollment_server_rejected
+    else -> null
+}
+
+/**
+ * The reservation owns the enrollment's random device id: drawn here, stored on the row, and
+ * read back from it by every replay of this attempt. A cancelled or abandoned attempt, a withdrawal or a local-store
+ * recovery leaves no id behind, so the next reservation draws a new one.
+ */
+internal fun reserveEnrollment(context: Context, submission: EnrollmentSubmission) = with(submission) {
+    val randomDeviceId = UUID.randomUUID().toString()
+    val serverName = preview.manifest.studyTitle.take(30)
+    val manifestJson = ChronicleJson.moshi.adapter(MobileEnrollmentManifest::class.java).toJson(preview.manifest)
+    val enrollmentAttemptId = UUID.randomUUID().toString()
+    val proposedApiKey = generateProposedEnrollmentApiKey()
+    val sourceDeviceJson = encodePendingEnrollmentSourceDevice(getDevice(randomDeviceId))
+    ResearchPersistenceGate.enrollmentMutation(context) {
+        ChronicleDb.getInstance(context).uploadServerDao().reserveSingleEnrollment(
+            UploadServerEntity(
+                name = serverName,
+                url = serverUrl,
+                studyId = studyId.toString(),
+                participantId = participantId,
+                sourceRandomDeviceId = randomDeviceId,
+                studyDisclosureJson = manifestJson,
+                disclosureVersion = preview.manifest.participantPolicy.version,
+                manifestDigest = preview.manifestDigest,
+                pendingAcceptedModuleIds = encodePendingEnrollmentModules(partition.accepted),
+                pendingDeclinedModuleIds = encodePendingEnrollmentModules(partition.declined),
+                pendingUnavailableModuleIds = encodePendingEnrollmentModules(partition.unavailable),
+                pendingEnrollmentAttemptId = enrollmentAttemptId,
+                pendingEnrollmentAccessCode = enrollmentAccessCode,
+                pendingProposedApiKey = proposedApiKey,
+                pendingEnrollmentSourceDeviceJson = sourceDeviceJson,
+                enabled = false,
+                createdAt = OffsetDateTime.now().toString(),
+            ),
+        ).also { InvitedServerCa.retainOrigin(context, serverUrl) }
     }
 }
 
-internal fun enrollmentCredentialMeetsDistributionContract(
-    distributionChannel: String,
-    apiKey: String?,
-): Boolean = distributionChannel == "RESEARCH" || !apiKey.isNullOrBlank()
+private fun finishEnrollment() {
+    Log.i(Enrollment::class.java.simpleName, "Enrollment succeeded")
+    LocalTelemetry.logEvent(TelemetryEvents.ENROLLMENT_SUCCESS, null)
+}
+
+internal sealed interface EnrollmentReview {
+    data class StorageFailed(val error: LocalStoreRecoveryRequiredException) : EnrollmentReview
+    data class Existing(val owner: UploadServerEntity) : EnrollmentReview
+    data class Failed(val message: Int) : EnrollmentReview
+    data class Ready(val preview: EnrollmentPreviewResponse) : EnrollmentReview
+}
+
+private fun resolveEnrollmentReview(context: Context, invitation: EnrollmentInvitation): EnrollmentReview {
+    val existingEnrollment = enrollmentAttempt {
+        ChronicleDb.getInstance(context).uploadServerDao().getAll()
+    }.getOrElse { error ->
+        Log.e(Enrollment::class.java.simpleName, "Failed to read the local enrollment slot (${error.javaClass.simpleName})")
+        return EnrollmentReview.Failed(R.string.device_enroll_failure)
+    }
+    val resolution = resolveSingleEnrollment(existingEnrollment, invitation.serverUrl,
+        invitation.studyId.toString(), invitation.participantId)
+    if (resolution is SingleEnrollmentResolution.Reject) return EnrollmentReview.Existing(resolution.existing)
+    InvitedServerCa.retainOrigin(context, invitation.serverUrl)
+    return fetchEnrollmentPreview(context, invitation)
+}
+
+private fun EnrollmentPreviewResponse.matchesInvitation(invitation: EnrollmentInvitation): Boolean =
+    manifest.studyId == invitation.studyId && manifest.participantId == invitation.participantId &&
+        Utils.normalizeTrustedServerUrl(manifest.serverOrigin) == invitation.serverUrl
+
+private fun fetchEnrollmentPreview(context: Context, invitation: EnrollmentInvitation): EnrollmentReview = with(invitation) {
+    val outcome = requestEnrollmentPreview(invitation)
+    val preview = (outcome as? EnrollmentPreviewOutcome.Verified)?.preview
+    val fetched = preview?.takeIf { it.matchesInvitation(invitation) }?.manifest?.collectionSettings
+    val consent = fetched?.let { resolveConsentPlan(context, it) }
+    if (preview != null && fetched != null && consent?.plan != null) return@with EnrollmentReview.Ready(preview)
+    EnrollmentReview.Failed(when {
+        consent?.unsupportedModules == true -> R.string.enrollment_study_modules_unsupported
+        outcome is EnrollmentPreviewOutcome.Failed -> outcome.message
+        outcome is EnrollmentPreviewOutcome.Verified && fetched == null -> R.string.enrollment_response_unexpected
+        fetched != null && consent?.plan == null -> R.string.enrollment_consent_plan_failed
+        else -> R.string.enrollment_invitation_unverified
+    })
+}
+
+private fun requestEnrollmentPreview(invitation: EnrollmentInvitation): EnrollmentPreviewOutcome = with(invitation) {
+    // A preview validates the invitation without consuming it and owns the disclosure/settings.
+    enrollmentAttempt<EnrollmentPreviewOutcome> {
+        EnrollmentPreviewOutcome.Verified(CallDeadline.within(CallDeadline.INTERACTIVE_TIMEOUT_MS) {
+            UploadWorker.getChronicleStudyApi(serverUrl)
+                .getEnrollmentPreview(studyId, participantId, accessCode)
+        })
+    }.getOrElse { failure ->
+        val error = failure as Exception
+        Log.w(Enrollment::class.java.simpleName, "Failed to resolve the enrollment invitation (${error.javaClass.simpleName})")
+        EnrollmentPreviewOutcome.Failed(enrollmentRequestFailureMessage(error))
+    }
+}
+
+private data class ConsentPlanResolution(val plan: ConsentPlan?, val unsupportedModules: Boolean)
+
+/** Builds the consent plan; a study enabling modules this build does not ship is reported separately. */
+private fun resolveConsentPlan(context: Context, fetched: AndroidDataCollectionSetting): ConsentPlanResolution = enrollmentAttempt {
+    ConsentPlanResolution(CollectionLoopCoordinator(context).consentPlanFor(fetched), false)
+}.getOrElse { error ->
+    val unsupported = error is UnsupportedStudyModulesException
+    Log.w(Enrollment::class.java.simpleName, "Failed to resolve consent plan (${error.javaClass.simpleName})")
+    ConsentPlanResolution(null, unsupported)
+}
+
+private fun existingEnrollmentMessage(existing: UploadServerEntity, serverUrl: String?, studyId: UUID?, participantId: String?): Int {
+    val sameInvitation = existing.url == serverUrl && existing.studyId == studyId?.toString() && existing.participantId == participantId
+    return if (existing.enrollmentSetupComplete && sameInvitation) {
+        R.string.enrollment_already_enrolled
+    } else {
+        R.string.enrollment_existing_study_rejection
+    }
+}
+
+/** Removes a one-time invitation capability before the Activity can retain the Intent. */
+private fun detachEnrollmentCredential(intent: Intent): String? {
+    val data = intent.data ?: return null
+    val accessCode = EnrollmentLinkCredential.fromFragment(data.fragment)
+    if (data.fragment != null) {
+        intent.data = data.buildUpon().fragment(null).build()
+    }
+    return accessCode
+}
+
+/** Explains why a reopened invitation cannot enroll this already-enrolled device. Reads the database. */
+private fun existingInvitationMessage(context: Context, sourceIntent: Intent): Int {
+    val existing = runCatching {
+        ChronicleDb.getInstance(context).uploadServerDao().getConfiguredServer()
+    }.getOrNull() ?: return R.string.server_load_failed
+    val invitation = sourceIntent.data?.let { parseEnrollmentLink(it.toString(), null) } as? EnrollmentLink.Prefill
+    return existingEnrollmentMessage(
+        existing, invitation?.serverUrl, invitation?.studyId, invitation?.participantId,
+    )
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "invitation": "https://pilot-study.example.org/chronicle/enroll?studyId=28d661b8-a45a-41b6-aec4-ed9988fa28dc&participantId=CL-001.a_b#accessCode=Ab0_-Ab0_-Ab0_-Ab0_-Ab0_-Ab0_-zz",
+    "handoff": "intent://enroll?studyId=28d661b8-a45a-41b6-aec4-ed9988fa28dc&participantId=CL-001.a_b&serverUrl=https%3A%2F%2Fpilot-study.example.org#accessCode=Ab0_-Ab0_-Ab0_-Ab0_-Ab0_-Ab0_-zz#Intent;scheme=chronicle;package=com.bcm.chronicle;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.bcm.chronicle;end",
+    "expected": {
+      "accessCode": "Ab0_-Ab0_-Ab0_-Ab0_-Ab0_-Ab0_-zz",
+      "participantId": "CL-001.a_b",
+      "serverCa": null,
+      "serverUrl": "https://pilot-study.example.org",
+      "studyId": "28d661b8-a45a-41b6-aec4-ed9988fa28dc"
+    }
+  },
+  {
+    "invitation": "https://192.168.10.20:8443/chronicle/enroll?studyId=28d661b8-a45a-41b6-aec4-ed9988fa28dc&participantId=Pxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.&serverCa=MIIBgjCCASigAwIBAgIUAt6QzZQ0wJ-xllENSXN1yH1Q0y4wCgYIKoZIzj0EAwIwHzEdMBsGA1UEAwwUQ2hyb25pY2xlIFRlc3Qgcm9vdEEwHhcNMjYwMTAxMDAwMDAwWhcNNDYwMTAxMDAwMDAwWjAfMR0wGwYDVQQDDBRDaHJvbmljbGUgVGVzdCByb290QTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIib7KnLdO4PmW8Z_0qsHtae5Es8o6eGyyhE2YteFBifv_mq6aw5Ar192CnwEsyu9plUMEvcquuDGBuS4VQqvY-jQjBAMA8GA1UdEwEB_wQFMAMBAf8wDgYDVR0PAQH_BAQDAgEGMB0GA1UdDgQWBBS2HMfuGkaT-Ec-Fur4AB0hlweZmzAKBggqhkjOPQQDAgNIADBFAiEAsYZR8dQIqmcXrBWwbS82Qx1OmFmSQxLbZluio3MEOqgCIDAvU2TWQrmCdLhL46SS5r6m52J0DcXZMcYVQ0a1MVDg#accessCode=Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-",
+    "handoff": "intent://enroll?studyId=28d661b8-a45a-41b6-aec4-ed9988fa28dc&participantId=Pxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.&serverUrl=https%3A%2F%2F192.168.10.20%3A8443&serverCa=MIIBgjCCASigAwIBAgIUAt6QzZQ0wJ-xllENSXN1yH1Q0y4wCgYIKoZIzj0EAwIwHzEdMBsGA1UEAwwUQ2hyb25pY2xlIFRlc3Qgcm9vdEEwHhcNMjYwMTAxMDAwMDAwWhcNNDYwMTAxMDAwMDAwWjAfMR0wGwYDVQQDDBRDaHJvbmljbGUgVGVzdCByb290QTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIib7KnLdO4PmW8Z_0qsHtae5Es8o6eGyyhE2YteFBifv_mq6aw5Ar192CnwEsyu9plUMEvcquuDGBuS4VQqvY-jQjBAMA8GA1UdEwEB_wQFMAMBAf8wDgYDVR0PAQH_BAQDAgEGMB0GA1UdDgQWBBS2HMfuGkaT-Ec-Fur4AB0hlweZmzAKBggqhkjOPQQDAgNIADBFAiEAsYZR8dQIqmcXrBWwbS82Qx1OmFmSQxLbZluio3MEOqgCIDAvU2TWQrmCdLhL46SS5r6m52J0DcXZMcYVQ0a1MVDg#accessCode=Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-#Intent;scheme=chronicle;package=com.bcm.chronicle;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom.bcm.chronicle;end",
+    "expected": {
+      "accessCode": "Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-Z9_-",
+      "participantId": "Pxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.",
+      "serverCa": "MIIBgjCCASigAwIBAgIUAt6QzZQ0wJ-xllENSXN1yH1Q0y4wCgYIKoZIzj0EAwIwHzEdMBsGA1UEAwwUQ2hyb25pY2xlIFRlc3Qgcm9vdEEwHhcNMjYwMTAxMDAwMDAwWhcNNDYwMTAxMDAwMDAwWjAfMR0wGwYDVQQDDBRDaHJvbmljbGUgVGVzdCByb290QTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIib7KnLdO4PmW8Z_0qsHtae5Es8o6eGyyhE2YteFBifv_mq6aw5Ar192CnwEsyu9plUMEvcquuDGBuS4VQqvY-jQjBAMA8GA1UdEwEB_wQFMAMBAf8wDgYDVR0PAQH_BAQDAgEGMB0GA1UdDgQWBBS2HMfuGkaT-Ec-Fur4AB0hlweZmzAKBggqhkjOPQQDAgNIADBFAiEAsYZR8dQIqmcXrBWwbS82Qx1OmFmSQxLbZluio3MEOqgCIDAvU2TWQrmCdLhL46SS5r6m52J0DcXZMcYVQ0a1MVDg",
+      "serverUrl": "https://192.168.10.20:8443",
+      "studyId": "28d661b8-a45a-41b6-aec4-ed9988fa28dc"
+    }
+  }
+]

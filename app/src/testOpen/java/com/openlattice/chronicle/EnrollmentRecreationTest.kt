@@ -9,21 +9,24 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import com.google.android.material.button.MaterialButton
 import com.openlattice.chronicle.api.EnrollmentPreviewResponse
-import com.openlattice.chronicle.layout.TestStores
 import com.openlattice.chronicle.serialization.ChronicleJson
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 
 /** Rotation mid-wizard must not lose the one-time invitation or the verified disclosure. */
 @RunWith(RobolectricTestRunner::class)
+@Config(shadows = [EnrollmentTestStores.Database::class, EnrollmentTestStores.Preferences::class])
 class EnrollmentRecreationTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val accessCode = "a".repeat(40)
+
+    @After fun closeStore() { EnrollmentTestStores.db?.close() }
 
     private fun settle() {
         repeat(20) {
@@ -34,7 +37,7 @@ class EnrollmentRecreationTest {
     }
 
     @Test fun invitationAndVerifiedPreviewSurviveRecreation() {
-        TestStores.install(context, enrolled = false)
+        EnrollmentTestStores.install(context, enrolled = false)
         val link = Uri.parse(
             "chronicle://enroll?studyId=11111111-1111-1111-1111-111111111111" +
                 "&participantId=participant&serverUrl=https%3A%2F%2Flocalhost#accessCode=$accessCode",
@@ -52,9 +55,9 @@ class EnrollmentRecreationTest {
                 // The credential is stripped from the retained Intent.
                 assertEquals(null, activity.intent.data?.fragment)
                 // Disclosure verified; the wizard is now open in another Activity.
-                wizard.preview = preview
-                wizard.fetched = preview.manifest.collectionSettings
-                wizard.pendingAccessCode = accessCode
+                wizard.step = WizardStep.Reviewed(
+                    EnrollmentInvitation(preview.manifest.studyId, preview.manifest.participantId,
+                        "https://localhost", accessCode), preview)
             }
 
             scenario.recreate()
@@ -63,15 +66,16 @@ class EnrollmentRecreationTest {
             scenario.onActivity { activity ->
                 val wizard = ViewModelProvider(activity)[Enrollment.WizardState::class.java]
                 assertEquals(accessCode, wizard.accessCode)
-                assertEquals(accessCode, wizard.pendingAccessCode)
-                assertNotNull(wizard.preview)
+                val reviewed = wizard.step as WizardStep.Reviewed
+                assertEquals(accessCode, reviewed.invitation.accessCode)
+                assertEquals(preview, reviewed.preview)
                 assertFalse(activity.findViewById<MaterialButton>(R.id.button).isEnabled)
             }
         }
     }
 
     @Test fun credentialStrippedBeforeHandleIntentSurvivesRecreation() {
-        TestStores.install(context, enrolled = false)
+        EnrollmentTestStores.install(context, enrolled = false)
         val link = Uri.parse(
             "chronicle://enroll?studyId=11111111-1111-1111-1111-111111111111" +
                 "&participantId=participant&serverUrl=https%3A%2F%2Flocalhost#accessCode=$accessCode",

@@ -1,32 +1,28 @@
 package com.openlattice.chronicle
 
+
 import android.os.Bundle
 import android.util.Log
 import android.view.View
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.switchmaterial.SwitchMaterial
-import com.google.android.material.textfield.TextInputEditText
-import com.openlattice.chronicle.collection.capability.DistributionChannel
-import com.openlattice.chronicle.preferences.DeviceInstanceIdentity
-import com.openlattice.chronicle.preferences.getDevice
-import com.openlattice.chronicle.services.upload.UploadWorker
+import com.openlattice.chronicle.databinding.ActivityServerEnrollmentBinding
 import com.openlattice.chronicle.services.withdrawal.ParticipantWithdrawalManager
 import com.openlattice.chronicle.storage.ChronicleDb
+import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
 import com.openlattice.chronicle.storage.UploadServerEntity
-import com.openlattice.chronicle.storage.SingleEnrollmentReservation
-import com.openlattice.chronicle.utils.Utils
-import java.time.OffsetDateTime
-import java.util.*
+import com.openlattice.chronicle.ui.openStoreRecovery
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.time.format.FormatStyle
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class ServerEnrollmentActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor()
+    private lateinit var binding: ActivityServerEnrollmentBinding
 
     private fun postIfCurrent(action: () -> Unit) {
         runOnUiThread { if (!isFinishing && !isDestroyed) action() }
@@ -37,48 +33,34 @@ class ServerEnrollmentActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun readServer(id: Long): com.openlattice.chronicle.storage.UploadServerEntity? =
+    private fun readServer(id: Long): UploadServerEntity? =
         ChronicleDb.getInstance(applicationContext).uploadServerDao().getById(id)
 
-    private fun reportStorageFailure(error: Exception) {
-        android.util.Log.e("ServerEnrollmentActivity", "Server storage unavailable", error)
+    private fun reportStorageFailure(error: Exception, showFailure: () -> Unit = {
+        binding.serverStatusMessage.setText(R.string.server_load_failed)
+        binding.serverStatusMessage.visibility = View.VISIBLE
+    }) {
+        Log.e(TAG, "Server storage unavailable", error)
         postIfCurrent {
-            if (error is com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException) {
-                startActivity(LocalStoreRecoveryActivity.intent(this, error.recoveryReason))
-                finish()
+            if (error is LocalStoreRecoveryRequiredException) {
+                if (openStoreRecovery(error)) finish()
             } else {
-                statusText.setText(R.string.server_delete_failed)
-                statusText.visibility = View.VISIBLE
+                showFailure()
             }
         }
     }
 
-    private lateinit var nameText: TextInputEditText
-    private lateinit var urlText: TextInputEditText
-    private lateinit var studyIdText: TextInputEditText
-    private lateinit var participantIdText: TextInputEditText
-    private lateinit var signingSecretText: TextInputEditText
-    private lateinit var statusText: TextView
-    private lateinit var progressBar: ProgressBar
-    private lateinit var saveBtn: MaterialButton
-    private lateinit var deleteBtn: MaterialButton
-    private lateinit var enabledSwitch: SwitchMaterial
-    private lateinit var healthBtn: MaterialButton
-    private lateinit var statsContainer: LinearLayout
-    private lateinit var statsText: TextView
-
     private var editServerId: Long = -1
-    private val manualEnrollmentAllowed = DistributionChannel.current() == DistributionChannel.RESEARCH
 
     companion object {
+        private const val TAG = "ServerEnrollment"
         const val EXTRA_SERVER_ID = "server_id"
-        const val MAX_SERVERS = 1
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         editServerId = intent.getLongExtra(EXTRA_SERVER_ID, -1)
-        if (!manualEnrollmentAllowed && (!BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS || editServerId <= 0)) {
+        if (editServerId <= 0) {
             Toast.makeText(
                 this,
                 getString(R.string.server_enroll_invitation_required),
@@ -87,43 +69,17 @@ class ServerEnrollmentActivity : AppCompatActivity() {
             finish()
             return
         }
-        setContentView(R.layout.activity_server_enrollment)
+        binding = ActivityServerEnrollmentBinding.inflate(layoutInflater)
+        setContentView(binding.root)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
-        nameText = findViewById(R.id.serverNameText)
-        urlText = findViewById(R.id.serverUrlText)
-        studyIdText = findViewById(R.id.serverStudyIdText)
-        participantIdText = findViewById(R.id.serverParticipantIdText)
-        signingSecretText = findViewById(R.id.serverSigningSecretText)
-        statusText = findViewById(R.id.serverStatusMessage)
-        progressBar = findViewById(R.id.serverProgress)
-        saveBtn = findViewById(R.id.serverSaveButton)
-        deleteBtn = findViewById(R.id.serverDeleteButton)
-        enabledSwitch = findViewById(R.id.serverEnabledSwitch)
-        healthBtn = findViewById(R.id.serverHealthButton)
-        statsContainer = findViewById(R.id.statsContainer)
-        statsText = findViewById(R.id.statsText)
-
-        if (!manualEnrollmentAllowed) {
-            listOf(nameText, urlText, studyIdText, participantIdText).forEach { it.isEnabled = false }
-            listOf(saveBtn, enabledSwitch, healthBtn,
-                findViewById<View>(R.id.serverSigningSecretTextLayout)).forEach { it.visibility = View.GONE }
-        }
-
-        if (editServerId > 0) {
-            title = getString(if (manualEnrollmentAllowed) R.string.server_edit_title else R.string.server_delete)
-            deleteBtn.visibility = View.VISIBLE
-            loadServer(editServerId)
-            loadStats(editServerId)
-        } else {
-            title = getString(R.string.server_add_title)
-            deleteBtn.visibility = View.GONE
-            statsContainer.visibility = View.GONE
-        }
-
-        saveBtn.setOnClickListener { doSave() }
-        deleteBtn.setOnClickListener { doDelete() }
-        healthBtn.setOnClickListener { checkServerHealth() }
+        listOf(binding.serverNameText, binding.serverUrlText, binding.serverStudyIdText,
+            binding.serverParticipantIdText).forEach { it.isEnabled = false }
+        title = getString(R.string.server_delete)
+        binding.serverDeleteButton.visibility = View.VISIBLE
+        loadServer(editServerId)
+        loadStats(editServerId)
+        binding.serverDeleteButton.setOnClickListener { doDelete() }
     }
 
     private fun loadServer(id: Long) {
@@ -134,14 +90,10 @@ class ServerEnrollmentActivity : AppCompatActivity() {
             }
             if (server != null) {
                 postIfCurrent {
-                    nameText.setText(server.name)
-                    urlText.setText(server.url)
-                    studyIdText.setText(server.studyId)
-                    participantIdText.setText(server.participantId)
-                    if (!server.mobileSigningSecretOverride.isNullOrBlank()) {
-                        signingSecretText.hint = getString(R.string.server_override_saved_hint)
-                    }
-                    enabledSwitch.isChecked = server.enabled
+                    binding.serverNameText.setText(server.name)
+                    binding.serverUrlText.setText(server.url)
+                    binding.serverStudyIdText.setText(server.studyId)
+                    binding.serverParticipantIdText.setText(server.participantId)
                 }
             }
         }
@@ -151,215 +103,33 @@ class ServerEnrollmentActivity : AppCompatActivity() {
         executor.execute {
             try {
                 val stats = ChronicleDb.getInstance(applicationContext).uploadStatsDao().getRecentStats(serverId, 7)
-                if (stats.isNotEmpty()) {
-                    val lines = stats.joinToString("\n") { stat ->
-                        val date = try {
-                            val ld = java.time.LocalDate.parse(stat.date)
-                            ld.format(java.time.format.DateTimeFormatter.ofPattern("MMM d"))
-                        } catch (e: Exception) {
-                            stat.date
-                        }
-                        getString(
-                            R.string.server_upload_stat_line,
-                            date,
-                            stat.usageEventsUploaded,
-                            stat.sensorSamplesUploaded,
-                            stat.batterySamplesUploaded,
-                            stat.usageUploadFailures,
-                            stat.sensorUploadFailures,
-                            stat.batteryUploadFailures,
-                        )
+                val lines = if (stats.isEmpty()) null else stats.joinToString("\n") { stat ->
+                    val date = try {
+                        uploadStatDay(LocalDate.parse(stat.date))
+                    } catch (e: DateTimeParseException) {
+                        stat.date
                     }
-                    postIfCurrent {
-                        statsContainer.visibility = View.VISIBLE
-                        statsText.text = getString(R.string.server_upload_history, lines)
-                    }
-                } else {
-                    postIfCurrent {
-                        statsContainer.visibility = View.VISIBLE
-                        statsText.text = getString(R.string.server_upload_history, getString(R.string.server_no_uploads_recorded))
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w("ServerEnrollment", "Failed to load stats", e)
-            }
-        }
-    }
-
-    private fun doSave() {
-        if (!manualEnrollmentAllowed) return
-        val name = nameText.text.toString().trim()
-        val inputUrl = urlText.text.toString().trim()
-        val studyId = studyIdText.text.toString().trim()
-        val participantId = participantIdText.text.toString().trim()
-        val enteredSigningOverride = signingSecretText.text.toString().trim()
-            .takeIf { it.isNotBlank() }
-        val enabled = enabledSwitch.isChecked
-
-        // Validate
-        if (name.isBlank()) { nameText.error = getString(R.string.server_name_required); return }
-        if (inputUrl.isBlank()) { urlText.error = getString(R.string.server_url_required); return }
-        val url = Utils.normalizeTrustedServerUrl(inputUrl)
-        if (url == null) { urlText.error = getString(R.string.server_url_untrusted); return }
-        if (studyId.isBlank()) { studyIdText.error = getString(R.string.server_study_id_required); return }
-        if (!Utils.isValidUUID(studyId)) { studyIdText.error = getString(R.string.server_study_id_invalid); return }
-        if (participantId.isBlank()) { participantIdText.error = getString(R.string.server_participant_id_required); return }
-
-        statusText.visibility = View.INVISIBLE
-        progressBar.visibility = View.VISIBLE
-        saveBtn.isEnabled = false
-
-        executor.execute {
-            var reservationToRelease: SingleEnrollmentReservation? = null
-            try {
-                val db = ChronicleDb.getInstance(applicationContext)
-                val serverDao = db.uploadServerDao()
-                val existingServer = if (editServerId > 0) {
-                    serverDao.getById(editServerId)
-                } else {
-                    null
-                }
-                val mobileSigningSecretOverride = enteredSigningOverride
-                    ?: existingServer?.mobileSigningSecretOverride
-                if (editServerId > 0 && !enabled) {
-                    val rowsUpdated = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.setServerEnabled(applicationContext,
-                        editServerId, false)
-                    postIfCurrent {
-                        progressBar.visibility = View.INVISIBLE
-                        if (rowsUpdated == 0) {
-                            saveBtn.isEnabled = true
-                            statusText.text = getString(R.string.server_gone)
-                            statusText.visibility = View.VISIBLE
-                        } else {
-                            statusText.text = getString(R.string.server_saved_paused)
-                            statusText.visibility = View.VISIBLE
-                            finish()
-                        }
-                    }
-                    return@execute
-                }
-                if (editServerId <= 0 && serverDao.count() >= MAX_SERVERS) {
-                    postIfCurrent {
-                        progressBar.visibility = View.INVISIBLE
-                        saveBtn.isEnabled = true
-                        statusText.text = getString(R.string.server_already_configured)
-                        statusText.visibility = View.VISIBLE
-                    }
-                    return@execute
-                }
-
-                if (
-                    existingServer != null &&
-                    (existingServer.url != url ||
-                        existingServer.studyId != studyId ||
-                        existingServer.participantId != participantId)
-                ) {
-                    postIfCurrent {
-                        progressBar.visibility = View.INVISIBLE
-                        saveBtn.isEnabled = true
-                        statusText.text = getString(R.string.server_identity_locked)
-                        statusText.visibility = View.VISIBLE
-                    }
-                    return@execute
-                }
-
-                // The server derives its deduped device UUID from this app-instance
-                // ID. Upload endpoints expect the same ID while app data is intact.
-                val studyApi = UploadWorker.getChronicleStudyApi(url, mobileSigningSecretOverride)
-                val deviceInstanceId = DeviceInstanceIdentity.getOrCreate(applicationContext)
-                val reservation = com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
-                    serverDao.reserveSingleEnrollment(
-                        UploadServerEntity(
-                            name = name,
-                            url = url,
-                            studyId = studyId,
-                            participantId = participantId,
-                            sourceDeviceId = deviceInstanceId,
-                            mobileSigningSecretOverride = mobileSigningSecretOverride,
-                            enabled = false,
-                            createdAt = existingServer?.createdAt ?: OffsetDateTime.now().toString(),
-                        ),
+                    getString(
+                        R.string.server_upload_stat_line,
+                        date,
+                        stat.usageEventsUploaded,
+                        stat.sensorSamplesUploaded,
+                        stat.batterySamplesUploaded,
+                        stat.usageUploadFailures,
+                        stat.sensorUploadFailures,
+                        stat.batteryUploadFailures,
                     )
                 }
-                reservationToRelease = reservation
-                val response = studyApi.enroll(
-                    UUID.fromString(studyId), participantId, deviceInstanceId, getDevice(deviceInstanceId)
-                )
-                val sourceDeviceId = deviceInstanceId
-                val issuedApiKey = response.apiKey
-                val authMode = if (issuedApiKey != null)
-                    com.openlattice.chronicle.storage.AUTH_MODE_API_KEY
-                else
-                    com.openlattice.chronicle.storage.AUTH_MODE_DEVICE_ID
-
-                com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
-                    serverDao.finalizeSingleEnrollment(
-                        reservation = reservation,
-                        requestedUrl = url,
-                        requestedStudyId = studyId,
-                        requestedParticipantId = participantId,
-                        name = name,
-                        sourceDeviceId = sourceDeviceId,
-                        authMode = authMode,
-                        apiKey = issuedApiKey,
-                        mobileSigningSecretOverride = mobileSigningSecretOverride,
-                    )
-                }
-                reservationToRelease = null
-
                 postIfCurrent {
-                    progressBar.visibility = View.INVISIBLE
-                    statusText.text = getString(if (enabled) R.string.server_saved else R.string.server_saved_paused)
-                    statusText.visibility = View.VISIBLE
-                    finish()
+                    binding.statsContainer.visibility = View.VISIBLE
+                    binding.statsText.text = getString(R.string.server_upload_history,
+                        lines ?: getString(R.string.server_no_uploads_recorded))
                 }
             } catch (e: Exception) {
-                reservationToRelease?.let { reservation ->
-                    runCatching {
-                        com.openlattice.chronicle.collection.state.ResearchPersistenceGate.enrollmentMutation(applicationContext) {
-                            ChronicleDb.getInstance(applicationContext).uploadServerDao().releaseEnrollmentReservation(reservation)
-                        }
-                    }
+                reportStorageFailure(e) {
+                    binding.statsContainer.visibility = View.VISIBLE
+                    binding.statsText.setText(R.string.server_upload_history_failed)
                 }
-                Log.e("ServerEnrollment", "Failed to save server", e)
-                postIfCurrent {
-                    progressBar.visibility = View.INVISIBLE
-                    saveBtn.isEnabled = true
-                    statusText.text = getString(R.string.server_connect_unavailable)
-                    statusText.visibility = View.VISIBLE
-                }
-            }
-        }
-    }
-
-    private fun checkServerHealth() {
-        val url = urlText.text.toString().trim()
-        if (url.isBlank()) { urlText.error = getString(R.string.server_url_required); return }
-        val trustedUrl = Utils.normalizeTrustedServerUrl(url)
-        if (trustedUrl == null) { urlText.error = getString(R.string.server_url_untrusted); return }
-
-        statusText.visibility = View.INVISIBLE
-        progressBar.visibility = View.VISIBLE
-        healthBtn.isEnabled = false
-
-        executor.execute {
-            val result = runCatching {
-                val statusCode = UploadWorker.getChronicleStudyApi(trustedUrl).health().code()
-                when (statusCode) {
-                    in 200..299 -> getString(R.string.server_health_online)
-                    in 500..599 -> getString(R.string.server_health_offline_http, statusCode)
-                    else -> getString(R.string.server_health_degraded_http, statusCode)
-                }
-            }.getOrElse { error ->
-                Log.w("ServerEnrollment", "Server health unavailable", error)
-                getString(R.string.server_health_unavailable)
-            }
-
-            postIfCurrent {
-                progressBar.visibility = View.INVISIBLE
-                healthBtn.isEnabled = true
-                statusText.text = result
-                statusText.visibility = View.VISIBLE
             }
         }
     }
@@ -396,17 +166,21 @@ class ServerEnrollmentActivity : AppCompatActivity() {
     }
 
     private fun beginWithdrawal() {
-        deleteBtn.isEnabled = false
+        binding.serverDeleteButton.isEnabled = false
         executor.execute {
             val started = ParticipantWithdrawalManager.begin(applicationContext)
             postIfCurrent {
                 if (started) {
                     finish()
                 } else {
-                    deleteBtn.isEnabled = true
+                    binding.serverDeleteButton.isEnabled = true
                     Toast.makeText(this, getString(R.string.server_delete_failed), Toast.LENGTH_LONG).show()
                 }
             }
         }
     }
 }
+
+/** The phone locale's medium date, day first in Spanish ("29-10-2026" in es-CL), "Oct 29, 2026" in English. */
+internal fun uploadStatDay(date: LocalDate, locale: Locale = Locale.getDefault()): String =
+    date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale))

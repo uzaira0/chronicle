@@ -26,7 +26,6 @@ class EnrollmentReservationOwnershipTest {
             reservationExpiresAtEpochMillis = 2_000_000L,
         ).copy(
             apiKey = "issued-device-key",
-            authMode = AUTH_MODE_API_KEY,
             enrollmentIssuedAtEpochMillis = 1_500_000L,
             studyDisclosureJson = "{\"studyId\":\"study-a\"}",
             manifestDigest = "manifest-digest",
@@ -47,7 +46,7 @@ class EnrollmentReservationOwnershipTest {
         url = "https://research.example",
         studyId = "11111111-1111-1111-1111-111111111111",
         participantId = "participant-a",
-        sourceDeviceId = "device-a",
+        sourceRandomDeviceId = "device-a",
         enabled = false,
         reservationNonce = reservationNonce,
         reservationExpiresAtEpochMillis = reservationExpiresAtEpochMillis,

@@ -36,22 +36,11 @@ fun UploadServerEntity.hasRecoverableIssuedEnrollment(): Boolean =
         !manifestDigest.isNullOrBlank() &&
         !reservationNonce.isNullOrBlank()
 
-fun UploadServerEntity.pendingEnrollmentAttemptIsExpired(nowEpochMillis: Long): Boolean {
-    if (pendingEnrollmentAttemptId == null || enrollmentIssuedAtEpochMillis != null) return false
-    return if (pendingEnrollmentFirstRequestAtEpochMillis == null) {
-        pendingEnrollmentReplayDeadlineEpochMillis == null &&
-            pendingEnrollmentInviteExpiresAtEpochMillis?.let { it <= nowEpochMillis } == true
-    } else {
-        pendingEnrollmentReplayDeadlineEpochMillis?.let { it <= nowEpochMillis } == true
-    }
-}
-
 fun resolveSingleEnrollment(
     existing: List<UploadServerEntity>,
     requestedUrl: String,
     requestedStudyId: String,
     requestedParticipantId: String,
-    nowEpochMillis: Long = System.currentTimeMillis(),
 ): SingleEnrollmentResolution {
     if (existing.isEmpty()) return SingleEnrollmentResolution.Insert
     if (existing.size != 1) return SingleEnrollmentResolution.Reject(existing.first())
@@ -61,11 +50,8 @@ fun resolveSingleEnrollment(
         enrolled.url == requestedUrl &&
         enrolled.studyId == requestedStudyId &&
         enrolled.participantId == requestedParticipantId
+    // A pending attempt of the same identity ends only on the server's answer to its replay, never here.
     return if (
-        sameIdentity && enrolled.pendingEnrollmentAttemptIsExpired(nowEpochMillis)
-    ) {
-        SingleEnrollmentResolution.ReplaceProvisional(enrolled.id)
-    } else if (
         sameIdentity &&
         !enrolled.enabled &&
         !enrolled.enrollmentSetupComplete &&

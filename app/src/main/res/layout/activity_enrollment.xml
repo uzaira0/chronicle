@@ -7,12 +7,12 @@
     android:fillViewport="true">
 
 <androidx.constraintlayout.widget.ConstraintLayout
-    android:layout_width="match_parent"
+    style="@style/Chronicle.Content"
     android:layout_height="wrap_content"
-    android:layout_marginEnd="@dimen/activity_horizontal_margin"
+    android:layout_marginEnd="@dimen/page_horizontal_padding"
     android:paddingTop="@dimen/eq_space_4"
     android:paddingBottom="@dimen/eq_space_4"
-    android:layout_marginStart="@dimen/activity_horizontal_margin"
+    android:layout_marginStart="@dimen/page_horizontal_padding"
     tools:context=".Enrollment"
     tools:layout_editor_absoluteY="81dp">
 
@@ -49,7 +49,7 @@
 
     </com.google.android.material.textfield.TextInputLayout>
 
-    <TextView
+    <TextView android:accessibilityHeading="true"
         android:id="@+id/participantIdTextView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -66,6 +66,7 @@
         android:layout_height="wrap_content"
         android:hint="@string/prompt_participant_id"
         style="@style/Chronicle.Input"
+        android:layout_marginBottom="@dimen/eq_space_5"
         app:errorEnabled="true"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -78,6 +79,16 @@
             style="@style/Enrollment.InputText" />
     </com.google.android.material.textfield.TextInputLayout>
 
+    <TextView android:accessibilityHeading="true"
+        android:id="@+id/serverUrlTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/server_url_hint"
+        style="@style/Chronicle.SectionTitle"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/participantIdTextLayout"
+        android:layout_marginBottom="@dimen/eq_space_1"/>
 
     <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/serverUrlTextLayout"
@@ -88,7 +99,7 @@
         app:errorEnabled="true"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/participantIdTextLayout">
+        app:layout_constraintTop_toBottomOf="@id/serverUrlTextView">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/serverUrlText"
@@ -98,43 +109,24 @@
             style="@style/Enrollment.InputText" />
     </com.google.android.material.textfield.TextInputLayout>
 
-    <com.google.android.material.textfield.TextInputLayout
-        android:id="@+id/serverSigningSecretTextLayout"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="@string/signing_key_override_hint"
-        style="@style/Chronicle.Input"
-        app:errorEnabled="true"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/serverUrlTextLayout">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/serverSigningSecretText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:inputType="textPassword"
-            style="@style/Enrollment.InputText" />
-    </com.google.android.material.textfield.TextInputLayout>
-
     <com.google.android.material.button.MaterialButton
         android:id="@+id/button"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:minWidth="200dp"
+        android:minWidth="@dimen/chronicle_enrollment_button_min_width"
         app:layout_constrainedWidth="true"
         app:layout_constraintHorizontal_bias="1.0"
         app:layout_constraintStart_toStartOf="parent"
         android:layout_marginTop="@dimen/eq_space_4"
         android:text="@string/action_start_collection"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/serverSigningSecretTextLayout" />
+        app:layout_constraintTop_toBottomOf="@id/serverUrlTextLayout" />
 
     <ProgressBar
         android:id="@+id/enrollmentProgress"
         style="@style/ProgressBar"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
+        android:layout_height="@dimen/chronicle_progress_height"
         android:layout_marginEnd="@dimen/eq_space_4"
         android:layout_marginStart="@dimen/eq_space_4"
         android:layout_marginTop="@dimen/eq_space_6"
@@ -144,7 +136,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/button" />
 
-    <TextView
+    <TextView android:accessibilityHeading="true"
         android:id="@+id/statusMessage"
         android:accessibilityLiveRegion="polite"
         android:layout_width="match_parent"

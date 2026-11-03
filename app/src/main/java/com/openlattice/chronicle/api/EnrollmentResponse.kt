@@ -14,5 +14,10 @@ import java.util.UUID
 data class EnrollmentResponse(
     val chronicleId: UUID,
     val enrollmentId: UUID? = null,
-    val apiKey: String? = null
-)
+    val apiKey: String? = null,
+    val hardStopGeneration: Long? = null,
+) {
+    override fun toString(): String =
+        "EnrollmentResponse(chronicleId=$chronicleId, enrollmentId=$enrollmentId, " +
+            "apiKey=${apiKey?.let { "[redacted]" }}, hardStopGeneration=$hardStopGeneration)"
+}

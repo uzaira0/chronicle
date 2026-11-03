@@ -17,5 +17,8 @@ class EnrollmentLinkCredentialTest {
         assertNull(EnrollmentLinkCredential.fromFragment(null))
         assertNull(EnrollmentLinkCredential.fromFragment("accessCode=short"))
         assertNull(EnrollmentLinkCredential.fromFragment("accessCode=${"a".repeat(32)}%2F"))
+        // C2: a non-ASCII digit or letter is not part of the URL-safe code alphabet.
+        assertNull(EnrollmentLinkCredential.fromFragment("accessCode=${"a".repeat(32)}%D9%A3"))
+        assertNull(EnrollmentLinkCredential.fromFragment("accessCode=${"a".repeat(32)}%C3%A9"))
     }
 }

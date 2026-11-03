@@ -5,6 +5,7 @@ import com.openlattice.chronicle.study.StudyParticipantPolicy
 import java.net.URI
 import java.time.OffsetDateTime
 import java.util.UUID
+import com.openlattice.chronicle.study.WithdrawalMode
 
 /** Android wire view of the API enrollment manifest. */
 data class MobileEnrollmentManifest(
@@ -19,7 +20,7 @@ data class MobileEnrollmentManifest(
     val settingsVersion: Int,
     val issuedAt: OffsetDateTime,
     val expiresAt: OffsetDateTime,
-    val withdrawalMode: com.openlattice.chronicle.study.WithdrawalMode = com.openlattice.chronicle.study.WithdrawalMode.ERASE,
+    val withdrawalMode: WithdrawalMode = WithdrawalMode.ERASE,
 ) {
     init {
         require(schemaVersion == 1) { "Unsupported enrollment manifest schema: $schemaVersion" }

@@ -1,13 +1,14 @@
 package com.openlattice.chronicle.storage
 
 import android.content.Context
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.openlattice.chronicle.collection.CollectionModuleId
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,7 +32,7 @@ class EnrollmentReplayDaoTest {
     }
 
     @Test
-    fun processDeathKeepsTheExactBoundRequest() {
+    fun reopeningKeepsTheExactBoundRequest() {
         val reservation = db.uploadServerDao().reserveSingleEnrollment(
             pendingServer(),
             ownerNonce = OWNER,
@@ -52,6 +53,49 @@ class EnrollmentReplayDaoTest {
         assertEquals(UNAVAILABLE_MODULES, restored?.pendingUnavailableModuleIds)
     }
 
+    /** Every database reopen preserves the sent attempt's binding and its subsequent credential promotion. */
+    @Test
+    fun eachReopenPreservesTheSentAttemptBindingAndCredentialPromotion() {
+        val reservation = db.uploadServerDao().reserveSingleEnrollment(pendingServer(), ownerNonce = OWNER, nowEpochMillis = NOW)
+        fun reopen() { db.close(); db = openDatabase() }
+        fun assertReplay(firstRequest: Long?) {
+            val row = db.uploadServerDao().getAll().single()
+            assertEquals(reservation.serverId, row.id)
+            assertEquals(listOf(OWNER, ATTEMPT, ACCESS_CODE, PROPOSED_KEY, SOURCE_DEVICE, SOURCE_DEVICE_JSON, MANIFEST_DIGEST,
+                DISCLOSURE, DISCLOSURE_VERSION, UNAVAILABLE_MODULES),
+                listOf(row.reservationNonce, row.pendingEnrollmentAttemptId, row.pendingEnrollmentAccessCode,
+                    row.pendingProposedApiKey, row.sourceRandomDeviceId, row.pendingEnrollmentSourceDeviceJson,
+                    row.manifestDigest, row.studyDisclosureJson, row.disclosureVersion, row.pendingUnavailableModuleIds))
+            assertEquals(firstRequest, row.pendingEnrollmentFirstRequestAtEpochMillis)
+            assertNull(row.apiKey)
+            assertEquals(false, row.enrollmentSetupComplete)
+        }
+
+        reopen()
+        assertReplay(firstRequest = null)
+        assertEquals(1, db.uploadServerDao().markPendingEnrollmentRequestStarted(reservation.serverId, OWNER, ATTEMPT, NOW))
+        // The server accepted, but its answer was lost with the process.
+        reopen()
+        assertReplay(firstRequest = NOW)
+        reopen()
+        assertReplay(firstRequest = NOW)
+        assertEquals(1, db.uploadServerDao().persistIssuedEnrollment(
+            reservation = reservation,
+            enrollmentAttemptId = ATTEMPT,
+            server = pendingServer().copy(apiKey = PROPOSED_KEY),
+            issuedAtEpochMillis = NOW + 1,
+        ))
+        reopen()
+
+        val issued = db.uploadServerDao().getAll().single()
+        assertEquals(listOf(reservation.serverId, PROPOSED_KEY, SOURCE_DEVICE, MANIFEST_DIGEST),
+            listOf(issued.id, issued.apiKey, issued.sourceRandomDeviceId, issued.manifestDigest))
+        assertNotNull(issued.enrollmentIssuedAtEpochMillis)
+        assertEquals(listOf(null, null, null, null), listOf(issued.pendingEnrollmentAttemptId,
+            issued.pendingEnrollmentAccessCode, issued.pendingProposedApiKey, issued.pendingEnrollmentSourceDeviceJson))
+        assertEquals("setup is not complete until the participant finishes it", false, issued.enrollmentSetupComplete)
+    }
+
     @Test
     fun matchingPromotionAtomicallyRemovesReplaySecrets() {
         val dao = db.uploadServerDao()
@@ -67,27 +111,25 @@ class EnrollmentReplayDaoTest {
                 OWNER,
                 ATTEMPT,
                 NOW,
-                NOW + REPLAY_WINDOW,
             ),
         )
 
         assertEquals(
             1,
             dao.persistIssuedEnrollment(
-                id = reservation.serverId,
-                ownerNonce = OWNER,
-                name = "Study",
-                sourceDeviceId = SOURCE_DEVICE,
-                authMode = AUTH_MODE_API_KEY,
-                apiKey = PROPOSED_KEY,
-                mobileSigningSecretOverride = null,
-                studyDisclosureJson = DISCLOSURE,
-                disclosureVersion = DISCLOSURE_VERSION,
-                manifestDigest = MANIFEST_DIGEST,
-                pendingAcceptedModuleIds = "",
-                pendingDeclinedModuleIds = "",
-                pendingUnavailableModuleIds = UNAVAILABLE_MODULES,
+                reservation = reservation,
                 enrollmentAttemptId = ATTEMPT,
+                server = pendingServer().copy(
+                    name = "Study",
+                    sourceRandomDeviceId = SOURCE_DEVICE,
+                    apiKey = PROPOSED_KEY,
+                    studyDisclosureJson = DISCLOSURE,
+                    disclosureVersion = DISCLOSURE_VERSION,
+                    manifestDigest = MANIFEST_DIGEST,
+                    pendingAcceptedModuleIds = "",
+                    pendingDeclinedModuleIds = "",
+                    pendingUnavailableModuleIds = UNAVAILABLE_MODULES,
+                ),
                 issuedAtEpochMillis = NOW + 1,
             ),
         )
@@ -100,7 +142,6 @@ class EnrollmentReplayDaoTest {
         assertNull(issued?.pendingProposedApiKey)
         assertNull(issued?.pendingEnrollmentSourceDeviceJson)
         assertNull(issued?.pendingEnrollmentFirstRequestAtEpochMillis)
-        assertNull(issued?.pendingEnrollmentReplayDeadlineEpochMillis)
         assertEquals(UNAVAILABLE_MODULES, issued?.pendingUnavailableModuleIds)
     }
 
@@ -116,20 +157,19 @@ class EnrollmentReplayDaoTest {
         assertEquals(
             0,
             dao.persistIssuedEnrollment(
-                id = reservation.serverId,
-                ownerNonce = OWNER,
-                name = "Study",
-                sourceDeviceId = SOURCE_DEVICE,
-                authMode = AUTH_MODE_API_KEY,
-                apiKey = "ck_ABCDEFGH_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-                mobileSigningSecretOverride = null,
-                studyDisclosureJson = DISCLOSURE,
-                disclosureVersion = DISCLOSURE_VERSION,
-                manifestDigest = MANIFEST_DIGEST,
-                pendingAcceptedModuleIds = "",
-                pendingDeclinedModuleIds = "",
-                pendingUnavailableModuleIds = UNAVAILABLE_MODULES,
+                reservation = reservation,
                 enrollmentAttemptId = ATTEMPT,
+                server = pendingServer().copy(
+                    name = "Study",
+                    sourceRandomDeviceId = SOURCE_DEVICE,
+                    apiKey = "ck_ABCDEFGH_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+                    studyDisclosureJson = DISCLOSURE,
+                    disclosureVersion = DISCLOSURE_VERSION,
+                    manifestDigest = MANIFEST_DIGEST,
+                    pendingAcceptedModuleIds = "",
+                    pendingDeclinedModuleIds = "",
+                    pendingUnavailableModuleIds = UNAVAILABLE_MODULES,
+                ),
                 issuedAtEpochMillis = NOW + 1,
             ),
         )
@@ -140,49 +180,37 @@ class EnrollmentReplayDaoTest {
         )
         assertEquals(
             1,
-            dao.deletePendingEnrollmentAttempt(reservation.serverId, OWNER, ATTEMPT),
+            dao.deletePendingEnrollmentAttempt(reservation.serverId, OWNER, ATTEMPT, null),
         )
         assertEquals(0, dao.count())
     }
 
+    /** Only the server ends a sent attempt; a fresh invitation cannot replace it whatever the phone clock reads. */
     @Test
-    fun freshInvitationCanReplaceAnAttemptAtTheStrictReplayDeadline() {
+    fun freshInvitationNeverReplacesASentAttempt() {
         val dao = db.uploadServerDao()
-        val firstRequestAt = NOW
-        val deadline = firstRequestAt + REPLAY_WINDOW
         dao.reserveSingleEnrollment(
-            pendingServer().copy(
-                pendingEnrollmentFirstRequestAtEpochMillis = firstRequestAt,
-                pendingEnrollmentReplayDeadlineEpochMillis = deadline,
-            ),
+            pendingServer().copy(pendingEnrollmentFirstRequestAtEpochMillis = NOW),
             ownerNonce = OWNER,
             nowEpochMillis = NOW,
         )
 
-        val replacement = dao.reserveSingleEnrollment(
-            pendingServer(
-                attempt = REPLACEMENT_ATTEMPT,
-                accessCode = REPLACEMENT_CODE,
-                proposedKey = REPLACEMENT_KEY,
-            ),
-            ownerNonce = REPLACEMENT_OWNER,
-            nowEpochMillis = deadline,
-        )
+        assertThrows(SingleEnrollmentConflictException::class.java) {
+            dao.reserveSingleEnrollment(
+                pendingServer(attempt = REPLACEMENT_ATTEMPT, accessCode = REPLACEMENT_CODE, proposedKey = REPLACEMENT_KEY),
+                ownerNonce = REPLACEMENT_OWNER,
+                nowEpochMillis = NOW + 2 * DAY,
+            )
+        }
 
-        assertEquals(1, dao.count())
-        val restored = dao.getById(replacement.serverId)
-        assertEquals(REPLACEMENT_OWNER, restored?.reservationNonce)
-        assertEquals(REPLACEMENT_ATTEMPT, restored?.pendingEnrollmentAttemptId)
-        assertEquals(REPLACEMENT_CODE, restored?.pendingEnrollmentAccessCode)
-        assertEquals(REPLACEMENT_KEY, restored?.pendingProposedApiKey)
-        assertEquals(SOURCE_DEVICE_JSON, restored?.pendingEnrollmentSourceDeviceJson)
+        val kept = dao.getAll().single()
+        assertEquals(OWNER, kept.reservationNonce)
+        assertEquals(ATTEMPT, kept.pendingEnrollmentAttemptId)
+        assertEquals(PROPOSED_KEY, kept.pendingProposedApiKey)
     }
 
-    private fun openDatabase(): ChronicleDb = Room.databaseBuilder(
-        context,
-        ChronicleDb::class.java,
-        TEST_DB,
-    ).allowMainThreadQueries().build()
+    /** The production SQLCipher/Keystore opener; this exercises database reopening within the instrumented process. */
+    private fun openDatabase(): ChronicleDb = ChronicleDb.openEncryptedDatabase(context, TEST_DB)
 
     private fun pendingServer(
         attempt: String = ATTEMPT,
@@ -193,7 +221,7 @@ class EnrollmentReplayDaoTest {
         url = "https://study.example",
         studyId = STUDY_ID,
         participantId = "participant-a",
-        sourceDeviceId = SOURCE_DEVICE,
+        sourceRandomDeviceId = SOURCE_DEVICE,
         studyDisclosureJson = DISCLOSURE,
         disclosureVersion = DISCLOSURE_VERSION,
         manifestDigest = MANIFEST_DIGEST,
@@ -202,7 +230,6 @@ class EnrollmentReplayDaoTest {
         pendingUnavailableModuleIds = UNAVAILABLE_MODULES,
         pendingEnrollmentAttemptId = attempt,
         pendingEnrollmentAccessCode = accessCode,
-        pendingEnrollmentInviteExpiresAtEpochMillis = NOW + REPLAY_WINDOW,
         pendingProposedApiKey = proposedKey,
         pendingEnrollmentSourceDeviceJson = SOURCE_DEVICE_JSON,
         enabled = false,
@@ -212,11 +239,11 @@ class EnrollmentReplayDaoTest {
     private companion object {
         const val TEST_DB = "enrollment-replay-dao-test"
         const val NOW = 2_000_000L
-        const val REPLAY_WINDOW = 24 * 60 * 60 * 1_000L
+        const val DAY = 24 * 60 * 60 * 1_000L
         const val STUDY_ID = "11111111-1111-1111-1111-111111111111"
         const val SOURCE_DEVICE = "22222222-2222-2222-2222-222222222222"
         const val SOURCE_DEVICE_JSON = "{\"device\":\"$SOURCE_DEVICE\",\"model\":\"test\"}"
-        const val UNAVAILABLE_MODULES = "sensor_gyroscope"
+        val UNAVAILABLE_MODULES = CollectionModuleId.SENSOR_GYROSCOPE.id
         const val OWNER = "owner-a"
         const val ATTEMPT = "33333333-3333-3333-3333-333333333333"
         const val ACCESS_CODE = "one-time-code-a"

@@ -20,8 +20,8 @@ class ServerEnrollmentDecisionTest {
     }
 
     @Test
-    fun playBuildRejectsTheLegacyManualServerEditorWithoutChangingTheEnrollmentSlot() {
-        assertEquals("PLAY", BuildConfig.DISTRIBUTION_CHANNEL)
+    fun amazonBuildRejectsTheManualServerEditorWithoutChangingTheEnrollmentSlot() {
+        assertEquals("AMAZON", BuildConfig.DISTRIBUTION_CHANNEL)
 
         ActivityScenario.launch<ServerEnrollmentActivity>(
             Intent(AppTestState.context, ServerEnrollmentActivity::class.java),

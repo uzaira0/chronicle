@@ -3,8 +3,10 @@ package com.openlattice.chronicle.api
 import com.openlattice.chronicle.serialization.JsonSerializer
 import com.squareup.moshi.JsonDataException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
 
@@ -18,6 +20,14 @@ class EnrollmentResponseDeserializerTest {
     private fun decode(json: String): EnrollmentResponse =
         requireNotNull(JsonSerializer.fromJson<EnrollmentResponse>(json))
 
+    @Test fun enrollmentResponseRenderingRedactsTheCredential() {
+        val response = EnrollmentResponse(UUID.randomUUID(), apiKey = "synthetic-enrollment-credential")
+        assertFalse(response.toString().contains("synthetic-enrollment-credential"))
+        assertTrue(response.toString().contains("apiKey=[redacted]"))
+        assertTrue(response.copy(apiKey = null).toString().contains("apiKey=null"))
+        assertEquals("synthetic-enrollment-credential", response.copy().apiKey)
+    }
+
     @Test
     fun parsesBareUuidString() {
         val uuid = "550e8400-e29b-41d4-a716-446655440000"
@@ -27,7 +37,7 @@ class EnrollmentResponseDeserializerTest {
 
         assertEquals(UUID.fromString(uuid), response.chronicleId)
         assertNull(
-            "legacy bare-UUID response must yield null apiKey so the client falls back to deviceId mode",
+            "legacy bare-UUID response must yield null apiKey so the client falls back to randomDeviceId mode",
             response.apiKey
         )
     }
