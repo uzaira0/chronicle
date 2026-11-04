@@ -55,7 +55,7 @@ internal fun missingAccessFamilies(status: PermissionStatus): Set<LocalUploadMod
  * is a new episode. The episode is persisted before it is recorded, its checkpoint is removed only
  * after its diagnostic is recorded, and its stable ID makes a replay after process death safe.
  * [required] is every family an ACTIVE module needs access for.
- * [notifyInitiallyMissing] also notifies for a service that needs a foreground restart.
+ * [notifyInitiallyMissing] also notifies for a service Android refused to start, which needs Chronicle opened.
  */
 internal fun recordAccessEpisodes(
     store: LocalUploadDiagnosticsStore,
@@ -106,14 +106,14 @@ private fun recordEpisode(store: LocalUploadDiagnosticsStore, ownerScope: String
     )
 }
 
-/** Reports missing Android access or a stopped sensor service for accepted modules. Never throws. */
-fun recordCollectionAccessLoss(context: Context) {
+/** Reports missing Android access or a sensor service Android refused to start ([stoppedSensorFamilies]). Never throws. */
+fun recordCollectionAccessLoss(context: Context, sensorStartRefused: Boolean = false) {
     try {
         val owner = ResearchPersistenceGate.captureOwner(context) ?: return
         val states = CollectionLoopStore.of(context).loadAll().values.toList()
         val environment = CollectionCapabilityResolver.snapshot(context)
         val sensors = if (CollectionLoopCoordinator(context).anySensorCollects()) setOf(LocalUploadModuleFamily.SENSOR) else emptySet()
-        val stoppedSensors = sensors.takeIf { !DistributionRestrictedRuntime.hardwareSensorsRunning(context) }.orEmpty()
+        val stoppedSensors = stoppedSensorFamilies(context, sensors, sensorStartRefused)
         val missing = missingAccessFamilies(activeModulePermissionStatus(states, environment)) + stoppedSensors
         // The same check with every grant denied names every family an active module needs.
         val required = missingAccessFamilies(activeModulePermissionStatus(states, environment.copy(
@@ -130,7 +130,7 @@ fun recordCollectionAccessLoss(context: Context) {
             required,
             notifyInitiallyMissing = stoppedSensors,
         )
-        if (lost.isNotEmpty()) notifyAccessMissing(context.applicationContext)
+        if (lost.isNotEmpty()) notifyAccessMissing(context.applicationContext) else if (missing.isEmpty()) clearAccessMissing(context)
     } catch (e: Exception) {
         Log.w(ACCESS_TAG, "Could not check collection access", e)
     }
@@ -155,4 +155,24 @@ private fun notifyAccessMissing(appContext: Context) {
         .build()
     // Without the permission the Overview card and the server diagnostic still show it.
     postNotificationIfPermitted(appContext, NOTIFICATION_ID_ACCESS, notification)
+}
+
+/**
+ * The sensor family counts as lost only when Android refuses to start the sensor service. One that is not running is
+ * started here: an accepted sensor module is stored just before its own start is requested (enrollment, a Data
+ * Sharing toggle), and a sync between the two used to post "Action needed" while the sensors were collecting.
+ * A refusal reports back through [recordCollectionAccessLoss] with [sensorStartRefused] set, which is not retried.
+ */
+private fun stoppedSensorFamilies(
+    context: Context,
+    sensors: Set<LocalUploadModuleFamily>,
+    sensorStartRefused: Boolean,
+): Set<LocalUploadModuleFamily> {
+    if (sensors.isEmpty() || DistributionRestrictedRuntime.hardwareSensorsRunning(context)) return emptySet()
+    return if (sensorStartRefused || !DistributionRestrictedRuntime.tryStartHardwareSensors(context)) sensors else emptySet()
+}
+
+/** The notice says collection is lost; once nothing is missing that is no longer true, so it goes. */
+private fun clearAccessMissing(context: Context) {
+    androidx.core.app.NotificationManagerCompat.from(context.applicationContext).cancel(NOTIFICATION_ID_ACCESS)
 }

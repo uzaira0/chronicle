@@ -173,7 +173,7 @@ class HardwareSensorService @JvmOverloads constructor(
             if (startForegroundServiceIfPermitted(context, intent)) return true
             ResearchPersistenceGate.executeAsync {
                 if (ownerKey != null && ResearchPersistenceGate.currentOwnerKey() == ownerKey) {
-                    recordCollectionAccessLoss(context.applicationContext)
+                    recordCollectionAccessLoss(context.applicationContext, sensorStartRefused = true)
                 }
             }
             return false
