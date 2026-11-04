@@ -55,7 +55,8 @@ class NotificationGrantForegroundServiceTest {
         services.all { it.name in started }
     }
 
-    @Test fun allowingNotificationsInTheAppsDialogPromotesTheRunningServicesAgain() {
+    /** Enrolled with the accelerometer, notifications not allowed; returns once the landing has started the services. */
+    private fun launchWithNotificationsDenied(): MainActivity {
         assertTrue(BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS)
         AuditStores.install(context, enrolled = true, manifestOverrides = mapOf(
             CollectionModuleId.SENSOR_ACCELEROMETER to CollectionModuleSetting(enabled = true)))
@@ -71,6 +72,25 @@ class NotificationGrantForegroundServiceTest {
         awaitDashboardUi { true }
         drainStarts()
         started.clear()
+        return activity
+    }
+
+    /** Each service started again exactly once: the grant restarts them, later resumes do not. */
+    private fun assertEachServiceStartedOnceMore() {
+        awaitStarts(HardwareSensorService::class.java, DeviceUnlockMonitoringService::class.java)
+        controller!!.pause().resume()
+        // Let any start a resume would issue (they run off the main thread) arrive before counting.
+        repeat(50) {
+            awaitDashboardUi { true }
+            drainStarts()
+            Thread.sleep(20)
+        }
+        assertEquals(listOf(DeviceUnlockMonitoringService::class.java.name, HardwareSensorService::class.java.name),
+            started.sorted())
+    }
+
+    @Test fun allowingNotificationsInTheAppsDialogPromotesTheRunningServicesAgain() {
+        val activity = launchWithNotificationsDenied()
 
         // Continue on Chronicle's explanation, then Allow in Android's dialog, which pauses and resumes the dashboard.
         activity.requestNotificationPermission()
@@ -84,6 +104,18 @@ class NotificationGrantForegroundServiceTest {
                 intArrayOf(PackageManager.PERMISSION_GRANTED)))
         controller!!.resume()
 
-        awaitStarts(HardwareSensorService::class.java, DeviceUnlockMonitoringService::class.java)
+        assertEachServiceStartedOnceMore()
+    }
+
+    @Test fun allowingNotificationsInAndroidSettingsPromotesTheRunningServicesOnReturn() {
+        launchWithNotificationsDenied()
+
+        // "Not now" in Chronicle, then Android Settings > Apps > Chronicle > Notifications: Chronicle is stopped
+        // meanwhile and no permission callback reaches it; the grant is seen when the participant comes back.
+        controller!!.pause().stop()
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        controller!!.start().resume()
+
+        assertEachServiceStartedOnceMore()
     }
 }

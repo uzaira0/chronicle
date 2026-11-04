@@ -221,10 +221,9 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
     private fun startEnrolledServices() {
         lifecycleScope.launch(storageFailureHandler()) {
             withContext(ioDispatcher) {
-                // Notification permission is NOT a gate. Data collection (foreground-service based,
-                // poll-driven) runs whether or not notifications are granted; a denied permission only
-                // hides study reminders / new-data-option alerts. The optional ask lives on the
-                // acknowledgment screen after the participant agrees.
+                // Notification permission is NOT a gate. Data collection (foreground-service based, poll-driven) runs
+                // whether or not notifications are granted; a denied permission only hides study reminders /
+                // new-data-option alerts. The optional ask is the dashboard's (maybeAskNotificationsOnce).
                 EnrolledWork.reconcile(applicationContext)
                 CollectionLoopCoordinator(applicationContext).updateSensorService()
                 DeviceUnlockMonitoringService.reconcile(applicationContext)
@@ -293,6 +292,7 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
     }
 
     private fun resumeEnrolled() {
+        promoteServicesIfNotificationsNowAllowed()
         maybeTriggerForegroundSync()
         routeToAcknowledgmentIfPending()
         maybeAskNotificationsOnce()
@@ -381,7 +381,22 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
      * are started again; each start promotes its service again, which posts its notification.
      */
     internal fun onNotificationsAllowed() {
+        notificationsAllowedAtLastCheck = true
         if (enrolledServicesStarted) startEnrolledServices()
+    }
+
+    /** POST_NOTIFICATIONS as last seen by [promoteServicesIfNotificationsNowAllowed]; null before the first enrolled resume. */
+    private var notificationsAllowedAtLastCheck: Boolean? = null
+
+    /**
+     * A grant made outside Chronicle (Android Settings > Apps > Chronicle > Notifications) reaches no permission
+     * callback; the enrolled resume sees it instead. Only a change from not allowed to allowed restarts the services,
+     * so ordinary resumes start nothing, and a grant Chronicle's own dialog already handled is not handled twice.
+     */
+    private fun promoteServicesIfNotificationsNowAllowed() {
+        val allowed = hasPostNotificationsRuntimePermission(this)
+        if (allowed && notificationsAllowedAtLastCheck == false) onNotificationsAllowed()
+        notificationsAllowedAtLastCheck = allowed
     }
 
     companion object {
