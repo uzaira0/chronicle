@@ -60,10 +60,10 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
 
     // Optional, one-time notification ask (Android 13+). Notifications are NOT required to
     // collect data — this is the single place the app asks, on first dashboard land after a
-    // consent-first enrollment. The result is never gated; collection runs either way.
+    // consent-first enrollment. The result is never gated; collection runs either way. Allow → [onNotificationsAllowed].
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { /* optional — collection proceeds regardless of the choice */ }
+    ) { granted -> if (granted) onNotificationsAllowed() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -372,6 +372,16 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
                 }
             }
         }
+    }
+
+    /**
+     * Android 13+ keeps the ongoing notification of a foreground service promoted while notifications were not allowed
+     * out of the shade after they are allowed. Enrollment starts the services before the notification ask, so when the
+     * participant allows notifications (here, or from Settings' Identify device user request) the enrolled services
+     * are started again; each start promotes its service again, which posts its notification.
+     */
+    internal fun onNotificationsAllowed() {
+        if (enrolledServicesStarted) startEnrolledServices()
     }
 
     companion object {

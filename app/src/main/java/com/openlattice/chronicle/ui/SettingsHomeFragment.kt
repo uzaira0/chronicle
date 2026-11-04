@@ -77,7 +77,7 @@ class SettingsHomeFragment : Fragment(R.layout.fragment_settings_home) {
     private var refreshingControls: Boolean = false
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted ->
+    ) { granted -> if (granted) (activity as? com.openlattice.chronicle.MainActivity)?.onNotificationsAllowed()
         val toggle = view?.findViewById<MaterialSwitch>(R.id.identifyUserSwitch) ?: return@registerForActivityResult
         toggle.isChecked = false
         if (granted) {
