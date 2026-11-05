@@ -13,7 +13,7 @@ import com.openlattice.chronicle.utils.DeviceSettingsNavigator
 
 /**
  * Asks the participant to exempt Chronicle from app hibernation / permission auto-reset
- * (Android 11+, the "Pause app activity if unused" toggle). Without the exemption, a
+ * (Android 11+; the toggle's label differs by version, see hibernation_exemption). Without the exemption, a
  * device whose Chronicle UI is never opened — the normal usage pattern for a passive
  * collection app — is force-stopped and stripped of its runtime permissions after a few
  * months of "unused" time, silently and permanently ending data collection until a human

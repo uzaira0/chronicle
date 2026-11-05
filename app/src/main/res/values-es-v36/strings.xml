@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings labels for this Android version; see values/strings.xml. -->
+<resources>
+    <string name="battery_optimization_exemption">Para que Chronicle funcione de manera más confiable en segundo plano, abra la configuración de Uso de batería de la aplicación, seleccione Chronicle, toque \"Permitir uso en segundo plano\" y elija \"Sin restricciones\".</string>
+</resources>

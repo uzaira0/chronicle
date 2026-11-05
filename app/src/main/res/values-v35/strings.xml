@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings labels for this Android version; see values/strings.xml. -->
+<resources>
+    <string name="battery_optimization_exemption">To ensure Chronicle works more reliably in the background, please open App battery usage settings, select Chronicle, tap \"Allow background usage\", and choose \"Unrestricted\".</string>
+    <string name="hibernation_exemption">If this device goes unused for a few months, Android pauses Chronicle and removes its permissions, which permanently stops study data collection. Please open the app settings and turn OFF \"Manage app if unused\".</string>
+</resources>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings labels for this Android version; see values/strings.xml. -->
+<resources>
+    <string name="hibernation_exemption">Si este dispositivo permanece sin uso durante algunos meses, Android pausa Chronicle y elimina sus permisos, lo que detiene de forma permanente la recopilación de datos del estudio. Abra la configuración de la aplicación y desactive \"Pausar actividad de la aplicación si no se usa\".</string>
+</resources>
