@@ -14,7 +14,7 @@
     <string name="invalid_participant">ID de participante no válido.</string>
     <string name="invalid_study_id_format">Formato de ID de estudio no válido.</string>
     <string name="device_enroll_failure">Chronicle no pudo completar el registro en este dispositivo. Vuelva a abrir la aplicación o contacte al equipo del estudio.</string>
-    <string name="device_enroll_success">Su dispositivo ha sido registrado en el estudio. Chronicle continuará recopilando los datos que aceptó compartir mientras la aplicación esté cerrada. Puede revisar Datos compartidos en Chronicle. Para retirarse, use Retirarse del estudio en Configuración de Chronicle. Si tiene preguntas o inquietudes, contacte al equipo del estudio.</string>
+    <string name="device_enroll_success">Su dispositivo está registrado. Chronicle sigue recopilando los datos que permitió, incluso con la aplicación cerrada. Para cambiar sus opciones, abra Datos compartidos. Para retirarse, use Retirarse del estudio en Configuración. ¿Preguntas? Contacte al equipo del estudio.</string>
     <string name="enrollment_done">Listo</string>
     <string name="cancel_pending_enrollment">Cancelar intento de registro</string>
     <string name="invalid_study_id_blank">ID de estudio no válido.</string>
@@ -121,7 +121,7 @@
     <string name="server_load_failed">Chronicle no pudo cargar este registro en el estudio desde el almacenamiento del dispositivo. Vuelva a abrir la aplicación o contacte al equipo del estudio.</string>
     <string name="enrollment_server_hint">Servidor del estudio (HTTPS público)</string>
     <string name="orientation_collects_header">Qué recopila</string>
-    <string name="orientation_not_collects_header">Qué NO recopila</string>
+    <string name="orientation_not_collects_header">Qué nunca recopila</string>
     <string name="allow">Permitir</string>
     <string name="dont_allow">No permitir</string>
     <string name="disclosure_before_you_join">Antes de participar</string>
@@ -196,24 +196,17 @@
     <string name="notif_access_missing">Chronicle no puede recopilar un tipo de dato que aceptó. Abra la aplicación para reiniciar la recopilación o restablecer el acceso de Android en Datos compartidos.</string>
     <string name="notif_option_off">Se desactivó una opción de recopilación de datos. No se requiere ninguna acción.</string>
     <string name="orientation_action_title">Configurar recopilación de datos</string>
-    <string name="orientation_step">Paso %1$d de %2$d - %3$s: %4$s</string>
-    <string name="orientation_title_format">%1$s (%2$s)</string>
-    <string name="orientation_privacy">Privacidad: %1$s</string>
+    <string name="orientation_step">%1$d de %2$d · %3$s</string>
     <string name="orientation_required_title">Esto es obligatorio</string>
     <string name="orientation_required_body">\"%1$s\" es obligatorio para participar en este estudio. Si no lo permite, no podrá registrar el dispositivo. ¿Desea detener el registro?</string>
     <string name="orientation_stop_enrolling">Detener registro</string>
     <string name="orientation_go_back">Volver</string>
     <string name="orientation_decline_title">¿No permitir \"%1$s\"?</string>
     <string name="orientation_decline_body">Estos datos no se recopilarán. Puede activarlos posteriormente en Datos compartidos. Elija Cancelar si tocó esta opción por error.</string>
-    <string name="orientation_required_label">Obligatorio según el estudio de origen</string>
-    <string name="orientation_optional_label">Opcional para el estudio de origen</string>
-    <string name="orientation_required_detail">El estudio de origen marca este tipo de dato como obligatorio. El registro solo puede continuar si lo permite.</string>
-    <string name="orientation_optional_detail">El estudio de origen marca este tipo de dato como opcional. Puede omitirlo y aun así registrar el dispositivo.</string>
-    <string name="orientation_allow_required">Permitir datos obligatorios</string>
-    <string name="orientation_allow_optional">Permitir datos opcionales</string>
-    <string name="orientation_plan_line">Paso %1$d: [%2$s] %3$s</string>
-    <string name="orientation_plan_current">%1$s (actual)</string>
-    <string name="orientation_plan_header">Plan de pasos del estudio de origen: %1$s, %2$s</string>
+    <string name="orientation_required_detail">Debe permitirlo para participar.</string>
+    <string name="orientation_optional_detail">Puede omitirlo y aun así participar.</string>
+    <string name="orientation_required">Obligatorio</string>
+    <string name="orientation_optional">Opcional</string>
     <string name="orientation_none">—</string>
     <string name="ds_usage_access_needed">Un tipo de dato de uso de aplicaciones que aceptó necesita Acceso de uso. Chronicle no puede recopilarlo hasta que habilite explícitamente Chronicle en la configuración de Android.</string>
     <string name="ds_review_access">Revisar acceso</string>
@@ -274,7 +267,7 @@
     <string name="disclosure_expected_duration">Duración prevista</string>
     <string name="disclosure_what_happens">Qué ocurrirá</string>
     <string name="disclosure_enabled_functions">Funciones habilitadas del estudio cubiertas por este acuerdo</string>
-    <string name="disclosure_enabled_functions_body">Estas funciones habilitadas no son opciones independientes en la siguiente pantalla. Cualquier registro de investigación que generen se envía únicamente al servidor del estudio indicado arriba.</string>
+    <string name="disclosure_enabled_functions_body">No se le preguntará por ellas en la siguiente pantalla. Sus registros van solo al destino de los datos indicado arriba.</string>
     <string name="disclosure_risks">Riesgos previsibles</string>
     <string name="disclosure_benefits">Beneficios esperados</string>
     <string name="disclosure_use_sharing">Uso y compartición</string>
@@ -405,7 +398,6 @@
     <string name="cap_sleep_collection">Recopilación de datos de sueño</string>
     <string name="cap_activity_recognition">Reconocimiento de actividad</string>
     <string name="title_server_settings">Configuración del servidor</string>
-    <string name="title_study_information">Información del estudio</string>
     <string name="disclosure_function_upload_telemetry">Diagnósticos de envío: el servidor del estudio recibe el estado de los envíos y los conteos y horas de cierres inesperados de la aplicación, cierres inesperados nativos y eventos de aplicación que no responde. Los informes excluyen contenido de aplicaciones, etiquetas de participantes, direcciones de servidores, credenciales, mensajes de error y seguimientos de pila.</string>
     <string name="disclosure_function_sensor_availability">Disponibilidad de sensores: Chronicle informa a este estudio cuáles de todos los sensores modelados por Chronicle están disponibles o no en el dispositivo, aunque el estudio no recopile mediciones de sensores. Este informe no contiene mediciones de sensores.</string>
     <string name="disclosure_function_questionnaire">Recordatorios de encuestas: Chronicle puede programar recordatorios del estudio y abrir su encuesta pública mediante HTTPS. Las respuestas a la encuesta se gestionan en la página del estudio.</string>
@@ -426,14 +418,6 @@
     <string name="upload_stats_daily_research">%1$s: correctos %2$d de uso, %3$d de sensores, %4$d de batería; fallos %5$d/%6$d/%7$d</string>
     <string name="upload_stats_daily">%1$s: correctos %2$d de uso, %3$d de batería; fallos %4$d/%5$d</string>
     <string name="ds_module_toggle_cd">Control de recopilación de datos de %1$s</string>
-    <plurals name="orientation_required_steps">
-        <item quantity="one">%d paso obligatorio</item>
-        <item quantity="other">%d pasos obligatorios</item>
-    </plurals>
-    <plurals name="orientation_optional_steps">
-        <item quantity="one">%d paso opcional</item>
-        <item quantity="other">%d pasos opcionales</item>
-    </plurals>
     <string name="upload_diagnostics_unavailable">Los diagnósticos de envío no están disponibles. Se volverá a intentar cuando se recupere el almacenamiento.</string>
     <string name="work_scheduling_unavailable">No fue posible programar los envíos. Reinicie Chronicle después de que se recupere el almacenamiento.</string>
     <string name="overview_participant_withdrawal_pending">Participante

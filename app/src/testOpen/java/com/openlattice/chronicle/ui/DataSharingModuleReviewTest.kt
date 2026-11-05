@@ -141,7 +141,7 @@ class DataSharingModuleReviewTest {
         val restored = Robolectric.buildActivity(CollectionOrientationActivity::class.java, intent)
             .create(saved).start().restoreInstanceState(saved).resume().visible()
         try {
-            assertTrue(restored.get().findViewById<TextView>(R.id.orientationStep).text.startsWith("Step 2 of 2"))
+            assertTrue(restored.get().findViewById<TextView>(R.id.orientationStep).text.startsWith("2 of 2 · "))
             restored.get().findViewById<View>(R.id.orientationAccept).performClick()
             assertEquals(setOf(CollectionModuleId.USAGE_EVENTS, CollectionModuleId.BATTERY_TELEMETRY),
                 CollectionOrientationActivity.acceptedFrom(shadowOf(restored.get()).resultIntent))

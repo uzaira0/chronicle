@@ -14,7 +14,6 @@ import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.CollectionModuleId
 import com.openlattice.chronicle.collection.capability.DistributionChannel
 import com.openlattice.chronicle.collection.capability.DistributionModulePolicy
-import org.hamcrest.CoreMatchers.containsString
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,7 +23,7 @@ import org.junit.runner.RunWith
 class CollectionOrientationActivityDecisionTest {
 
     @Test
-    fun wizardShowsRequiredAndOptionalLabelsFromSourceStudyPlan() {
+    fun wizardSaysPositionRequirementAndDataTypeOnce() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val plan = ConsentPlan(
             required = listOf(CollectionModuleId.USAGE_EVENTS),
@@ -34,31 +33,18 @@ class CollectionOrientationActivityDecisionTest {
         ActivityScenario.launch<CollectionOrientationActivity>(
             CollectionOrientationActivity.intent(context, plan)
         ).use {
-            onView(withId(R.id.orientationStep))
-                .check(matches(withText(containsString("Required by source study"))))
-            onView(withId(R.id.orientationBadge))
-                .check(matches(isDisplayed()))
-                .check(matches(withText("Required by source study")))
+            onView(withId(R.id.orientationStep)).check(matches(withText("1 of 2 · Required")))
+            onView(withId(R.id.orientationTitle)).check(matches(withText("App Usage Events")))
             onView(withId(R.id.orientationRequirementDetail))
-                .check(matches(withText(containsString("source study marks this data type as required"))))
-            onView(withId(R.id.orientationRequirementSummaryHeader))
-                .check(matches(withText("Source study step plan: 1 required step, 1 optional step")))
-            onView(withId(R.id.orientationRequirementSummary))
-                .check(matches(withText(containsString("Step 1: [Required by source study] App Usage Events"))))
-            onView(withId(R.id.orientationRequirementSummary))
-                .check(matches(withText(containsString("Step 2: [Optional for source study] Battery Telemetry"))))
+                .check(matches(isDisplayed()))
+                .check(matches(withText("You must allow this to take part.")))
 
             onView(withId(R.id.orientationAccept)).perform(click())
 
-            onView(withId(R.id.orientationStep))
-                .check(matches(withText(containsString("Optional for source study"))))
-            onView(withId(R.id.orientationBadge))
-                .check(matches(isDisplayed()))
-                .check(matches(withText("Optional for source study")))
+            onView(withId(R.id.orientationStep)).check(matches(withText("2 of 2 · Optional")))
+            onView(withId(R.id.orientationTitle)).check(matches(withText("Battery Telemetry")))
             onView(withId(R.id.orientationRequirementDetail))
-                .check(matches(withText(containsString("source study marks this data type as optional"))))
-            onView(withId(R.id.orientationRequirementSummary))
-                .check(matches(withText(containsString("Step 2: [Optional for source study] Battery Telemetry (current)"))))
+                .check(matches(withText("You can skip this and still take part.")))
         }
     }
 

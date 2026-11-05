@@ -123,23 +123,15 @@ class CollectionOrientationActivity : AppCompatActivity() {
             plan.healthConnectRecordTypes,
         )
 
-        val requirement = StepRequirementCopy.forRequired(step.required, this)
+        // Each fact once: "1 of 2 · Optional" above the data type's name, one line on what declining
+        // means just above the buttons, and the collects / never-collects lists between them.
+        val requirement = getString(if (step.required) R.string.orientation_required else R.string.orientation_optional)
         findViewById<TextView>(R.id.orientationStep).text =
-            getString(R.string.orientation_step, current + 1, steps.size, requirement.displayLabel, template.label)
-        findViewById<TextView>(R.id.orientationBadge).text = requirement.badge
-        findViewById<TextView>(R.id.orientationRequirementDetail).text = requirement.detail
-        // The whole-plan summary is orientation, not consent: show it once, on the first step,
-        // instead of repeating it above every module (participants read it as the same screen).
-        val planVisibility = if (current == 0) View.VISIBLE else View.GONE
-        findViewById<TextView>(R.id.orientationRequirementSummaryHeader).apply {
-            visibility = planVisibility
-            text = plan.requirementPlanHeader(this@CollectionOrientationActivity)
-        }
-        findViewById<TextView>(R.id.orientationRequirementSummary).apply {
-            visibility = planVisibility
-            text = plan.requirementSummaryLines(this@CollectionOrientationActivity, step.moduleId).joinToString("\n")
-        }
-        findViewById<TextView>(R.id.orientationTitle).text = getString(R.string.orientation_title_format, template.label, requirement.displayLabel)
+            getString(R.string.orientation_step, current + 1, steps.size, requirement)
+        findViewById<TextView>(R.id.orientationTitle).text = template.label
+        findViewById<TextView>(R.id.orientationRequirementDetail).setText(
+            if (step.required) R.string.orientation_required_detail else R.string.orientation_optional_detail,
+        )
         findViewById<TextView>(R.id.orientationCollects).text = bullets(template.whatItCollects)
         findViewById<TextView>(R.id.orientationNotCollect).text = bullets(template.whatItDoesNotCollect)
         findViewById<TextView>(R.id.orientationCaveat).apply {
@@ -150,11 +142,6 @@ class CollectionOrientationActivity : AppCompatActivity() {
                 text = template.caveats.joinToString("\n\n") { "⚠  $it" }
             }
         }
-        findViewById<TextView>(R.id.orientationPrivacy).text = getString(R.string.orientation_privacy, template.privacyClass)
-
-        // Required modules can't proceed declined, so the decline button reads as a study-exit.
-        findViewById<MaterialButton>(R.id.orientationAccept).text = requirement.acceptLabel
-        findViewById<MaterialButton>(R.id.orientationDecline).text = requirement.declineLabel
         findViewById<TextView>(R.id.orientationTitle).apply {
             isFocusableInTouchMode = true
             requestFocus()
@@ -268,76 +255,3 @@ class CollectionOrientationActivity : AppCompatActivity() {
                 .mapNotNull { CollectionModuleId.fromIdOrNull(it) }.toSet()
     }
 }
-
-data class StepRequirementCopy(
-    val displayLabel: String,
-    val shortLabel: String,
-    val badge: String,
-    val detail: String,
-    val acceptLabel: String,
-    val declineLabel: String,
-) {
-    companion object {
-        /** Resource-backed copy for the live screen; the English table below is the tested baseline. */
-        fun forRequired(required: Boolean, context: Context): StepRequirementCopy {
-            val label = context.getString(
-                if (required) R.string.orientation_required_label else R.string.orientation_optional_label,
-            )
-            return StepRequirementCopy(
-                displayLabel = label,
-                shortLabel = label,
-                badge = label,
-                detail = context.getString(
-                    if (required) R.string.orientation_required_detail else R.string.orientation_optional_detail,
-                ),
-                acceptLabel = context.getString(
-                    if (required) R.string.orientation_allow_required else R.string.orientation_allow_optional,
-                ),
-                declineLabel = context.getString(R.string.dont_allow),
-            )
-        }
-
-        fun forRequired(required: Boolean): StepRequirementCopy =
-            if (required) {
-                StepRequirementCopy(
-                    displayLabel = "Required by source study",
-                    shortLabel = "Required by source study",
-                    badge = "Required by source study",
-                    detail = "The source study marks this data type as required. Enrollment can continue only if you allow it.",
-                    acceptLabel = "Allow required data",
-                    declineLabel = "Don't allow",
-                )
-            } else {
-                StepRequirementCopy(
-                    displayLabel = "Optional for source study",
-                    shortLabel = "Optional for source study",
-                    badge = "Optional for source study",
-                    detail = "The source study marks this data type as optional. You can skip it and still enroll.",
-                    acceptLabel = "Allow optional data",
-                    declineLabel = "Don't allow",
-                )
-            }
-    }
-}
-
-/** One line per plan step, in the device locale; [currentModule] is marked as the current step. */
-fun ConsentPlan.requirementSummaryLines(context: Context, currentModule: CollectionModuleId? = null): List<String> {
-    val requiredModules = required.toSet()
-    return orderedModules.mapIndexed { index, moduleId ->
-        val stepNumber: Int = index + 1
-        context.getString(
-            R.string.orientation_plan_line,
-            stepNumber,
-            StepRequirementCopy.forRequired(requiredModules.contains(moduleId), context).displayLabel,
-            CollectionConsentCopy.label(context, moduleId).let { label ->
-                if (moduleId == currentModule) context.getString(R.string.orientation_plan_current, label) else label
-            },
-        )
-    }
-}
-
-fun ConsentPlan.requirementPlanHeader(context: Context): String = context.getString(
-    R.string.orientation_plan_header,
-    context.resources.getQuantityString(R.plurals.orientation_required_steps, required.size, required.size),
-    context.resources.getQuantityString(R.plurals.orientation_optional_steps, optional.size, optional.size),
-)

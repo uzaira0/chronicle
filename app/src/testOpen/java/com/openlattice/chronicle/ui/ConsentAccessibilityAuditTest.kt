@@ -48,7 +48,7 @@ class ConsentAccessibilityAuditTest {
         for (night in listOf(Configuration.UI_MODE_NIGHT_NO, Configuration.UI_MODE_NIGHT_YES)) {
             val context = context(night)
             val orientation = layout(context, R.layout.activity_collection_orientation)
-            val ids = listOf(R.id.orientationStep, R.id.orientationRequirementSummary, R.id.orientationPrivacy)
+            val ids = listOf(R.id.orientationStep, R.id.orientationRequirementDetail)
             val views = ids.map { orientation.findViewById<TextView>(it) } + texts(layout(context, R.layout.fragment_data_sharing)).filter {
                 it.text.toString() == context.getString(R.string.data_sharing_intro)
             }

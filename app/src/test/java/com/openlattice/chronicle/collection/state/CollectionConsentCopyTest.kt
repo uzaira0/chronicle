@@ -92,38 +92,19 @@ class CollectionConsentCopyTest {
         assertFalse(plan.isEmpty)
     }
 
-    @Test fun testWizardRequirementCopyNamesRequiredAndOptionalStudySteps() {
-        val required = StepRequirementCopy.forRequired(true)
-        assertEquals("Required by source study", required.displayLabel)
-        assertEquals("Required by source study", required.shortLabel)
-        assertTrue(required.detail.contains("required"))
-        assertTrue(required.acceptLabel.contains("required"))
-        assertEquals("Don't allow", required.declineLabel)
-
-        val optional = StepRequirementCopy.forRequired(false)
-        assertEquals("Optional for source study", optional.displayLabel)
-        assertEquals("Optional for source study", optional.shortLabel)
-        assertTrue(optional.detail.contains("optional"))
-        assertTrue(optional.detail.contains("still enroll"))
-        assertTrue(optional.acceptLabel.contains("optional"))
-        assertEquals("Don't allow", optional.declineLabel)
+    @Test fun testWizardStepLineSaysPositionAndRequirementOnce() {
+        val required = context.getString(R.string.orientation_required)
+        val optional = context.getString(R.string.orientation_optional)
+        assertEquals("1 of 5 · Required", context.getString(R.string.orientation_step, 1, 5, required))
+        assertEquals("5 of 5 · Optional", context.getString(R.string.orientation_step, 5, 5, optional))
+        assertEquals("You must allow this to take part.", context.getString(R.string.orientation_required_detail))
+        assertEquals("You can skip this and still take part.", context.getString(R.string.orientation_optional_detail))
     }
 
-    @Test fun testWizardRequirementSummaryIsDerivedFromSourceStudyPlan() {
-        val plan = ConsentPlan(
-            required = listOf(CollectionModuleId.USAGE_EVENTS, CollectionModuleId.DEVICE_LIFECYCLE),
-            optional = listOf(CollectionModuleId.BATTERY_TELEMETRY),
-        )
-
-        assertEquals(
-            listOf(
-                "Step 1: [Required by source study] App Usage Events",
-                "Step 2: [Required by source study] Device Lifecycle",
-                "Step 3: [Optional for source study] Battery Telemetry",
-            ),
-            plan.requirementSummaryLines(context),
-        )
-        assertEquals("Source study step plan: 2 required steps, 1 optional step", plan.requirementPlanHeader(context))
+    @Test @Config(qualifiers = "es-rCL")
+    fun spanishWizardStepLineSaysPositionAndRequirementOnce() {
+        assertEquals("2 de 3 · Obligatorio",
+            context.getString(R.string.orientation_step, 2, 3, context.getString(R.string.orientation_required)))
     }
 
     @Test fun testWizardPlanSplitsRequiredAndOptionalFromSourceStudySettings() {
@@ -144,36 +125,10 @@ class CollectionConsentCopyTest {
             plan.required,
         )
         assertEquals(listOf(CollectionModuleId.BATTERY_TELEMETRY), plan.optional)
-        assertEquals(
-            listOf(
-                "Step 1: [Required by source study] App Usage Events",
-                "Step 2: [Required by source study] Device Lifecycle",
-                "Step 3: [Optional for source study] Battery Telemetry",
-            ),
-            plan.requirementSummaryLines(context),
-        )
-        assertEquals("Source study step plan: 2 required steps, 1 optional step", plan.requirementPlanHeader(context))
-    }
-
-    @Test fun currentStepMarkerIsSeparatedFromTheModuleName() {
-        val plan = ConsentPlan(required = listOf(CollectionModuleId.USAGE_EVENTS), optional = emptyList())
-        assertEquals(
-            listOf("Step 1: [Required by source study] App Usage Events (current)"),
-            plan.requirementSummaryLines(context, CollectionModuleId.USAGE_EVENTS),
-        )
-    }
-
-    @Test @Config(qualifiers = "es-rCL")
-    fun spanishCurrentStepMarkerIsSeparatedFromTheModuleName() {
-        val plan = ConsentPlan(required = listOf(CollectionModuleId.USAGE_EVENTS), optional = emptyList())
-        assertTrue(plan.requirementSummaryLines(context, CollectionModuleId.USAGE_EVENTS).single()
-            .endsWith("Eventos de uso de aplicaciones (actual)"))
     }
 
     @Test fun testEmptyConsentPlanIsEmpty() {
         assertTrue(ConsentPlan(emptyList(), emptyList()).isEmpty)
-        assertEquals("Source study step plan: 0 required steps, 0 optional steps",
-            ConsentPlan(emptyList(), emptyList()).requirementPlanHeader(context))
     }
 
     private fun resolved(moduleId: CollectionModuleId, required: Boolean): ResolvedModuleSetting =

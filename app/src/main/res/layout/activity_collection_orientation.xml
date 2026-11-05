@@ -6,6 +6,9 @@
   mistap-confirmed, then proceeds (declined = not collected). Bound dynamically per step by
   CollectionOrientationActivity; copy comes from the consent_copy.xml resources. Final consent
   wording remains the study/IRB's responsibility.
+  Each fact once: "1 of 2 · Optional", the data type's name, what it collects and never collects,
+  one line on what declining means. The whole step fits a 1080x2400 phone at the default font
+  size for every data type (OrientationOnePageTest); larger fonts scroll.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/orientationRoot"
@@ -26,10 +29,10 @@
             style="@style/Chronicle.Content"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingStart="@dimen/eq_space_5"
-            android:paddingTop="@dimen/eq_space_5"
-            android:paddingEnd="@dimen/eq_space_5"
-            android:paddingBottom="@dimen/eq_space_5">
+            android:paddingStart="@dimen/eq_space_4"
+            android:paddingTop="@dimen/eq_space_4"
+            android:paddingEnd="@dimen/eq_space_4"
+            android:paddingBottom="@dimen/eq_space_2">
 
             <TextView
                 android:id="@+id/orientationStep"
@@ -40,44 +43,13 @@
                 android:paddingBottom="@dimen/eq_space_1" />
 
             <TextView android:textColor="@color/chronicle_text_primary"
-                android:id="@+id/orientationBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textAppearance="@style/Chronicle.Caption"
-                android:textStyle="bold"
-                android:paddingBottom="@dimen/eq_space_2" />
-
-            <TextView android:textColor="@color/chronicle_text_primary"
-                android:id="@+id/orientationRequirementDetail"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textAppearance="@style/Chronicle.Body"
-                android:paddingBottom="@dimen/eq_space_4" />
-
-            <TextView android:accessibilityHeading="true" android:textColor="@color/chronicle_text_primary"
-                android:id="@+id/orientationRequirementSummaryHeader"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textAppearance="@style/Chronicle.SectionTitle"
-                android:textStyle="bold"
-                android:paddingBottom="@dimen/eq_space_2" />
-
-            <TextView
-                android:id="@+id/orientationRequirementSummary"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textAppearance="@style/Chronicle.Caption"
-                android:textColor="@color/chronicle_text_primary"
-                android:paddingBottom="@dimen/eq_space_4" />
-
-            <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationTitle"
-        android:accessibilityHeading="true"
+                android:accessibilityHeading="true"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textAppearance="@style/Chronicle.Title"
                 android:textStyle="bold"
-                android:paddingBottom="@dimen/eq_space_4" />
+                android:paddingBottom="@dimen/eq_space_3" />
 
             <TextView android:accessibilityHeading="true" android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationCollectsHeader"
@@ -86,14 +58,14 @@
                 android:text="@string/orientation_collects_header"
                 android:textAppearance="@style/Chronicle.SectionTitle"
                 android:textStyle="bold"
-                android:paddingBottom="@dimen/eq_space_2" />
+                android:paddingBottom="@dimen/eq_space_1" />
 
             <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationCollects"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textAppearance="@style/Chronicle.Body"
-                android:paddingBottom="@dimen/eq_space_4" />
+                android:paddingBottom="@dimen/eq_space_3" />
 
             <TextView android:accessibilityHeading="true" android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationNotCollectHeader"
@@ -102,14 +74,14 @@
                 android:text="@string/orientation_not_collects_header"
                 android:textAppearance="@style/Chronicle.SectionTitle"
                 android:textStyle="bold"
-                android:paddingBottom="@dimen/eq_space_2" />
+                android:paddingBottom="@dimen/eq_space_1" />
 
             <TextView android:textColor="@color/chronicle_text_primary"
                 android:id="@+id/orientationNotCollect"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textAppearance="@style/Chronicle.Body"
-                android:paddingBottom="@dimen/eq_space_4" />
+                android:paddingBottom="@dimen/eq_space_3" />
 
             <TextView
                 android:id="@+id/orientationCaveat"
@@ -119,15 +91,14 @@
                 android:textStyle="bold"
                 android:textColor="?attr/colorError"
                 android:visibility="gone"
-                android:paddingBottom="@dimen/eq_space_4" />
+                android:paddingBottom="@dimen/eq_space_3" />
 
-            <TextView
-                android:id="@+id/orientationPrivacy"
+            <TextView android:textColor="@color/chronicle_text_primary"
+                android:id="@+id/orientationRequirementDetail"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textAppearance="@style/Chronicle.Caption"
-                android:textColor="@color/chronicle_text_primary"
-                android:paddingBottom="@dimen/eq_space_5" />
+                android:textAppearance="@style/Chronicle.Body"
+                android:textStyle="bold" />
         </LinearLayout>
     </ScrollView>
 
@@ -136,10 +107,10 @@
         style="@style/Chronicle.Content"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="@dimen/eq_space_5"
-        android:paddingTop="@dimen/eq_space_3"
-        android:paddingEnd="@dimen/eq_space_5"
-        android:paddingBottom="@dimen/eq_space_5">
+        android:paddingStart="@dimen/eq_space_4"
+        android:paddingTop="@dimen/eq_space_2"
+        android:paddingEnd="@dimen/eq_space_4"
+        android:paddingBottom="@dimen/eq_space_3">
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/orientationAccept"
@@ -160,7 +131,7 @@
             android:gravity="center"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:layout_marginTop="@dimen/eq_space_3"
+            android:layout_marginTop="@dimen/eq_space_2"
             android:text="@string/dont_allow" />
     </LinearLayout>
 </LinearLayout>

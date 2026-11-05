@@ -121,7 +121,7 @@ class AppDecisionSurfaceContractTest {
         activity.setContentView(R.layout.activity_collection_orientation)
         val scroll = activity.findViewById<ScrollView>(R.id.orientationScrollView)
         assertFalse(scroll.clipToPadding)
-        assertNotNull(activity.findViewById<View>(R.id.orientationRequirementSummary))
+        assertNotNull(activity.findViewById<View>(R.id.orientationRequirementDetail))
         val actions = activity.findViewById<ViewGroup>(R.id.orientationActions)
         listOf(R.id.orientationAccept, R.id.orientationDecline).forEach { id ->
             val button = activity.findViewById<Button>(id)

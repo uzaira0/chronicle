@@ -53,7 +53,7 @@ class TitleHeadingCompatibilityTest {
             for ((layout, id) in listOf(
                 R.layout.activity_user_identification to R.id.select_user_prompt,
                 R.layout.activity_collection_orientation to R.id.orientationTitle,
-                R.layout.activity_study_disclosure to R.id.studyDisclosureHeading,
+                R.layout.activity_study_disclosure to R.id.studyDisclosureTitle,
             )) {
                 activity.setContentView(layout)
                 val title = activity.findViewById<View>(id)

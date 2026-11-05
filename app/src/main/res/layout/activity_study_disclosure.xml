@@ -10,19 +10,12 @@
         android:orientation="vertical"
         android:padding="@dimen/eq_space_5">
 
-        <TextView android:accessibilityHeading="true"
-            android:id="@+id/studyDisclosureHeading"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/disclosure_before_you_join"
-            android:textAppearance="@style/Chronicle.Title" />
-
+        <!-- The screen title ("Before you join") is the activity label; the page starts at the study's name. -->
         <TextView android:accessibilityHeading="true"
             android:id="@+id/studyDisclosureTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/eq_space_3"
-            android:textAppearance="@style/Chronicle.SectionTitle" />
+            android:textAppearance="@style/Chronicle.Title" />
 
         <TextView
             android:id="@+id/studyDisclosureBody"

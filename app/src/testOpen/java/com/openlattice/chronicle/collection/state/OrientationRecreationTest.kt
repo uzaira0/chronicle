@@ -33,7 +33,7 @@ class OrientationRecreationTest {
                 val progress = ViewModelProvider(activity)[CollectionOrientationActivity.Progress::class.java]
                 assertEquals(1, progress.current)
                 assertEquals(setOf(CollectionModuleId.USAGE_EVENTS), progress.accepted.toSet())
-                assertTrue(activity.findViewById<TextView>(R.id.orientationStep).text.startsWith("Step 2 of 2"))
+                assertTrue(activity.findViewById<TextView>(R.id.orientationStep).text.startsWith("2 of 2 · "))
             }
         }
     }

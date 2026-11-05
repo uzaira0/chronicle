@@ -15,7 +15,7 @@
     <string name="invalid_participant">Invalid participant id.</string>
     <string name="invalid_study_id_format">Invalid study id format.</string>
     <string name="device_enroll_failure">Chronicle could not finish enrollment on this device. Reopen the app or contact your study team.</string>
-    <string name="device_enroll_success">Your device has been enrolled. Chronicle will continue collecting the data you agreed to share while the app is closed. You can review data sharing in Chronicle Settings. To withdraw, use Withdraw from study in Chronicle Settings. If you have questions or concerns, contact your study team.</string>
+    <string name="device_enroll_success">Your device is enrolled. Chronicle keeps collecting the data you allowed, even while the app is closed. To change your choices, open Data Sharing. To withdraw, use Withdraw from study in Settings. Questions? Contact your study team.</string>
     <string name="enrollment_done">Done</string>
     <string name="cancel_pending_enrollment">Cancel enrollment attempt</string>
     <string name="invalid_study_id_blank">Invalid study id.</string>
@@ -145,7 +145,7 @@
     <string name="server_load_failed">Chronicle could not load this study enrollment from device storage. Reopen the app or contact your study team.</string>
     <string name="enrollment_server_hint">Study server (public HTTPS)</string>
     <string name="orientation_collects_header">What this collects</string>
-    <string name="orientation_not_collects_header">What it does NOT collect</string>
+    <string name="orientation_not_collects_header">What it never collects</string>
     <string name="allow">Allow</string>
     <string name="dont_allow">Don\'t allow</string>
     <string name="disclosure_before_you_join">Before you join</string>
@@ -220,24 +220,17 @@
     <string name="notif_access_missing">Chronicle cannot collect a data type you accepted. Open the app to restart collection or restore Android access in Data Sharing.</string>
     <string name="notif_option_off">A data collection option was turned off. No action needed.</string>
     <string name="orientation_action_title">Set up data collection</string>
-    <string name="orientation_step">Step %1$d of %2$d - %3$s: %4$s</string>
-    <string name="orientation_title_format">%1$s (%2$s)</string>
-    <string name="orientation_privacy">Privacy: %1$s</string>
+    <string name="orientation_step">%1$d of %2$d · %3$s</string>
     <string name="orientation_required_title">This is required</string>
     <string name="orientation_required_body">\"%1$s\" is required to take part in this study. If you don\'t allow it, you can\'t enroll. Stop enrolling?</string>
     <string name="orientation_stop_enrolling">Stop enrolling</string>
     <string name="orientation_go_back">Go back</string>
     <string name="orientation_decline_title">Don\'t allow \"%1$s\"?</string>
     <string name="orientation_decline_body">This data won\'t be collected. You can turn it on later in Data Sharing. Choose Cancel if you tapped this by mistake.</string>
-    <string name="orientation_required_label">Required by source study</string>
-    <string name="orientation_optional_label">Optional for source study</string>
-    <string name="orientation_required_detail">The source study marks this data type as required. Enrollment can continue only if you allow it.</string>
-    <string name="orientation_optional_detail">The source study marks this data type as optional. You can skip it and still enroll.</string>
-    <string name="orientation_allow_required">Allow required data</string>
-    <string name="orientation_allow_optional">Allow optional data</string>
-    <string name="orientation_plan_line">Step %1$d: [%2$s] %3$s</string>
-    <string name="orientation_plan_current">%1$s (current)</string>
-    <string name="orientation_plan_header">Source study step plan: %1$s, %2$s</string>
+    <string name="orientation_required_detail">You must allow this to take part.</string>
+    <string name="orientation_optional_detail">You can skip this and still take part.</string>
+    <string name="orientation_required">Required</string>
+    <string name="orientation_optional">Optional</string>
     <string name="orientation_none">—</string>
     <string name="ds_usage_access_needed">An app-usage data type you accepted needs Usage Access. Chronicle cannot collect it until you explicitly enable Chronicle in Android settings.</string>
     <string name="ds_review_access">Review access</string>
@@ -300,7 +293,7 @@
     <string name="disclosure_expected_duration">Expected duration</string>
     <string name="disclosure_what_happens">What happens</string>
     <string name="disclosure_enabled_functions">Enabled study functions covered by this agreement</string>
-    <string name="disclosure_enabled_functions_body">These enabled functions are not separate choices in the next screen. Any research records they create are sent only to the study server named above.</string>
+    <string name="disclosure_enabled_functions_body">You will not be asked about these on the next screen. Their records go only to the data destination above.</string>
     <string name="disclosure_risks">Foreseeable risks</string>
     <string name="disclosure_benefits">Expected benefits</string>
     <string name="disclosure_use_sharing">Use and sharing</string>
@@ -433,7 +426,6 @@
     <string name="cap_activity_recognition">Activity recognition</string>
     <!-- Activity titles shown in the system task/recents list and the action bar. -->
     <string name="title_server_settings">Server Settings</string>
-    <string name="title_study_information">Study information</string>
     <!-- Study-disclosure copy for enabled functions the module wizard does not present. -->
     <string name="disclosure_function_upload_telemetry">Upload delivery diagnostics — Your study server receives upload status and counts and times of app crashes, native crashes, and app not responding events. Reports exclude app content, participant labels, server addresses, credentials, error messages, and stack traces.</string>
     <string name="disclosure_function_sensor_availability">Sensor availability — Chronicle tells this study which of all the sensors Chronicle models this device reports as available or unavailable, even when the study collects no sensor measurements. This report contains no sensor measurements.</string>
@@ -457,14 +449,6 @@
     <string name="upload_stats_daily_research">%1$s: success %2$d usage, %3$d sensors, %4$d battery; failures %5$d/%6$d/%7$d</string>
     <string name="upload_stats_daily">%1$s: success %2$d usage, %3$d battery; failures %4$d/%5$d</string>
     <string name="ds_module_toggle_cd">%1$s data collection toggle</string>
-    <plurals name="orientation_required_steps">
-        <item quantity="one">%d required step</item>
-        <item quantity="other">%d required steps</item>
-    </plurals>
-    <plurals name="orientation_optional_steps">
-        <item quantity="one">%d optional step</item>
-        <item quantity="other">%d optional steps</item>
-    </plurals>
     <string name="upload_diagnostics_unavailable">Upload diagnostics are unavailable. They will be retried when storage recovers.</string>
     <string name="work_scheduling_unavailable">Uploads could not be scheduled. Restart Chronicle after storage recovers.</string>
     <string name="overview_participant_withdrawal_pending">Participant

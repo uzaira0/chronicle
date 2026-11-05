@@ -116,7 +116,7 @@
         <activity
             android:name=".StudyDisclosureActivity"
             android:exported="false"
-            android:label="@string/title_study_information" />
+            android:label="@string/disclosure_before_you_join" />
         <activity android:name=".PlatformPolicyActivity" android:exported="false"
             android:label="@string/platform_policy_title" />
         <receiver
