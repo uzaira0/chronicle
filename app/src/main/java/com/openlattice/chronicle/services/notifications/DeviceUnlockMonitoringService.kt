@@ -161,7 +161,8 @@ class DeviceUnlockMonitoringService : Service() {
                 PendingIntent.getActivity(applicationContext, 0, it, getPendingIntentMutabilityFlag(0))
             }
 
-        val notification = NotificationCompat.Builder(applicationContext, UNLOCK_MONITORING_CHANNEL_ID)
+        // promoteForegroundServiceIfPermitted posts it at once; Android 12+ would otherwise defer it up to 10 s.
+        val notificationBuilder = NotificationCompat.Builder(applicationContext, UNLOCK_MONITORING_CHANNEL_ID)
             .setContentTitle(getString(R.string.interactivity_monitoring_notification_title))
             .setContentText(getString(R.string.interactivity_monitoring_notification_message))
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -169,11 +170,10 @@ class DeviceUnlockMonitoringService : Service() {
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(ContextCompat.getColor(applicationContext, R.color.colorPrimary))
             .setContentIntent(pendingIntent)
-            .build()
 
         val notificationId =
             applicationContext.resources.getInteger(R.integer.unlock_phone_monitoring_notification_id)
-        return promoteForegroundServiceIfPermitted(this, notificationId, notification)
+        return promoteForegroundServiceIfPermitted(this, notificationId, notificationBuilder)
     }
 
     private fun createReceiverIntentFilter(

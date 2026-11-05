@@ -514,7 +514,7 @@ class HardwareSensorService @JvmOverloads constructor(
             PendingIntent.getActivity(applicationContext, 0, it, getPendingIntentMutabilityFlag(0))
         }
 
-        val notification = NotificationCompat.Builder(applicationContext, channelId)
+        val notificationBuilder = NotificationCompat.Builder(applicationContext, channelId)
             .setContentTitle(getString(R.string.sensor_notification_title))
             .setContentText(getString(R.string.sensor_notification_message))
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -523,10 +523,9 @@ class HardwareSensorService @JvmOverloads constructor(
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(ContextCompat.getColor(applicationContext, R.color.colorPrimary))
             .setContentIntent(pendingIntent)
-            .build()
 
         val notificationId = applicationContext.resources.getInteger(R.integer.sensor_service_notification_id)
-        return promoteForegroundServiceIfPermitted(this, notificationId, notification)
+        return promoteForegroundServiceIfPermitted(this, notificationId, notificationBuilder)
     }
 
     /**

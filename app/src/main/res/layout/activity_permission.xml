@@ -20,7 +20,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="@dimen/eq_space_4"
         android:text="@string/usage_settings_permission"
-        android:textAlignment="center"
+        android:textAlignment="viewStart"
         android:textAppearance="@style/Chronicle.SectionTitle"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"

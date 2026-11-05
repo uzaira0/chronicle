@@ -18,6 +18,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
@@ -55,8 +56,6 @@ class UsageEventDisclosureContractTest {
         assertTrue(names.containsAll(listOf("Notification Seen", "Standby Bucket Changed", "Foreground Service Start")))
         val disclosures = mapOf(
             "privacy policy" to app.getString(R.string.platform_privacy_policy_full),
-            "usage access disclosure" to app.getString(R.string.usage_access_disclosure_body),
-            "usage access screen" to app.getString(R.string.usage_settings_permission),
             "data safety" to checkNotNull(javaClass.getResourceAsStream("/data-safety.md")).bufferedReader().use { it.readText() },
         )
         disclosures.forEach { (where, text) ->
@@ -72,6 +71,24 @@ class UsageEventDisclosureContractTest {
         }
         names.forEach { assertTrue("no plain-language usage consent bullet covers $it", it in BULLET_OF_LABEL) }
         bullets.forEach { bullet -> names.forEach { assertFalse("usage consent shows the Android name $it", it in bullet) } }
+    }
+
+    /**
+     * The Usage Access dialog and screen list the data-choice step's plain bullets word for word, in every language,
+     * and show no Android event name. The bullets are repeated in the strings, so this keeps the two from drifting.
+     */
+    @Test fun usageAccessTextsListThePlainBulletsInEveryLanguage() {
+        for (language in listOf("en", "es")) {
+            val localized = app.createConfigurationContext(
+                Configuration(app.resources.configuration).apply { setLocale(Locale.forLanguageTag(language)) })
+            val plain = localized.resources.getStringArray(R.array.consent_usage_events_collects).toList()
+            assertEquals(PLAIN_BULLETS.size, plain.size)
+            listOf(R.string.usage_access_disclosure_body, R.string.usage_settings_permission).forEach { id ->
+                val text = localized.getString(id)
+                plain.forEach { assertTrue("$language ${localized.resources.getResourceEntryName(id)} must list '$it'", it in text) }
+                BULLET_OF_LABEL.keys.forEach { assertFalse("$language text shows the Android name $it", it in text) }
+            }
+        }
     }
 
     private companion object {

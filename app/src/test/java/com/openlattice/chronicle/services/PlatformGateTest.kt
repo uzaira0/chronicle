@@ -18,6 +18,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
 import android.os.Build
+import androidx.core.app.NotificationCompat
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.WorkManager
 import com.openlattice.chronicle.BuildConfig
@@ -61,14 +62,14 @@ class PlatformGateTest {
     private val alarmManager = requireNotNull(app.getSystemService(AlarmManager::class.java)) { "alarm manager available" }
     private val channelId = "guard-test"
 
-    private fun notification(): Notification {
+    private fun notification(): NotificationCompat.Builder {
         manager.createNotificationChannel(NotificationChannel(channelId, "Guard test", NotificationManager.IMPORTANCE_LOW))
-        return Notification.Builder(app, channelId).setSmallIcon(android.R.drawable.ic_dialog_info).build()
+        return NotificationCompat.Builder(app, channelId).setSmallIcon(android.R.drawable.ic_dialog_info)
     }
 
     @Test @Config(sdk = [32, Build.VERSION_CODES.TIRAMISU, 36])
     fun notificationPostingChecksRuntimeAndAppState() {
-        val notification = notification()
+        val notification = notification().build()
         shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         // Robolectric does not model Android's silent drop; assert the guard's decision.
         assertEquals(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU, postNotificationIfPermitted(app, 1, notification))
@@ -160,13 +161,16 @@ class PlatformGateTest {
         shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         // Robolectric does not enforce manifest service types; inspect the successful promotion.
         val service = Robolectric.buildService(TestService::class.java).create().get()
-        val notification = notification()
-        assertTrue(promoteForegroundServiceIfPermitted(service, 1, notification))
+        val builder = notification()
+        assertTrue(promoteForegroundServiceIfPermitted(service, 1, builder))
         if (Build.VERSION.SDK_INT >= 29) {
             assertEquals(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0,
                 service.foregroundServiceType)
         }
         assertEquals(1, shadowOf(service).lastForegroundNotificationId)
+        // Android 12+ defers a foreground-service notification up to 10 s unless it asks to be shown at once;
+        // NotificationCompat passes this to the platform builder on 31+.
+        assertEquals(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE, builder.foregroundServiceBehavior)
     }
 
     @Test @Config(sdk = [30, Build.VERSION_CODES.S, 36])
