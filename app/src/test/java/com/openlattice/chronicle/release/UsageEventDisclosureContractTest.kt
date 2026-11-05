@@ -25,7 +25,8 @@ import org.robolectric.shadows.ShadowUsageStatsManager
 
 /**
  * The usage timeline uploads every event Android returns (no allowlist), named by the sensor's labels and unnamed types
- * by number, so every disclosure of the usage module names each label and says unnamed types are kept by number.
+ * by number, so the policy, Data Safety and Usage Access disclosures name each label and say unnamed types are kept by
+ * number, and the participant's data-choice step covers each label in plain words.
  */
 @RunWith(RobolectricTestRunner::class)
 class UsageEventDisclosureContractTest {
@@ -56,13 +57,44 @@ class UsageEventDisclosureContractTest {
             "privacy policy" to app.getString(R.string.platform_privacy_policy_full),
             "usage access disclosure" to app.getString(R.string.usage_access_disclosure_body),
             "usage access screen" to app.getString(R.string.usage_settings_permission),
-            "usage consent" to app.resources.getStringArray(R.array.consent_usage_events_collects).joinToString("\n"),
             "data safety" to checkNotNull(javaClass.getResourceAsStream("/data-safety.md")).bufferedReader().use { it.readText() },
         )
         disclosures.forEach { (where, text) ->
             names.forEach { assertTrue("$where must name $it", it in text) }
             assertTrue("$where must cover unnamed event types", "any other event type by its number" in text)
         }
+        // The data-choice step says the same in plain words: every uploaded label belongs to one bullet, and that
+        // bullet says it. A label with no bullet (a new Android event type) fails here until the step covers it.
+        val bullets = app.resources.getStringArray(R.array.consent_usage_events_collects).toList()
+        assertEquals(bullets.toString(), PLAIN_BULLETS.size, bullets.size)
+        PLAIN_BULLETS.forEachIndexed { index, phrases ->
+            phrases.forEach { assertTrue("usage consent bullet $index must say '$it': ${bullets[index]}", it in bullets[index]) }
+        }
+        names.forEach { assertTrue("no plain-language usage consent bullet covers $it", it in BULLET_OF_LABEL) }
+        bullets.forEach { bullet -> names.forEach { assertFalse("usage consent shows the Android name $it", it in bullet) } }
+    }
+
+    private companion object {
+        /** What each plain-language bullet of the usage data-choice step must say, in order. */
+        val PLAIN_BULLETS = listOf(
+            listOf("apps you open", "how long"),
+            listOf("screen turns on or off", "locked or unlocked"),
+            listOf("starts up", "shuts down"),
+            listOf("sent a notification", "never its text"),
+            listOf("shortcut", "interact with an app", "screen rotation", "in the background"),
+            listOf("How often Android expects", "any other app activity"),
+        )
+
+        /** The bullet that covers each label the usage sensor uploads; unnamed types fall under the last bullet. */
+        val BULLET_OF_LABEL = mapOf(
+            "Activity Resumed" to 0, "Activity Paused" to 0, "Activity Stopped" to 0,
+            "Screen Interactive" to 1, "Screen Non-interactive" to 1, "Keyguard Shown" to 1, "Keyguard Hidden" to 1,
+            "Device Startup" to 2, "Device Shutdown" to 2,
+            "Notification Seen" to 3, "Notification Interruption" to 3,
+            "Shortcut Invocation" to 4, "User Interaction" to 4, "Configuration Change" to 4,
+            "Foreground Service Start" to 4, "Foreground Service Stop" to 4,
+            "Standby Bucket Changed" to 5,
+        )
     }
 
     /**

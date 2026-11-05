@@ -392,6 +392,8 @@
     <string name="cap_gms_fire_os">%1$s requiere los Servicios de Google Play y no está disponible en Fire OS</string>
     <string name="cap_gms_required">%1$s requiere los Servicios de Google Play</string>
     <string name="cap_usage_access">El Acceso de uso debe estar habilitado en Configuración</string>
+    <string name="cap_identify_off">Desactivado — active Identificar usuario del dispositivo en Configuración</string>
+    <string name="cap_identify_paused">En pausa — las notificaciones están desactivadas. Abra Identificar usuario del dispositivo en Configuración para permitirlas</string>
     <string name="cap_device_permission">Se requiere permiso del dispositivo</string>
     <string name="cap_notification_access">Debe habilitar el acceso a notificaciones en Configuración</string>
     <string name="cap_accessibility">Debe habilitar el acceso de accesibilidad de Chronicle</string>

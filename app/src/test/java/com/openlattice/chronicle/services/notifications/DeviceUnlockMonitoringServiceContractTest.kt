@@ -9,10 +9,10 @@ import android.app.Application
 import android.app.Activity
 import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
-import android.content.ComponentCallbacks2
 import android.content.ComponentName
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
@@ -54,6 +54,7 @@ import com.openlattice.chronicle.services.lifecycle.INTERACTION_POWER_SAVE_MODE_
 import com.openlattice.chronicle.services.lifecycle.INTERACTION_POWER_SAVE_MODE_OFF
 import com.openlattice.chronicle.services.lifecycle.ACTION_CONNECTIVITY_CHANGE
 import com.openlattice.chronicle.services.lifecycle.INTERACTION_LOW_MEMORY
+import com.openlattice.chronicle.services.lifecycle.deviceLifecycleIntentFilter
 import com.openlattice.chronicle.utils.Utils
 import java.time.Duration
 import java.util.TreeMap
@@ -142,7 +143,7 @@ class DeviceUnlockMonitoringServiceContractTest {
             ServiceCompat.stopForeground(service, ServiceCompat.STOP_FOREGROUND_REMOVE)
             assertEquals(android.app.Service.START_STICKY, startMonitoringCommand(service, null, 3))
             assertFalse(shadowOf(service).isForegroundStopped)
-            assertEquals(5, monitoringReceivers().size)
+            assertEquals(3, monitoringReceivers().size)
         } finally { controller.destroy() }
     }
 
@@ -153,7 +154,7 @@ class DeviceUnlockMonitoringServiceContractTest {
             val action = app.getString(R.string.action_identify_after_reboot)
             val broadcast = shadowOf(app).broadcastIntents.single { it.action == action }
             assertEquals(app.packageName, broadcast.`package`)
-            assertEquals(5, monitoringReceivers().size)
+            assertEquals(3, monitoringReceivers().size)
         } finally { controller.destroy() }
         assertTrue(monitoringReceivers().isEmpty())
     }
@@ -163,11 +164,12 @@ class DeviceUnlockMonitoringServiceContractTest {
         shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val controller = startForReboot()
         try {
-            assertLifecycleOnly(controller)
+            assertStopsWithoutReceivers(controller)
         } finally { controller.destroy() }
     }
 
-    @Test fun lifecycleMonitoringSurvivesDeclinedIdentification() {
+    /** Device state is sampled without a service: declined identification leaves nothing for the monitor to do. */
+    @Test fun declinedIdentificationStopsTheMonitorThoughDeviceStateIsCollected() {
         onPersistenceWorker {
             val dao = ChronicleDb.getInstance(app).collectionModuleStateDao()
             dao.upsert(dao.get(CollectionModuleId.USER_IDENTIFICATION.id)!!.copy(decision = ParticipantDecision.DECLINED.name))
@@ -175,19 +177,14 @@ class DeviceUnlockMonitoringServiceContractTest {
         }
         val controller = startForReboot()
         try {
-            assertLifecycleOnly(controller)
+            assertStopsWithoutReceivers(controller)
         } finally { controller.destroy() }
     }
 
-    @Test fun authorizedLifecycleRegistersAndDeliversPowerSaveBroadcastsUntilStopped() {
-        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        val controller = startForReboot()
+    /** The lifecycle receiver as HardwareSensorService registers it: Battery Saver rows, none while paused. */
+    @Test fun lifecycleReceiverRecordsBatterySaverAndNothingWhilePaused() {
+        val receiver = registerLifecycleReceiver()
         try {
-            val registration = shadowOf(app).registeredReceivers.singleOrNull {
-                it.broadcastReceiver is PowerSaveModeReceiver
-            }
-            assertTrue("Battery Saver needs a context-registered receiver", registration != null)
-            assertTrue(registration!!.intentFilter.hasAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
             val power = shadowOf(app.getSystemService(PowerManager::class.java))
             for (enabled in listOf(true, false)) {
                 power.setIsPowerSaveMode(enabled)
@@ -197,16 +194,8 @@ class DeviceUnlockMonitoringServiceContractTest {
             }
             assertEquals(listOf(INTERACTION_POWER_SAVE_MODE_ON, INTERACTION_POWER_SAVE_MODE_OFF),
                 lifecycleEvents().map { it.interactionType })
-            assertTrue(onPersistenceWorker {
-                val db = ChronicleDb.getInstance(app)
-                ResearchPersistenceGate.applyParticipationStatus(app,
-                    db.uploadServerDao().getConfiguredServer()!!,
-                    ResearchErasureFence(app).settingsGeneration(), ParticipationStatus.PAUSED, emptyList())
-            })
-            startMonitoringCommand(controller.get(), Intent(), 2)
-            // A pause keeps the receivers for a background resume; they record nothing while paused.
-            assertEquals(listOf(DeviceLifecycleReceiver::class.java, PowerSaveModeReceiver::class.java),
-                monitoringReceivers().map { it.broadcastReceiver.javaClass })
+            setParticipation(ParticipationStatus.PAUSED)
+            // A paused study records nothing.
             power.setIsPowerSaveMode(true)
             app.sendBroadcast(Intent(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
             shadowOf(Looper.getMainLooper()).idle()
@@ -214,12 +203,11 @@ class DeviceUnlockMonitoringServiceContractTest {
             awaitLifecycleWrites()
             assertEquals(listOf(INTERACTION_POWER_SAVE_MODE_ON, INTERACTION_POWER_SAVE_MODE_OFF),
                 lifecycleEvents().map { it.interactionType })
-        } finally { controller.destroy() }
-        assertTrue(monitoringReceivers().isEmpty())
+        } finally { app.unregisterReceiver(receiver) }
     }
 
     @Test fun batterySaverBroadcastAndTheNextStateSnapshotRecordOneTransition() {
-        val controller = startForReboot()
+        val receiver = registerLifecycleReceiver()
         try {
             shadowOf(app.getSystemService(PowerManager::class.java)).setIsPowerSaveMode(true)
             app.sendBroadcast(Intent(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
@@ -232,11 +220,11 @@ class DeviceUnlockMonitoringServiceContractTest {
             awaitLifecycleWrites()
             assertEquals(listOf(INTERACTION_POWER_SAVE_MODE_ON), lifecycleEvents().map { it.interactionType }
                 .filter { it == INTERACTION_POWER_SAVE_MODE_ON || it == INTERACTION_POWER_SAVE_MODE_OFF })
-        } finally { controller.destroy() }
+        } finally { app.unregisterReceiver(receiver) }
     }
 
     @Test fun delayedLifecycleExecutorPreservesReceiptTimesAndRepeatedTransitions() {
-        val controller = startForReboot()
+        val receiver = registerLifecycleReceiver()
         val blocked = CountDownLatch(1)
         val release = CountDownLatch(1)
         DeviceLifecycleEventRecorder.recordObserved(app) {
@@ -249,7 +237,7 @@ class DeviceUnlockMonitoringServiceContractTest {
                 val receivedAt = System.currentTimeMillis()
                 app.sendBroadcast(Intent(action))
                 shadowOf(Looper.getMainLooper()).idle()
-                controller.get().onTrimMemory(10)
+                DeviceLifecycleEventRecorder.recordAsync(app, DeviceLifecycleEventRecorder.lowMemoryEvent(10))
                 receipts += receivedAt..System.currentTimeMillis()
                 Thread.sleep(LIFECYCLE_DEDUPE_WINDOW_MS + 1)
             }
@@ -258,7 +246,7 @@ class DeviceUnlockMonitoringServiceContractTest {
             val events = lifecycleEvents()
             assertReceiptTimes(events.filter { it.interactionType != INTERACTION_LOW_MEMORY }, receipts)
             assertReceiptTimes(events.filter { it.interactionType == INTERACTION_LOW_MEMORY }, receipts)
-        } finally { release.countDown(); awaitLifecycleWrites(); controller.destroy() }
+        } finally { release.countDown(); awaitLifecycleWrites(); app.unregisterReceiver(receiver) }
     }
 
     /** U2: the identification switch and current-user mirror keep the preference keys earlier builds wrote. */
@@ -270,18 +258,6 @@ class DeviceUnlockMonitoringServiceContractTest {
         assertTrue(EnrollmentSettings(app).isUserIdentificationEnabled())
         EnrollmentSettings(app).setTargetUser("alice")
         assertEquals("alice", prefs.getString("current_user", null))
-    }
-
-    /** Leaving Chronicle (UI_HIDDEN) or being moved to the cached list (BACKGROUND) is not device memory pressure. */
-    @Test fun leavingTheAppRecordsNoLowMemory() {
-        val controller = startForReboot()
-        try {
-            controller.get().onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
-            controller.get().onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND)
-            awaitLifecycleWrites()
-            assertEquals(emptyList<String?>(), lifecycleEvents().filter { it.interactionType == INTERACTION_LOW_MEMORY }
-                .map { it.activityClass })
-        } finally { controller.destroy() }
     }
 
     /**
@@ -310,18 +286,13 @@ class DeviceUnlockMonitoringServiceContractTest {
             setParticipation(ParticipationStatus.PAUSED)
             reconcileInBackground(2)
             assertFalse("a pause keeps the monitor", stopped)
-            assertEquals("a pause keeps every receiver", 5, monitoringReceivers().size)
-            val collected = lifecycleEvents()
+            assertEquals("a pause keeps every receiver", 3, monitoringReceivers().size)
             unlockThroughRegisteredReceivers()
-            app.sendBroadcast(Intent(Intent.ACTION_POWER_CONNECTED))
-            shadowOf(Looper.getMainLooper()).idle()
             assertEquals("no prompt while paused", 0, identifyPrompts())
 
             setParticipation(ParticipationStatus.ENROLLED)
             reconcileInBackground(3)
-            awaitLifecycleWrites()
-            assertEquals("no collection while paused", collected, lifecycleEvents())
-            assertEquals("resume keeps every receiver", 5, monitoringReceivers().size)
+            assertEquals("resume keeps every receiver", 3, monitoringReceivers().size)
             unlockThroughRegisteredReceivers()
             assertEquals("the next unlock after resume prompts", 1, identifyPrompts())
 
@@ -331,21 +302,19 @@ class DeviceUnlockMonitoringServiceContractTest {
         } finally { if (!stopped) controller.destroy() }
     }
 
-    /** A remote terminal status stops a lifecycle-only monitor itself: no unlock prompt is left to notice it. */
-    @Test fun aRemoteTerminalStatusStopsALifecycleOnlyMonitor() {
+    /** With identification declined, no status change starts the monitor: device state needs no service. */
+    @Test fun statusChangesNeverStartAMonitorForDeviceStateAlone() {
         onPersistenceWorker {
             val dao = ChronicleDb.getInstance(app).collectionModuleStateDao()
             dao.upsert(dao.get(CollectionModuleId.USER_IDENTIFICATION.id)!!.copy(decision = ParticipantDecision.DECLINED.name))
             ResearchPersistenceGate.initialize(app)
         }
-        val controller = startForReboot()
-        try {
-            assertLifecycleOnly(controller)
-            setParticipation(ParticipationStatus.PAUSED)
-            assertFalse("a pause keeps the monitor", monitorStopped())
-            setParticipation(ParticipationStatus.COLLECTION_COMPLETED)
-            assertTrue("completion stops the monitor", monitorStopped())
-        } finally { controller.destroy() }
+        generateSequence { shadowOf(app).nextStartedService }.toList()
+        for (status in listOf(ParticipationStatus.PAUSED, ParticipationStatus.ENROLLED)) {
+            setParticipation(status)
+            assertTrue("$status started the monitor", generateSequence { shadowOf(app).nextStartedService }.toList()
+                .none { it.component?.className == DeviceUnlockMonitoringService::class.java.name })
+        }
     }
 
     /** A full disk refuses research writes; it does not end the shared-device monitor. */
@@ -355,7 +324,7 @@ class DeviceUnlockMonitoringServiceContractTest {
             onPersistenceWorker { assertFalse(StorageAdmission.allowed(app, 0L)) }
             unlockThroughRegisteredReceivers()
             assertFalse("a storage refusal keeps the monitor", monitorStopped())
-            assertEquals(5, monitoringReceivers().size)
+            assertEquals(3, monitoringReceivers().size)
         } finally { onPersistenceWorker { StorageAdmission.clear(app) }; controller.destroy() }
     }
 
@@ -417,7 +386,7 @@ class DeviceUnlockMonitoringServiceContractTest {
     }
 
     @Test fun delayedConnectivitySnapshotsKeepTheStateAndTimeObservedAtReceipt() {
-        val controller = startForReboot()
+        val receiver = registerLifecycleReceiver()
         val blocked = CountDownLatch(1)
         val release = CountDownLatch(1)
         DeviceLifecycleEventRecorder.recordObserved(app) {
@@ -445,10 +414,10 @@ class DeviceUnlockMonitoringServiceContractTest {
             val powerEvents = events.filter { it.activityClass?.startsWith("power-save:") == true }
             assertEquals(listOf("power-save:on", "power-save:off", "power-save:on"), powerEvents.map { it.activityClass })
             assertReceiptTimes(powerEvents, receipts.filterIndexed { index, _ -> index != 1 })
-        } finally { release.countDown(); awaitLifecycleWrites(); controller.destroy() }
+        } finally { release.countDown(); awaitLifecycleWrites(); app.unregisterReceiver(receiver) }
     }
 
-    @Test fun disabledIdentificationNeverPromptsWhileAuthorizedLifecycleKeepsRunning() {
+    @Test fun disabledIdentificationNeverPromptsAndStopsTheMonitor() {
         onPersistenceWorker {
             val dao = ChronicleDb.getInstance(app).collectionModuleStateDao()
             dao.upsert(dao.get(CollectionModuleId.USER_IDENTIFICATION.id)!!.copy(serverEnabled = false))
@@ -458,7 +427,7 @@ class DeviceUnlockMonitoringServiceContractTest {
         assertTrue(shadowOf(manager).allNotifications.isEmpty())
         val controller = startForReboot()
         try {
-            assertLifecycleOnly(controller)
+            assertStopsWithoutReceivers(controller)
         } finally { controller.destroy() }
     }
 
@@ -475,9 +444,8 @@ class DeviceUnlockMonitoringServiceContractTest {
     @Test
     fun identificationRequiresActiveEnrollmentLocalOptInAndNotificationDelivery() = onPersistenceWorker {
         assertTrue(userIdentificationMayRun(app))
+        // A channel Chronicle has not created yet is created, not read as blocked.
         manager.deleteNotificationChannel(IDENTIFY_USER_CHANNEL_ID)
-        assertFalse(userIdentificationMayRun(app))
-        Utils.createNotificationChannel(app)
         assertTrue(userIdentificationMayRun(app))
         val prefs = EncryptedPrefsHelper.getEncryptedPrefs(app)
         prefs.edit().putBoolean(IDENTIFY_USER, false).commit()
@@ -490,6 +458,11 @@ class DeviceUnlockMonitoringServiceContractTest {
         assertFalse(userIdentificationMayRun(app))
         shadowOf(manager).setNotificationsEnabled(true)
         assertTrue(userIdentificationMayRun(app))
+        // A channel the participant blocked stays blocked (Android restores a recreated channel's settings).
+        val channel = manager.getNotificationChannel(IDENTIFY_USER_CHANNEL_ID)
+        manager.deleteNotificationChannel(IDENTIFY_USER_CHANNEL_ID)
+        manager.createNotificationChannel(NotificationChannel(channel.id, channel.name, NotificationManager.IMPORTANCE_NONE))
+        assertFalse(userIdentificationMayRun(app))
         ResearchPersistenceGate.stop { prefs.edit().remove(PARTICIPANT_ID).commit() }
         assertFalse(userIdentificationMayRun(app))
     }
@@ -589,7 +562,7 @@ class DeviceUnlockMonitoringServiceContractTest {
         val controller = startForReboot()
         val service = controller.get()
         try {
-            assertEquals(5, monitoringReceivers().size)
+            assertEquals(3, monitoringReceivers().size)
             ServiceCompat.stopForeground(service, ServiceCompat.STOP_FOREGROUND_REMOVE)
             shadowOf(service).setThrowInStartForeground(SecurityException("Test permission refusal"))
             assertEquals(android.app.Service.START_NOT_STICKY, service.onStartCommand(null, 0, 2))
@@ -611,12 +584,16 @@ class DeviceUnlockMonitoringServiceContractTest {
         onPersistenceWorker { ResearchPersistenceGate.stop { assertFalse(UnlockMonitoringRuntimeStatus.isDeferred(app)) } }
     }
 
-    private fun assertLifecycleOnly(controller: ServiceController<DeviceUnlockMonitoringService>) {
-        assertFalse(shadowOf(controller.get()).isStoppedBySelf)
-        assertEquals(listOf(DeviceLifecycleReceiver::class.java, PowerSaveModeReceiver::class.java),
-            monitoringReceivers().map { it.broadcastReceiver.javaClass })
+    /** Without user identification the monitor stops itself and registers nothing, lifecycle receivers included. */
+    private fun assertStopsWithoutReceivers(controller: ServiceController<DeviceUnlockMonitoringService>) {
+        assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+        assertTrue(monitoringReceivers().isEmpty())
         assertTrue(shadowOf(app).broadcastIntents.none { it.action == app.getString(R.string.action_identify_after_reboot) })
     }
+
+    /** Registers the lifecycle receiver the way HardwareSensorService does while it runs for a sensor. */
+    private fun registerLifecycleReceiver(): DeviceLifecycleReceiver =
+        DeviceLifecycleReceiver().also { registerSystemBroadcastReceiver(app, it, deviceLifecycleIntentFilter()) }
 
     private fun monitoringReceivers() = shadowOf(app).registeredReceivers.filter {
         it.broadcastReceiver is UnlockDeviceReceiver ||

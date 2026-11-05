@@ -8,7 +8,6 @@ import com.openlattice.chronicle.utils.registerSystemBroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.IBinder
-import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -17,8 +16,6 @@ import com.openlattice.chronicle.services.promoteForegroundServiceIfPermitted
 import com.openlattice.chronicle.MainActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.receivers.lifecycle.NotificationDismissedReceiver
-import com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver
-import com.openlattice.chronicle.receivers.lifecycle.PowerSaveModeReceiver
 import com.openlattice.chronicle.receivers.lifecycle.UnlockDeviceReceiver
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.collection.state.participationRetainsServices
@@ -30,8 +27,6 @@ import com.openlattice.chronicle.collection.identification.TargetUserRouter
 import com.openlattice.chronicle.collection.core.ModuleResult
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.preferences.EncryptedPrefsHelper
-import com.openlattice.chronicle.services.lifecycle.DeviceLifecycleEventRecorder
-import com.openlattice.chronicle.services.lifecycle.deviceLifecycleIntentFilter
 import com.openlattice.chronicle.utils.Utils.getPendingIntentMutabilityFlag
 import com.openlattice.chronicle.utils.Utils.createNotificationChannel
 import java.util.concurrent.Executors
@@ -44,16 +39,19 @@ import com.openlattice.chronicle.storage.LocalStoreRecoveryRequiredException
  * This is required to be a foreground service, because ACTION_USER_PRESENT must be dynamically
  * registered for in the manifest. So in order to constantly be registered across multiple lock
  * and unlock cycles, we have to have a foreground service present.
+ *
+ * It runs only for user identification ([deviceMonitoringMayRun]). Device state (battery, charging,
+ * Battery Saver, network, low memory) never starts or keeps it: `DeviceStateSampler.record` samples
+ * that state at boot, when Chronicle opens and on each periodic sync, and `HardwareSensorService`
+ * adds broadcast-time rows while it runs for a sensor. Screen, unlock, startup and shutdown come
+ * from the usage timeline.
  */
 class DeviceUnlockMonitoringService : Service() {
 
     private var unlockDeviceReceiver = UnlockDeviceReceiver()
     private var identifyAfterRebootReceiver = UnlockDeviceReceiver()
     private var notificationDismissedReceiver = NotificationDismissedReceiver()
-    private var lifecycleReceiver = DeviceLifecycleReceiver()
-    private val powerSaveReceiver = PowerSaveModeReceiver()
     private var identificationReceiversRegistered = false
-    private var lifecycleReceiverRegistered = false
     @Volatile private var destroyed = false
 
     companion object {
@@ -124,13 +122,12 @@ class DeviceUnlockMonitoringService : Service() {
             // Receivers follow the retained enrollment (a pause keeps them); each callback admits
             // only active collection.
             val identify = userIdentificationMonitorRetained(applicationContext)
-            val lifecycle = lifecycleMonitorRetained(applicationContext)
             val prompt = userIdentificationMayRun(applicationContext)
             if (!prompt) resetObservedUser(applicationContext)
             ContextCompat.getMainExecutor(applicationContext).execute main@{
                 if (destroyed) return@main
-                reconcileReceivers(identify, lifecycle)
-                if (!identify && !lifecycle) {
+                reconcileReceivers(identify)
+                if (!identify) {
                     Log.i(javaClass.name, "unlock monitoring service stopped: study scope is inactive")
                     stopSelfResult(startId)
                     return@main
@@ -211,7 +208,7 @@ class DeviceUnlockMonitoringService : Service() {
 
     }
 
-    private fun reconcileReceivers(identify: Boolean, lifecycle: Boolean) {
+    private fun reconcileReceivers(identify: Boolean) {
         if (identify && !identificationReceiversRegistered) {
             registerIdentificationReceivers()
             identificationReceiversRegistered = true
@@ -221,30 +218,33 @@ class DeviceUnlockMonitoringService : Service() {
             applicationContext.unregisterReceiver(notificationDismissedReceiver)
             identificationReceiversRegistered = false
         }
-        if (lifecycle && !lifecycleReceiverRegistered) {
-            registerSystemBroadcastReceiver(applicationContext, lifecycleReceiver, deviceLifecycleIntentFilter())
-            registerSystemBroadcastReceiver(applicationContext, powerSaveReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
-            lifecycleReceiverRegistered = true
-        } else if (!lifecycle && lifecycleReceiverRegistered) {
-            applicationContext.unregisterReceiver(lifecycleReceiver)
-            applicationContext.unregisterReceiver(powerSaveReceiver)
-            lifecycleReceiverRegistered = false
-        }
-    }
-
-    override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
-        DeviceLifecycleEventRecorder.recordAsync(applicationContext, DeviceLifecycleEventRecorder.lowMemoryEvent(level))
     }
 
     override fun onDestroy() {
         destroyed = true
         AUTHORIZATION_EXECUTOR.execute { resetObservedUser(applicationContext) }
         Log.i(javaClass.name, "unlock monitoring service stopped. Unregistering receivers")
-        reconcileReceivers(false, false)
+        reconcileReceivers(false)
         super.onDestroy()
     }
 }
+
+/** Study authority, local opt-in, active enrollment, notification delivery and research storage must all hold. */
+internal fun userIdentificationMayRun(context: Context): Boolean =
+    userIdentificationAllowed(context, ResearchPersistenceGate::isActiveEnrollment) && StorageAdmission.allowed(context)
+
+/**
+ * The monitor and its receivers live while user identification is retained, including a remote pause:
+ * resuming from the background cannot rely on a new foreground-service start, which Android 12+
+ * refuses there (https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start).
+ * Prompts still require [userIdentificationMayRun]. A terminal state (completed, withdrawn, not
+ * enrolled), the Identify device user switch turned off, or blocked prompts stop it. No other module
+ * keeps it running.
+ */
+internal fun deviceMonitoringMayRun(context: Context): Boolean = userIdentificationMonitorRetained(context)
+
+internal fun userIdentificationMonitorRetained(context: Context): Boolean =
+    userIdentificationAllowed(context, ::enrollmentRetained)
 
 internal object UnlockMonitoringRuntimeStatus {
     private const val PREF_START_DEFERRED = "unlock_monitoring_start_deferred"
@@ -272,39 +272,25 @@ internal object UnlockMonitoringRuntimeStatus {
     }
 }
 
-/** Study authority, local opt-in, active enrollment, notification delivery and research storage must all hold. */
-internal fun userIdentificationMayRun(context: Context): Boolean =
-    userIdentificationAllowed(context, ResearchPersistenceGate::isActiveEnrollment) && StorageAdmission.allowed(context)
-
-internal fun lifecycleMonitoringMayRun(context: Context): Boolean =
-    lifecycleMonitoringAllowed(context, ResearchPersistenceGate::isActiveEnrollment) && StorageAdmission.allowed(context)
+/** The local half of user identification, as Settings' Identify device user switch and Data Sharing both show it. */
+enum class IdentifyDeviceUser { ON, OFF, NOTIFICATIONS_BLOCKED }
 
 /**
- * The monitor and its receivers live while the enrollment is retained, including a remote pause:
- * resuming from the background cannot rely on a new foreground-service start, which Android 12+
- * refuses there (https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start).
- * Prompts and lifecycle rows still require [userIdentificationMayRun] / [lifecycleMonitoringMayRun].
- * Only a terminal state (completed, withdrawn, not enrolled) stops it.
+ * The one owner of the local state: the participant's switch, then whether the unlock prompt can be shown. Chronicle's
+ * channels are created first (idempotent; a participant's channel settings are kept), so a channel Chronicle has not
+ * posted to yet does not read as blocked.
  */
-internal fun deviceMonitoringMayRun(context: Context): Boolean =
-    lifecycleMonitorRetained(context) || userIdentificationMonitorRetained(context)
-
-internal fun userIdentificationMonitorRetained(context: Context): Boolean =
-    userIdentificationAllowed(context, ::enrollmentRetained)
-
-internal fun lifecycleMonitorRetained(context: Context): Boolean =
-    lifecycleMonitoringAllowed(context, ::enrollmentRetained)
+internal fun identifyDeviceUserState(context: Context): IdentifyDeviceUser {
+    val app = context.applicationContext
+    if (!runCatching { EnrollmentSettings(app).isUserIdentificationEnabled() }.getOrDefault(false)) return IdentifyDeviceUser.OFF
+    createNotificationChannel(app)
+    return if (hasNotificationPermission(app, IDENTIFY_USER_CHANNEL_ID)) IdentifyDeviceUser.ON else IdentifyDeviceUser.NOTIFICATIONS_BLOCKED
+}
 
 private fun userIdentificationAllowed(context: Context, enrolled: (Context) -> Boolean): Boolean =
-    hasNotificationPermission(context.applicationContext, IDENTIFY_USER_CHANNEL_ID) &&
+    identifyDeviceUserState(context) == IdentifyDeviceUser.ON &&
         enrolled(context.applicationContext) &&
-        moduleCollects(context, CollectionModuleId.USER_IDENTIFICATION) &&
-        runCatching {
-            EnrollmentSettings(context.applicationContext).isUserIdentificationEnabled()
-        }.getOrDefault(false)
-
-private fun lifecycleMonitoringAllowed(context: Context, enrolled: (Context) -> Boolean): Boolean =
-    enrolled(context) && moduleCollects(context, CollectionModuleId.DEVICE_LIFECYCLE)
+        moduleCollects(context, CollectionModuleId.USER_IDENTIFICATION)
 
 /**
  * The durable decision alone (accepted, study-enabled, no required decline): the monitor outlives a full disk,

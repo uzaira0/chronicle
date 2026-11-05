@@ -28,11 +28,13 @@
         <item>@string/consent_connectivity_state_not_collects_2</item>
         <item>@string/consent_connectivity_state_not_collects_3</item>
     </string-array>
-    <string name="consent_device_lifecycle_label">Ciclo de vida del dispositivo</string>
+    <string name="consent_device_lifecycle_label">Estado del dispositivo</string>
     <string name="consent_device_lifecycle_privacy_class">Metadatos del estado del dispositivo</string>
-    <string name="consent_device_lifecycle_collects_1">Cambios complementarios en el estado de la batería, carga, ahorro de energía, red y memoria baja</string>
+    <string name="consent_device_lifecycle_collects_1">Nivel de batería y carga, ahorro de batería, conexión de red y memoria baja, registrados al encender el teléfono, al abrir Chronicle y aproximadamente cada 15 minutos (con menos frecuencia mientras el teléfono está inactivo)</string>
+    <string name="consent_device_lifecycle_collects_2">Mientras un sensor está registrando, estos cambios también se registran en el momento en que ocurren</string>
     <string-array name="consent_device_lifecycle_collects">
         <item>@string/consent_device_lifecycle_collects_1</item>
+        <item>@string/consent_device_lifecycle_collects_2</item>
     </string-array>
     <string name="consent_device_lifecycle_not_collects_1">Cualquier acción que realice en la pantalla</string>
     <string-array name="consent_device_lifecycle_not_collects">
@@ -70,15 +72,21 @@
         <item>@string/consent_in_app_activity_class_not_collects_2</item>
         <item>@string/consent_in_app_activity_class_not_collects_3</item>
     </string-array>
-    <string name="consent_usage_events_label">Eventos de uso de aplicaciones</string>
+    <string name="consent_usage_events_label">Uso de aplicaciones</string>
     <string name="consent_usage_events_privacy_class">Metadatos de comportamiento</string>
-    <string name="consent_usage_events_collects_1">Qué aplicaciones abre y cierra, y cuándo</string>
-    <string name="consent_usage_events_collects_2">Cuánto tiempo permanecen las aplicaciones en primer plano</string>
-    <string name="consent_usage_events_collects_3">Cada evento que Android guarda en ese historial de uso, con su nombre de Android: Activity Resumed, Activity Paused, Activity Stopped, Screen Interactive, Screen Non-interactive, Keyguard Shown, Keyguard Hidden, Device Startup, Device Shutdown, Configuration Change, User Interaction, Shortcut Invocation, Foreground Service Start, Foreground Service Stop, Notification Seen, Notification Interruption y Standby Bucket Changed, y cualquier otro tipo de evento por su número (qué aplicación y cuándo, nunca el texto de las notificaciones)</string>
+    <string name="consent_usage_events_collects_1">Qué aplicaciones abre, cuándo y por cuánto tiempo</string>
+    <string name="consent_usage_events_collects_2">Cuándo se enciende o se apaga la pantalla, y cuándo se bloquea o desbloquea el teléfono</string>
+    <string name="consent_usage_events_collects_3">Cuándo el teléfono se inicia o se apaga</string>
+    <string name="consent_usage_events_collects_4">Qué aplicación envió una notificación y cuándo la vio (nunca su texto)</string>
+    <string name="consent_usage_events_collects_5">Cuándo usa un acceso directo de una aplicación o interactúa con una aplicación, cuándo cambia un ajuste como la rotación de la pantalla, y cuándo una aplicación trabaja en segundo plano mostrando una notificación</string>
+    <string name="consent_usage_events_collects_6">Con qué frecuencia Android espera que use cada aplicación, y cualquier otra actividad de aplicaciones que Android registre (qué aplicación y cuándo)</string>
     <string-array name="consent_usage_events_collects">
         <item>@string/consent_usage_events_collects_1</item>
         <item>@string/consent_usage_events_collects_2</item>
         <item>@string/consent_usage_events_collects_3</item>
+        <item>@string/consent_usage_events_collects_4</item>
+        <item>@string/consent_usage_events_collects_5</item>
+        <item>@string/consent_usage_events_collects_6</item>
     </string-array>
     <string name="consent_usage_events_not_collects_1">El contenido dentro de las aplicaciones — mensajes, fotos o videos</string>
     <string name="consent_usage_events_not_collects_2">Lo que escribe</string>
@@ -88,7 +96,7 @@
         <item>@string/consent_usage_events_not_collects_2</item>
         <item>@string/consent_usage_events_not_collects_3</item>
     </string-array>
-    <string name="consent_user_identification_label">Identificación de usuario al desbloquear</string>
+    <string name="consent_user_identification_label">Quién usa el dispositivo</string>
     <string name="consent_user_identification_privacy_class">Etiqueta de comportamiento proporcionada por el participante</string>
     <string name="consent_user_identification_collects_1">Después de desbloquear el dispositivo, si la persona que lo utiliza es el participante del estudio u otra persona</string>
     <string name="consent_user_identification_collects_2">Cuándo se realizó esa selección, para que los eventos posteriores de uso de aplicaciones puedan llevar la misma selección</string>

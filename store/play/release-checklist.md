@@ -114,7 +114,7 @@ a study enabling one is refused at enrollment.
 - [x] Source configuration and a disposable local Caddy runtime historically proved an anonymous
   `/reviewer` entrypoint before dashboard authentication. This is
   compatibility evidence only: that route and any current 401 response are not Internal Testing
-  gates. The Play privacy-policy URL is the BCM compliance page.
+  gates. The Play privacy-policy URL is the BCM general privacy policy, https://www.bcm.edu/privacy (owner, 2026-11-04).
 - [ ] No historically published selfhost predecessor exists. Do not claim old-binary upgrade
   compatibility until an actual released predecessor digest exists; the current proof covers the
   versioned bundle update/rollback mechanics.

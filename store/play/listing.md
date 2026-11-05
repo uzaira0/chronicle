@@ -57,5 +57,5 @@ Chronicle is not a medical device and does not diagnose, treat, cure, or prevent
 condition. Do not use Chronicle for medical decisions. Consult a qualified healthcare professional
 for medical advice.
 
-Privacy and compliance: https://www.bcm.edu/about-us/our-campus/compliance
+Privacy and compliance: https://www.bcm.edu/privacy
 Support: uzairalam998@gmail.com

@@ -18,7 +18,8 @@ class UsageTimelineCompatibilityContractTest {
         val filter = deviceLifecycleIntentFilter()
         assertEquals(setOf("android.intent.action.ACTION_POWER_CONNECTED",
             "android.intent.action.ACTION_POWER_DISCONNECTED", "android.intent.action.BATTERY_LOW",
-            "android.intent.action.BATTERY_OKAY", "android.net.conn.CONNECTIVITY_CHANGE"),
+            "android.intent.action.BATTERY_OKAY", "android.net.conn.CONNECTIVITY_CHANGE",
+            "android.os.action.POWER_SAVE_MODE_CHANGED"),
             (0 until filter.countActions()).map(filter::getAction).toSet())
     }
 }

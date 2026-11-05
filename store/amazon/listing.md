@@ -6,4 +6,4 @@ only when configured by a study and state that the service is unavailable; they 
 collecting. Supported app-usage, device lifecycle, device settings, battery, connectivity and unlock
 identification modules continue to work.
 
-Privacy: https://www.bcm.edu/about-us/our-campus/compliance
+Privacy: https://www.bcm.edu/privacy

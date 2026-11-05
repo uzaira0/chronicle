@@ -419,6 +419,8 @@
     <string name="cap_gms_fire_os">%1$s requires Google Play Services and is unavailable on Fire OS</string>
     <string name="cap_gms_required">%1$s requires Google Play Services</string>
     <string name="cap_usage_access">Usage access must be enabled in Settings</string>
+    <string name="cap_identify_off">Off — turn on Identify device user in Settings</string>
+    <string name="cap_identify_paused">Paused — notifications are off. Open Identify device user in Settings to allow them</string>
     <string name="cap_device_permission">Device permission is required</string>
     <string name="cap_notification_access">Notification access must be enabled in Settings</string>
     <string name="cap_accessibility">Chronicle accessibility access must be enabled</string>

@@ -7,6 +7,12 @@ server is "collected" even when encrypted and used only for research.
 
 ## Top-level answers
 
+Owner rulings 2026-11-04: Chronicle does not collect Play's **User IDs** (identifiers of an
+identifiable person, such as an account name) or **Fitness info** (exercise or physical activity);
+raw sensor samples and the study's participant reference are not declared as either. It does collect
+**Other user-generated content**. It does not collect **Other app performance data**. The
+Console form follows the upstream declaration for the remaining types.
+
 - Does the app collect or share required user data types? **Yes — collects.**
 - Is all collected user data encrypted in transit? **Yes.**
 - Can users request deletion through the Play app? **Yes.** Open Settings > Study server details >
@@ -32,12 +38,11 @@ answered **Required** unless the owner documents that every supported study offe
 
 | Play data type | Chronicle evidence (module) | Collected/shared | Purpose |
 | --- | --- | --- | --- |
-| Personal info > User IDs | Study ID, participant ID | Collected and shared with the enrolled study server | App functionality |
 | Device or other IDs | Random UUID generated for each enrollment (`random_device_id`) | Collected and shared | App functionality; fraud prevention, security, and compliance |
 | App activity > App interactions | App open/close and foreground transitions, and every Android usage event (Activity Resumed, Activity Paused, Activity Stopped, Screen Interactive, Screen Non-interactive, Keyguard Shown, Keyguard Hidden, Device Startup, Device Shutdown, Configuration Change, User Interaction, Shortcut Invocation, Foreground Service Start, Foreground Service Stop, Notification Seen, Notification Interruption and Standby Bucket Changed, and any other event type by its number; which app and when, no notification text) (`usage_events`), in-app screen class (`in_app_activity_class`) | Collected and shared | App functionality; analytics |
 | App activity > Installed apps | Package names in usage and network-usage records | Collected and shared | App functionality |
 | App activity > Other actions | Unlock identification selection (`user_identification`); per-app bytes sent/received (`app_network_usage`) | Collected and shared | App functionality; analytics |
-| Health and fitness > Fitness info | Accelerometer, gyroscope, magnetometer, gravity, linear acceleration, rotation vector, significant motion, tilt, light, proximity and screen-orientation samples (`sensor_*`), declared conservatively because motion data can reveal physical activity | Collected and shared | App functionality |
+| App activity > Other user-generated content | Participant-entered selections, as in the upstream declaration | Collected and shared | App functionality |
 | App info and performance > Crash logs | App-crash, native-crash and app not responding (ANR) counts with first/last occurrence times (`upload_telemetry`); no stack traces | Collected and shared with the enrolled study server | App functionality; analytics |
 | App info and performance > Diagnostics | Device brand, model, product and Android/API version sent at enrollment; battery and connectivity state; device-settings snapshots (display, sound, accessibility, rotation, battery saver, location-services state, thermal state, free/total storage); sensor availability; bounded upload-failure category/count/timing/status/exception class | Collected and shared because approved device telemetry and upload diagnostics are sent to the enrolled study server | App functionality; analytics |
 
@@ -81,6 +86,7 @@ location.
 ## Owner to-do
 
 - Change Play Console's **Can users request deletion through the app?** answer from **No** to **Yes**.
+- Remove **Other app performance data** from the Console form.
 - Use this exact deletion guidance: **"In Chronicle, open Settings > Study server details > Withdraw from
   study. Withdrawing stops collection at once and sends a withdrawal request to your study server.
   Data already collected is kept or erased by the study team, according to this study's withdrawal

@@ -24,6 +24,8 @@ import com.openlattice.chronicle.PermissionActivity
 import com.openlattice.chronicle.R
 import com.openlattice.chronicle.collection.capability.DistributionChannel
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
+import com.openlattice.chronicle.services.lifecycle.deviceLifecycleIntentFilter
+import com.openlattice.chronicle.receivers.lifecycle.DeviceLifecycleReceiver
 import com.openlattice.chronicle.services.notifications.NOTIFICATION_DELETED_ACTION
 import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
 import org.junit.Assert.assertEquals
@@ -228,7 +230,8 @@ class PlatformAccessTest {
         try {
             startMonitoringCommand(controller.get(), Intent(), 1)
             registrations = shadowOf(app).registeredReceivers.filterNot { it in before }
-            assertEquals(5, registrations.size)
+            // User identification only: device state is sampled, and its broadcast receiver lives in the sensor service.
+            assertEquals(3, registrations.size)
             val unlock = registrations.single { it.intentFilter.hasAction(Intent.ACTION_USER_PRESENT) }
             // Unlock only: a screen-on behind the lock screen must not post a second, earlier prompt.
             assertFalse(unlock.intentFilter.hasAction(Intent.ACTION_SCREEN_ON))
@@ -239,10 +242,15 @@ class PlatformAccessTest {
             assertReceiverExport(identify, exported = false)
             assertNotSame(unlock.broadcastReceiver, identify.broadcastReceiver)
             assertReceiverExport(registrations.single { it.intentFilter.hasAction(NOTIFICATION_DELETED_ACTION) }, exported = false)
-            assertReceiverExport(registrations.single { it.intentFilter.hasAction(Intent.ACTION_POWER_CONNECTED) }, exported = true)
-            assertReceiverExport(registrations.single {
-                it.intentFilter.hasAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
-            }, exported = true)
+            assertTrue(registrations.none {
+                it.intentFilter.hasAction(Intent.ACTION_POWER_CONNECTED) || it.intentFilter.hasAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            })
+            // Where it is registered (HardwareSensorService), the lifecycle receiver takes Android's system broadcasts.
+            val lifecycle = DeviceLifecycleReceiver()
+            registerSystemBroadcastReceiver(app, lifecycle, deviceLifecycleIntentFilter())
+            try {
+                assertReceiverExport(shadowOf(app).registeredReceivers.single { it.broadcastReceiver === lifecycle }, exported = true)
+            } finally { app.unregisterReceiver(lifecycle) }
         } finally {
             controller.destroy()
             onPersistenceWorker {

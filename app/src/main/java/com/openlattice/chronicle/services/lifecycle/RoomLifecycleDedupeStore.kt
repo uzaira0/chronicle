@@ -22,10 +22,15 @@ internal class RoomLifecycleDedupeStore(private val db: ChronicleDb) : Lifecycle
 }
 
 private const val BATTERY_STATE_KEY = "battery_state"
+internal const val LOW_MEMORY_STATE_KEY = "low_memory_state"
+
+/** The activity class of a sampled low-memory row; trim-level rows ("memory:trim-level:N") stay one row per callback. */
+internal const val LOW_MEMORY_SAMPLE = "low-memory:on"
 
 private val SAMPLED_STATE_KEYS = mapOf(
     "network" to "network_state",
     "power-save" to "power_save_state",
+    "low-memory" to LOW_MEMORY_STATE_KEY,
 )
 
 /**
@@ -37,6 +42,9 @@ internal fun sampledState(event: ExtractedUsageEvent): Pair<String, String>? = w
     INTERACTION_BATTERY_CHARGING, INTERACTION_BATTERY_DISCHARGING -> BATTERY_STATE_KEY to event.interactionType
     else -> SAMPLED_STATE_KEYS[event.activityClass?.substringBefore(':')]?.let { it to event.activityClass.orEmpty() }
 }
+
+/** Low memory ended: the next sampled episode is a new row. */
+internal fun forgetLowMemory(db: ChronicleDb) = db.lifecycleStateDao().delete(LOW_MEMORY_STATE_KEY)
 
 internal fun eraseLifecycleObservations(db: ChronicleDb) =
     db.lifecycleStateDao().clearObservations(LIFECYCLE_DEDUPE_KEY_PREFIX, SAMPLED_STATE_KEYS.values + BATTERY_STATE_KEY)

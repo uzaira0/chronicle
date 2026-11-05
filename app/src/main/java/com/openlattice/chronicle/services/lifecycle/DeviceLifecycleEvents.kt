@@ -139,5 +139,6 @@ fun deviceLifecycleIntentFilter(): IntentFilter {
         addAction(Intent.ACTION_BATTERY_LOW)
         addAction(Intent.ACTION_BATTERY_OKAY)
         addAction(ACTION_CONNECTIVITY_CHANGE)
+        addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
     }
 }

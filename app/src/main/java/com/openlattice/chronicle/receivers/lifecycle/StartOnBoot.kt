@@ -16,12 +16,12 @@ import com.openlattice.chronicle.data.ParticipationStatus
 import com.openlattice.chronicle.preferences.EnrollmentSettings
 import com.openlattice.chronicle.services.enrollment.enqueueEnrollmentStatusRefresh
 import com.openlattice.chronicle.services.notifications.restoreReminderAlarmsAsync
+import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
 val TAG = StartOnBoot::class.java.simpleName
-
 class StartOnBoot : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         // A manual clock change re-measures the server clock (ServerClock); a time zone change moves no instant.
@@ -65,6 +65,8 @@ class StartOnBoot : BroadcastReceiver() {
         if (settings.isEnrolledOrThrow()) {
             restoreReminderAlarmsAsync(context)
             EnrolledWork.reconcile(context)
+            // Device state at boot; later samples come with each sync and when Chronicle opens.
+            DeviceStateSampler.record(context)
             // A reboot resets the server clock's anchor: re-measure now, not at the next periodic poll.
             enqueueEnrollmentStatusRefresh(context)
             CollectionLoopCoordinator(context).updateSensorService()
@@ -73,7 +75,7 @@ class StartOnBoot : BroadcastReceiver() {
             settings.getParticipationStatus() == ParticipationStatus.ENROLLED) {
             DistributionRestrictedRuntime.drainDirectBootSamples(context)
         }
-        // Boot may start a foreground service; a paused study keeps its monitor for a background resume.
+        // Boot may start the unlock monitor (user identification only); a paused study keeps it for a background resume.
         DeviceUnlockMonitoringService.reconcile(context, restartOnBoot = true)
     }
 

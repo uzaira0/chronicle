@@ -17,6 +17,7 @@ import com.openlattice.chronicle.services.sensors.HardwareSensorService
 import com.openlattice.chronicle.ui.awaitDashboardUi
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -29,9 +30,9 @@ import org.robolectric.annotation.Config
 
 /**
  * Android 13+ hides the ongoing notification of a foreground service that was promoted while notifications were not
- * allowed, and keeps it hidden after the participant allows them. A participant enrolls (the sensor and unlock monitor
- * services start), then allows notifications in Chronicle's own dialog: the running services must be promoted again
- * so their ongoing notifications appear, not only after a module is switched off and on.
+ * allowed, and keeps it hidden after the participant allows them. A participant enrolls (the sensor service starts; the
+ * unlock monitor waits, since its prompt needs notifications), then allows notifications in Chronicle's own dialog:
+ * the sensor service must be promoted again so its ongoing notification appears, and the unlock monitor starts.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [36])
@@ -66,16 +67,18 @@ class NotificationGrantForegroundServiceTest {
 
         controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         val activity = controller!!.get()
-        // Enrollment's landing starts the services while notifications are still not allowed.
-        awaitStarts(HardwareSensorService::class.java, DeviceUnlockMonitoringService::class.java)
+        // Enrollment's landing starts the sensor service while notifications are still not allowed; the unlock monitor
+        // runs only for user identification, whose prompt cannot be shown yet.
+        awaitStarts(HardwareSensorService::class.java)
         awaitDashboardUi { activity.supportFragmentManager.findFragmentByTag(NotificationRationaleDialog.TAG) != null }
         awaitDashboardUi { true }
         drainStarts()
+        assertFalse(started.toString(), DeviceUnlockMonitoringService::class.java.name in started)
         started.clear()
         return activity
     }
 
-    /** Each service started again exactly once: the grant restarts them, later resumes do not. */
+    /** Each service started exactly once more: the grant starts them, later resumes do not. */
     private fun assertEachServiceStartedOnceMore() {
         awaitStarts(HardwareSensorService::class.java, DeviceUnlockMonitoringService::class.java)
         controller!!.pause().resume()

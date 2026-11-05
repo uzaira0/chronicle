@@ -24,7 +24,6 @@ import com.openlattice.chronicle.WorkSchedulingStatus
 import com.openlattice.chronicle.collection.device.EXPANSION_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.collection.device.ExpansionUploadWorker
 import com.openlattice.chronicle.collection.device.INPUT_COLLECT_EXPANSION_BEFORE_UPLOAD
-import com.openlattice.chronicle.services.lifecycle.DeviceLifecycleEventRecorder
 import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
 import com.openlattice.chronicle.services.upload.COMBINED_UPLOAD_WORK_NAME
 import com.openlattice.chronicle.services.upload.LocalOperationalIssue
@@ -98,12 +97,13 @@ class ChronicleSyncWorker(context: Context, params: WorkerParameters) : Worker(c
             // An accepted module whose Android access was removed (e.g. accessibility on force-stop)
             // collects nothing; report it to the server and tell the participant once per episode.
             recordCollectionAccessLoss(applicationContext)
-            // Charging and network changes otherwise reach only the user-identification service's
-            // receiver: Android 8+ does not deliver those broadcasts to manifest receivers. The
-            // sampler records only states that changed, so a poll per sync adds no duplicates.
-            DeviceLifecycleEventRecorder.recordObserved(applicationContext) {
-                DeviceStateSampler(applicationContext).poll()
-            }
+            // Device state (battery and charging, Battery Saver, network, low memory) is sampled here,
+            // at boot and when Chronicle opens; no foreground service is kept running for it, and
+            // Android 8+ does not deliver those broadcasts to manifest receivers. The sampler
+            // records only states that changed, so a sample per sync adds no duplicates. Boot
+            // (StartOnBoot) and opening Chronicle (MainActivity) use the same entry point,
+            // DeviceStateSampler.record.
+            DeviceStateSampler.record(applicationContext)
 
             // Refresh module settings and acknowledgment gates on each coordinated sync.
             // enqueueNow coalesces bursts and remains fail-closed.

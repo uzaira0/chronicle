@@ -34,7 +34,7 @@ class CollectionOrientationActivityDecisionTest {
             CollectionOrientationActivity.intent(context, plan)
         ).use {
             onView(withId(R.id.orientationStep)).check(matches(withText("1 of 2 · Required")))
-            onView(withId(R.id.orientationTitle)).check(matches(withText("App Usage Events")))
+            onView(withId(R.id.orientationTitle)).check(matches(withText("App use")))
             onView(withId(R.id.orientationRequirementDetail))
                 .check(matches(isDisplayed()))
                 .check(matches(withText("You must allow this to take part.")))

@@ -16,7 +16,9 @@ import com.openlattice.chronicle.collection.permissions.PermissionKind
 import com.openlattice.chronicle.collection.state.CaptureRegistrationStatus
 import com.openlattice.chronicle.hasUsageSettingPermission
 import com.openlattice.chronicle.sensors.SensorTypeMapping
+import com.openlattice.chronicle.services.notifications.IdentifyDeviceUser
 import com.openlattice.chronicle.services.notifications.hasNotificationListenerAccess
+import com.openlattice.chronicle.services.notifications.identifyDeviceUserState
 import com.openlattice.chronicle.ui.CopyResolver
 import com.openlattice.chronicle.ui.englishCopy
 
@@ -111,11 +113,9 @@ public sealed interface CollectionCapability {
     public data class PolicyDisabled(override val message: String) : CollectionCapability
     public data class TemporaryFailure(override val message: String) : CollectionCapability
 
-    public val canCollectNow: Boolean
-        get() = this is Ready
+    public val canCollectNow: Boolean get() = this is Ready
 
-    public val canRequestAccess: Boolean
-        get() = this is PermissionRequired || this is UserEnablementRequired
+    public val canRequestAccess: Boolean get() = this is PermissionRequired || this is UserEnablementRequired
 }
 
 public data class CapabilityEnvironment(
@@ -129,11 +129,10 @@ public data class CapabilityEnvironment(
     val notificationListenerEnabled: Boolean,
     val accessibilityEnabled: Boolean,
     val availableSensors: Set<AndroidSensorType> = AndroidSensorType.entries.toSet(),
-    // Whether this artifact compiled the restricted collectors in (see DistributionModulePolicy).
-    // Carried on the environment so a unit test can describe a full-channel device on any
-    // flavor; production always reads the build flag.
+    // Restricted collectors compiled in (DistributionModulePolicy); a unit test may describe any channel on any flavor.
     val restrictedCollectorsCompiledIn: Boolean = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS,
     val failedCaptureRegistrations: Set<CollectionModuleId> = emptySet(),
+    val identifyDeviceUser: IdentifyDeviceUser = IdentifyDeviceUser.ON,
 )
 
 private val ENGLISH_CAPABILITY: CopyResolver = englishCopy(
@@ -148,6 +147,8 @@ private val ENGLISH_CAPABILITY: CopyResolver = englishCopy(
         R.string.cap_gms_fire_os to "%s requires Google Play Services and is unavailable on Fire OS",
         R.string.cap_gms_required to "%s requires Google Play Services",
         R.string.cap_usage_access to "Usage access must be enabled in Settings",
+        R.string.cap_identify_off to "Off — turn on Identify device user in Settings",
+        R.string.cap_identify_paused to "Paused — notifications are off. Open Identify device user in Settings to allow them",
         R.string.cap_device_permission to "Device permission is required",
         R.string.cap_notification_access to "Notification access must be enabled in Settings",
         R.string.cap_accessibility to "Chronicle accessibility access must be enabled",
@@ -176,10 +177,8 @@ public object CollectionCapabilityResolver {
             distribution = DistributionChannel.current(),
             googleServicesAvailable = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
                 DistributionRestrictedRuntime.activityRecognitionAvailable(appContext),
-            healthConnectAvailable = BuildConfig.HAS_HEALTH_CONNECT &&
-                DistributionRestrictedRuntime.healthConnectAvailable(appContext),
-            healthConnectGranted = BuildConfig.HAS_HEALTH_CONNECT &&
-                DistributionRestrictedRuntime.healthConnectGranted(appContext),
+            healthConnectAvailable = BuildConfig.HAS_HEALTH_CONNECT && DistributionRestrictedRuntime.healthConnectAvailable(appContext),
+            healthConnectGranted = BuildConfig.HAS_HEALTH_CONNECT && DistributionRestrictedRuntime.healthConnectGranted(appContext),
             usageAccessGranted = hasUsageSettingPermission(appContext),
             failedCaptureRegistrations = CaptureRegistrationStatus.failedModules(appContext),
             grantedRuntimePermissions = activeRuntimePermissions.filterTo(linkedSetOf()) {
@@ -189,6 +188,7 @@ public object CollectionCapabilityResolver {
             accessibilityEnabled = BuildConfig.ALLOW_RESTRICTED_RESEARCH_PERMISSIONS &&
                 DistributionRestrictedRuntime.interactionAccessibilityEnabled(appContext),
             availableSensors = availableSensors(appContext),
+            identifyDeviceUser = identifyDeviceUserState(appContext),
         )
     }
 
@@ -288,7 +288,29 @@ public object CollectionCapabilityResolver {
         moduleIds: Collection<CollectionModuleId>,
         environment: CapabilityEnvironment,
         copy: CopyResolver = ENGLISH_CAPABILITY,
-    ): Map<CollectionModuleId, CollectionCapability> = moduleIds.associateWith { resolve(it, environment, copy) }
+    ): Map<CollectionModuleId, CollectionCapability> = moduleIds.associateWith {
+        resolve(it, environment, copy).let { capability ->
+            if (capability.canCollectNow) localIdentification(it, environment, copy) ?: capability else capability
+        }
+    }
+
+    /**
+     * User identification also needs the participant's own Identify device user switch and a prompt Android will show;
+     * without them the unlock monitor does not run (DeviceUnlockMonitoringService), so Data Sharing must not say
+     * "collecting".
+     */
+    private fun localIdentification(
+        moduleId: CollectionModuleId,
+        environment: CapabilityEnvironment,
+        copy: CopyResolver,
+    ): CollectionCapability? = when {
+        moduleId != CollectionModuleId.USER_IDENTIFICATION -> null
+        environment.identifyDeviceUser == IdentifyDeviceUser.OFF ->
+            CollectionCapability.UserEnablementRequired(copy.text(R.string.cap_identify_off))
+        environment.identifyDeviceUser == IdentifyDeviceUser.NOTIFICATIONS_BLOCKED ->
+            CollectionCapability.PermissionRequired(copy.text(R.string.cap_identify_paused))
+        else -> null
+    }
 
     private fun moduleLabel(moduleId: CollectionModuleId, copy: CopyResolver): String = when (moduleId) {
         CollectionModuleId.SLEEP -> copy(R.string.cap_sleep_collection, emptyArray())

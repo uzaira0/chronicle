@@ -29,11 +29,13 @@
         <item>@string/consent_connectivity_state_not_collects_2</item>
         <item>@string/consent_connectivity_state_not_collects_3</item>
     </string-array>
-    <string name="consent_device_lifecycle_label">Device Lifecycle</string>
+    <string name="consent_device_lifecycle_label">Device state</string>
     <string name="consent_device_lifecycle_privacy_class">Device-state metadata</string>
-    <string name="consent_device_lifecycle_collects_1">Supplemental battery, charging, power-saving, network, and low-memory state changes</string>
+    <string name="consent_device_lifecycle_collects_1">Battery level and charging, Battery Saver, network connection, and low memory, recorded when the phone starts, when you open Chronicle, and about every 15 minutes (less often while the phone is idle)</string>
+    <string name="consent_device_lifecycle_collects_2">While a sensor is recording, these changes are also recorded as they happen</string>
     <string-array name="consent_device_lifecycle_collects">
         <item>@string/consent_device_lifecycle_collects_1</item>
+        <item>@string/consent_device_lifecycle_collects_2</item>
     </string-array>
     <string name="consent_device_lifecycle_not_collects_1">Anything you do on the screen</string>
     <string-array name="consent_device_lifecycle_not_collects">
@@ -71,15 +73,21 @@
         <item>@string/consent_in_app_activity_class_not_collects_2</item>
         <item>@string/consent_in_app_activity_class_not_collects_3</item>
     </string-array>
-    <string name="consent_usage_events_label">App Usage Events</string>
+    <string name="consent_usage_events_label">App use</string>
     <string name="consent_usage_events_privacy_class">Behavioral metadata</string>
-    <string name="consent_usage_events_collects_1">Which apps you open and close, and when</string>
-    <string name="consent_usage_events_collects_2">How long apps stay in the foreground</string>
-    <string name="consent_usage_events_collects_3">Each event Android keeps in that usage timeline, under its Android name: Activity Resumed, Activity Paused, Activity Stopped, Screen Interactive, Screen Non-interactive, Keyguard Shown, Keyguard Hidden, Device Startup, Device Shutdown, Configuration Change, User Interaction, Shortcut Invocation, Foreground Service Start, Foreground Service Stop, Notification Seen, Notification Interruption and Standby Bucket Changed, and any other event type by its number (which app and when, never notification text)</string>
+    <string name="consent_usage_events_collects_1">Which apps you open, when, and for how long</string>
+    <string name="consent_usage_events_collects_2">When the screen turns on or off, and when the phone is locked or unlocked</string>
+    <string name="consent_usage_events_collects_3">When the phone starts up or shuts down</string>
+    <string name="consent_usage_events_collects_4">Which app sent a notification, and when you saw it (never its text)</string>
+    <string name="consent_usage_events_collects_5">When you use an app shortcut or interact with an app, when a setting such as screen rotation changes, and when an app works in the background with a notification showing</string>
+    <string name="consent_usage_events_collects_6">How often Android expects you to use each app, and any other app activity Android logs (which app and when)</string>
     <string-array name="consent_usage_events_collects">
         <item>@string/consent_usage_events_collects_1</item>
         <item>@string/consent_usage_events_collects_2</item>
         <item>@string/consent_usage_events_collects_3</item>
+        <item>@string/consent_usage_events_collects_4</item>
+        <item>@string/consent_usage_events_collects_5</item>
+        <item>@string/consent_usage_events_collects_6</item>
     </string-array>
     <string name="consent_usage_events_not_collects_1">The content inside apps — messages, photos, or videos</string>
     <string name="consent_usage_events_not_collects_2">What you type</string>
@@ -89,7 +97,7 @@
         <item>@string/consent_usage_events_not_collects_2</item>
         <item>@string/consent_usage_events_not_collects_3</item>
     </string-array>
-    <string name="consent_user_identification_label">Unlock User Identification</string>
+    <string name="consent_user_identification_label">Who is using the device</string>
     <string name="consent_user_identification_privacy_class">Participant-provided behavioral label</string>
     <string name="consent_user_identification_collects_1">After device unlock, whether the person using the device is the study participant or someone else</string>
     <string name="consent_user_identification_collects_2">When that selection was made, so later app-usage events can carry the same selection</string>

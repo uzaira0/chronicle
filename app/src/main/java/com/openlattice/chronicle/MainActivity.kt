@@ -21,6 +21,7 @@ import com.openlattice.chronicle.collection.state.CollectionAckRetryQueue
 import com.openlattice.chronicle.collection.state.CollectionLoopCoordinator
 import com.openlattice.chronicle.collection.state.ResearchPersistenceGate
 import com.openlattice.chronicle.preferences.EnrollmentSettings
+import com.openlattice.chronicle.services.lifecycle.DeviceStateSampler
 import com.openlattice.chronicle.services.notifications.DeviceUnlockMonitoringService
 import com.openlattice.chronicle.services.notifications.hasPostNotificationsRuntimePermission
 import com.openlattice.chronicle.services.sync.triggerImmediateChronicleSync
@@ -44,8 +45,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val FOREGROUND_SYNC_INTERVAL = 60_000L
-private val EXEMPTION_DIALOG_TAGS =
-    listOf("batteryExemption", "hibernationExemption", "backgroundDataRestricted", "oemBackgroundGuidance")
+private val STARTUP_DIALOG_TAGS =
+    listOf("batteryExemption", "hibernationExemption", "backgroundDataRestricted", "oemBackgroundGuidance", NotificationRationaleDialog.TAG)
 
 class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO) : AppCompatActivity() {
 
@@ -63,7 +64,7 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
     // consent-first enrollment. The result is never gated; collection runs either way. Allow → [onNotificationsAllowed].
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted -> if (granted) onNotificationsAllowed() }
+    ) { granted -> askNextAfterNotifications(); if (granted) onNotificationsAllowed() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,7 +88,6 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
                 }
             })
         }
-
     }
 
     /** Creation, resume and completed withdrawal share the authoritative off-main Room read. */
@@ -221,9 +221,9 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
     private fun startEnrolledServices() {
         lifecycleScope.launch(storageFailureHandler()) {
             withContext(ioDispatcher) {
-                // Notification permission is NOT a gate. Data collection (foreground-service based, poll-driven) runs
-                // whether or not notifications are granted; a denied permission only hides study reminders /
-                // new-data-option alerts. The optional ask is the dashboard's (maybeAskNotificationsOnce).
+                // Notification permission is NOT a gate: collection runs whether or not notifications are granted; a denial
+                // only hides reminders and alerts. The optional ask is the dashboard's first dialog (showNextExemptionDialog).
+                DeviceStateSampler.record(applicationContext)
                 EnrolledWork.reconcile(applicationContext)
                 CollectionLoopCoordinator(applicationContext).updateSensorService()
                 DeviceUnlockMonitoringService.reconcile(applicationContext)
@@ -261,19 +261,19 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
     }
 
     /**
-     * Shows the first background-collection prompt after the routing read confirms enrollment.
-     * Every resume rechecks local enrollment before showing enrolled-only prompts.
+     * Shows the next startup dialog after the routing read confirms enrollment: the one-time notification
+     * question first, then the background-collection prompts. Every resume rechecks local enrollment.
      */
     private fun showNextExemptionDialog() {
         if (!::enrollmentSettings.isInitialized) return
-        // A permission prompt or settings page pauses and resumes this activity; without the tag
-        // check each return stacked another copy of a dialog that was still open. One dialog at a
-        // time; the next one in the chain shows after this one is dismissed.
-        if (EXEMPTION_DIALOG_TAGS.any { supportFragmentManager.findFragmentByTag(it) != null }) return
+        // A permission prompt or settings page pauses and resumes this activity; without the tag check each return
+        // stacked another copy of a dialog that was still open. One dialog at a time (shown now, so a second call in
+        // the same frame sees it); the next one shows after this one is answered.
+        if (STARTUP_DIALOG_TAGS.any { supportFragmentManager.findFragmentByTag(it) != null } || maybeAskNotificationsOnce()) return
         if (!hasIgnoreBatteryOptimization(this) &&
             enrollmentSettings.isBatteryOptimizationDialogEnabled()
         ) {
-            BatteryOptimizationExemptionDialog().show(supportFragmentManager, "batteryExemption")
+            BatteryOptimizationExemptionDialog().showNow(supportFragmentManager, "batteryExemption")
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
             !isExemptFromAppHibernation() &&
             enrollmentSettings.isHibernationExemptionDialogEnabled()
@@ -281,13 +281,13 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
             // App hibernation force-stops Chronicle and auto-revokes its permissions after
             // months without UI opens — the normal state for a passive collection device.
             // One dialog at a time: this chains behind the battery prompt.
-            AppHibernationExemptionDialog().show(supportFragmentManager, "hibernationExemption")
+            AppHibernationExemptionDialog().showNow(supportFragmentManager, "hibernationExemption")
         } else if (isBackgroundDataRestricted() && enrollmentSettings.isBackgroundDataDialogEnabled()) {
-            BackgroundDataRestrictionDialog().show(supportFragmentManager, "backgroundDataRestricted")
+            BackgroundDataRestrictionDialog().showNow(supportFragmentManager, "backgroundDataRestricted")
         } else if (OemBackgroundGuidance.matches(Build.MANUFACTURER) &&
             enrollmentSettings.isOemGuidanceDialogEnabled()
         ) {
-            OemBackgroundGuidanceDialog().show(supportFragmentManager, "oemBackgroundGuidance")
+            OemBackgroundGuidanceDialog().showNow(supportFragmentManager, "oemBackgroundGuidance")
         }
     }
 
@@ -295,7 +295,6 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
         promoteServicesIfNotificationsNowAllowed()
         maybeTriggerForegroundSync()
         routeToAcknowledgmentIfPending()
-        maybeAskNotificationsOnce()
     }
 
     /**
@@ -305,15 +304,16 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
      * data collection; it suppresses study reminders, "a new data option needs your review"
      * alerts, and the optional Identify User device-unlock prompt. Settings provides an explicit
      * request/system-settings recovery path if Identify User is enabled later. A persisted flag
-     * keeps this general dashboard prompt to a single ask across resumes / process death.
+     * keeps this general dashboard prompt to a single ask across resumes / process death. It comes first; the
+     * background-access dialogs follow once it is answered ([askNextAfterNotifications]). True when it asked.
      */
-    private fun maybeAskNotificationsOnce() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        if (hasPostNotificationsRuntimePermission(this)) return
+    private fun maybeAskNotificationsOnce(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        if (hasPostNotificationsRuntimePermission(this)) return false
         val prefs = getSharedPreferences("main_activity_prefs", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("notification_asked", false)) return
+        if (prefs.getBoolean("notification_asked", false)) return false
         prefs.edit().putBoolean("notification_asked", true).apply()
-        NotificationRationaleDialog().show(supportFragmentManager, NotificationRationaleDialog.TAG)
+        return true.also { NotificationRationaleDialog().showNow(supportFragmentManager, NotificationRationaleDialog.TAG) }
     }
 
     /** Called by [NotificationRationaleDialog] once the participant has read why notifications are asked. */
@@ -397,6 +397,19 @@ class MainActivity(private val ioDispatcher: CoroutineDispatcher = Dispatchers.I
         val allowed = hasPostNotificationsRuntimePermission(this)
         if (allowed && notificationsAllowedAtLastCheck == false) onNotificationsAllowed()
         notificationsAllowedAtLastCheck = allowed
+    }
+
+    /**
+     * The notification question was answered (Android's dialog returned) or dismissed: continue with the
+     * background-access dialogs. Posted so the question's own removal runs first; a later resume asks instead
+     * when the activity is not in front.
+     */
+    internal fun askNextAfterNotifications() {
+        window.decorView.post {
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !supportFragmentManager.isStateSaved) {
+                showNextExemptionDialog()
+            }
+        }
     }
 
     companion object {
