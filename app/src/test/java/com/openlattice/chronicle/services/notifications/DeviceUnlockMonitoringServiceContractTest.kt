@@ -26,6 +26,7 @@ import androidx.core.app.ServiceCompat
 import androidx.test.core.app.ApplicationProvider
 import com.openlattice.chronicle.EnrollmentTestStores
 import com.openlattice.chronicle.R
+import com.openlattice.chronicle.UserIdentificationActivity
 import com.openlattice.chronicle.WorkManagerRule
 import com.openlattice.chronicle.audit.AuditStores
 import com.openlattice.chronicle.collection.core.ModuleResult
@@ -381,9 +382,11 @@ class DeviceUnlockMonitoringServiceContractTest {
             ResearchErasureFence(app).settingsGeneration(), status, emptyList())
     })
 
-    private fun unlockThroughRegisteredReceivers() {
+    private fun unlockThroughRegisteredReceivers() = deliverThroughRegisteredReceivers(Intent.ACTION_USER_PRESENT)
+
+    private fun deliverThroughRegisteredReceivers(action: String) {
         val delivered = CountDownLatch(1)
-        app.sendOrderedBroadcast(Intent(Intent.ACTION_USER_PRESENT), null, object : BroadcastReceiver() {
+        app.sendOrderedBroadcast(Intent(action), null, object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) { delivered.countDown() }
         }, null, Activity.RESULT_OK, null, null)
         awaitDashboardUi(attempts = 1000) { delivered.count == 0L }
@@ -501,6 +504,31 @@ class DeviceUnlockMonitoringServiceContractTest {
         assertEquals(app.getString(R.string.on_wake_notification_message),
             notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString())
         assertEquals(DeviceUser.NOT_SET.stored, EnrollmentSettings(app).getCurrentUser())
+    }
+
+    /**
+     * One prompt per unlock, posted at unlock: the screen turning on behind the lock screen posts
+     * nothing, so the first copy a participant sees is the heads-up after unlock, and one tap on it
+     * opens the device-user chooser itself. Receivers are registered exactly as the monitor does.
+     */
+    @Test
+    fun screenOnBehindTheLockScreenPostsNothingAndUnlockPostsOnePromptThatOpensTheChooser() {
+        val receiver = UnlockDeviceReceiver()
+        val filter = IntentFilter().apply {
+            (UnlockDeviceReceiver.getValidReceiverActions(app) - app.getString(R.string.action_identify_after_reboot))
+                .forEach(::addAction)
+        }
+        registerSystemBroadcastReceiver(app, receiver, filter)
+        try {
+            deliverThroughRegisteredReceivers(Intent.ACTION_SCREEN_ON)
+            assertEquals("screen-on behind the lock screen posted a prompt", 0, identifyPrompts())
+            deliverThroughRegisteredReceivers(Intent.ACTION_USER_PRESENT)
+            assertEquals(1, identifyPrompts())
+        } finally { app.unregisterReceiver(receiver) }
+        val prompt = shadowOf(manager).allNotifications.single { it.channelId == IDENTIFY_USER_CHANNEL_ID }
+        assertEquals(UserIdentificationActivity::class.java.name,
+            shadowOf(prompt.contentIntent).savedIntent.component?.className)
+        assertTrue(shadowOf(prompt.contentIntent).isActivity)
     }
 
     @Test

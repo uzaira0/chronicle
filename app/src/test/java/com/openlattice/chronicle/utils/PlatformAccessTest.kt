@@ -230,8 +230,9 @@ class PlatformAccessTest {
             registrations = shadowOf(app).registeredReceivers.filterNot { it in before }
             assertEquals(5, registrations.size)
             val unlock = registrations.single { it.intentFilter.hasAction(Intent.ACTION_USER_PRESENT) }
-            assertTrue(unlock.intentFilter.hasAction(Intent.ACTION_SCREEN_ON))
-            assertEquals(2, unlock.intentFilter.countActions())
+            // Unlock only: a screen-on behind the lock screen must not post a second, earlier prompt.
+            assertFalse(unlock.intentFilter.hasAction(Intent.ACTION_SCREEN_ON))
+            assertEquals(1, unlock.intentFilter.countActions())
             assertReceiverExport(unlock, exported = true)
             val identify = registrations.single { it.intentFilter.hasAction(app.getString(R.string.action_identify_after_reboot)) }
             assertEquals(1, identify.intentFilter.countActions())
