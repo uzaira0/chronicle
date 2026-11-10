@@ -53,7 +53,7 @@ a study enabling one is refused at enrollment.
 - [x] Play-delivered verification must use the owner-approved Play app-signing certificate—not an
   independent caller-selected signer. It requires `--skip-build` plus the initial
   `--prior-sealed-receipt`, cryptographically verifies that receipt's GitHub artifact attestation
-  against the fixed `uzaira0/methodic` signer workflow and release-authority source SHA, proves the
+  against the fixed `uzaira0/chronicle-platform` signer workflow and release-authority source SHA, proves the
   supplied AAB/source tree/RC/policy/mapping/registry/upload signer still match, and then records the
   installed signer, installation mode, and normalized installed-split payload manifest in the
   delivery receipt.
