@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Only the research/open HardwareSensorService posts this notification; main's ids are 11-13. -->
+    <integer name="sensor_service_notification_id">14</integer>
+</resources>
