@@ -2,7 +2,7 @@ import com.android.build.api.artifact.SingleArtifact
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    id 'org.jetbrains.kotlin.plugin.serialization' version '2.4.10'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.4.21'
     id 'com.google.devtools.ksp' version '2.3.7' apply true
     id 'com.android.application'
     id 'io.github.takahirom.roborazzi' version '1.75.0'
@@ -584,6 +584,9 @@ def releaseRuntimeClasspaths = ['amazonReleaseRuntimeClasspath', 'researchReleas
 // What ships is pinned in app/gradle.lockfile: a release classpath that resolves to anything else
 // fails the build, and osv-scanner reads the lockfile. After a dependency change:
 //   ./gradlew :app:verifyNoJacksonRuntime --write-locks
+// The same command rewrites ../chronicle-models/gradle.lockfile, an included build, with what this
+// build resolves for it (kotlin-stdlib-jdk7 and -jdk8 came out as 1.9.10 on 2026-11-13). Put that
+// file back; it belongs to the root build.
 configurations.matching { it.name in releaseRuntimeClasspaths }.configureEach {
     resolutionStrategy.activateDependencyLocking()
     // The app ships Guava's -android line. Research's kotlinx-coroutines-guava asks for -jre, which
